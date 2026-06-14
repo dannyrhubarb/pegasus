@@ -155,6 +155,8 @@ async fn main() {
     let rock_mid  = Color::from_rgba(60, 48, 36, 255);
     let rock_edge = Color::from_rgba(90, 72, 52, 255);
 
+    let mut glow = 0.0f32; // 0 = idle, 1 = full thrust
+
     loop {
         integration_params.dt = get_frame_time().min(0.05);
         physics_pipeline.step(
@@ -192,6 +194,12 @@ async fn main() {
             (lx * angle.cos() - ly * angle.sin(),
              lx * angle.sin() + ly * angle.cos())
         };
+
+        // Read thrust state early so lighting can use it
+        let thrusting_now = is_mouse_button_down(MouseButton::Left)
+            || is_key_down(KeyCode::Down)
+            || TOUCH_THRUST.load(Ordering::Relaxed) != 0;
+        glow += (if thrusting_now { 1.0 } else { 0.0 } - glow) * 0.12;
 
         // --- Slide the cave window ---
         let ship_seg = (cam_x / SEG_LEN).floor() as i64;
@@ -239,6 +247,38 @@ async fn main() {
         let far_up   = -sh * 2.0;
         let far_down =  sh * 3.0;
         let margin = sw + SCALE * 4.0;
+        let ship_screen = vec2(sw / 2.0, sh / 2.0);
+        let light_radius = 350.0 + glow * 250.0; // px — grows with thrust
+
+        // Apply point-light to a base rock colour.
+        // `dist` is screen-space distance from ship to the wall face.
+        // `glow` adds warm orange tint during thrust.
+        let lit = |base: Color, dist: f32| -> Color {
+            let ambient = 0.4f32;
+            let falloff = (1.0 - (dist / light_radius)).max(0.0).powi(2);
+            let l = (ambient + falloff).min(1.0);
+            let warm = glow * falloff * 0.35;
+            Color::new(
+                (base.r * l + warm).min(1.0),
+                (base.g * l + warm * 0.35).min(1.0),
+                (base.b * l).min(1.0),
+                1.0,
+            )
+        };
+
+        // Indices for two quads stacked: face-edge, face-mid, fill-to-infinity
+        // Each quad = 2 triangles = 6 indices, layout:
+        //   0--1
+        //   |\ |
+        //   | \|
+        //   3--2
+        let quad_idx: [u16; 6] = [0, 1, 2, 0, 2, 3];
+        let wall_indices: Vec<u16> = (0u16..3).flat_map(|q| quad_idx.map(|i| i + q * 4)).collect();
+
+        let v = |p: Vec2, c: Color| -> Vertex {
+            Vertex { position: vec3(p.x, p.y, 0.0), uv: vec2(0., 0.), color: c.into(), normal: vec4(0., 0., 1., 0.) }
+        };
+        let dark_far = lit(rock_dark, light_radius * 2.0); // ambient-only for deep rock
 
         for &(idx, ..) in &cave {
             let (ta, tb, ba, bb) = seg_points(idx);
@@ -252,25 +292,57 @@ async fn main() {
             let b0 = w2s(ba.x, ba.y, sh, cam_x, cam_y);
             let b1 = w2s(bb.x, bb.y, sh, cam_x, cam_y);
 
-            // Top wall
-            let tu0 = vec2(t0.x, far_up);
-            let tu1 = vec2(t1.x, far_up);
-            draw_triangle(t0, t1, tu1, rock_dark);
-            draw_triangle(t0, tu1, tu0, rock_dark);
-            draw_triangle(t0, t1, vec2(t1.x, t1.y + 14.0), rock_mid);
-            draw_triangle(t0, vec2(t1.x, t1.y + 14.0), vec2(t0.x, t0.y + 14.0), rock_mid);
-            draw_triangle(t0, t1, vec2(t1.x, t1.y + 6.0), rock_edge);
-            draw_triangle(t0, vec2(t1.x, t1.y + 6.0), vec2(t0.x, t0.y + 6.0), rock_edge);
+            // Per-corner distances for smooth gradient across the segment
+            let d00 = (t0 - ship_screen).length();
+            let d01 = (t1 - ship_screen).length();
+            let d10 = (b0 - ship_screen).length();
+            let d11 = (b1 - ship_screen).length();
 
-            // Bottom wall
-            let bd0 = vec2(b0.x, far_down);
-            let bd1 = vec2(b1.x, far_down);
-            draw_triangle(b0, bd0, bd1, rock_dark);
-            draw_triangle(b0, bd1, b1,  rock_dark);
-            draw_triangle(b0, b1, vec2(b1.x, b1.y - 14.0), rock_mid);
-            draw_triangle(b0, vec2(b1.x, b1.y - 14.0), vec2(b0.x, b0.y - 14.0), rock_mid);
-            draw_triangle(b0, b1, vec2(b1.x, b1.y - 6.0), rock_edge);
-            draw_triangle(b0, vec2(b1.x, b1.y - 6.0), vec2(b0.x, b0.y - 6.0), rock_edge);
+            // Top wall: three stacked quads (edge → mid → dark fill)
+            draw_mesh(&Mesh {
+                vertices: vec![
+                    // quad 0 — bright lit edge face
+                    v(t0,                        lit(rock_edge, d00)),
+                    v(t1,                        lit(rock_edge, d01)),
+                    v(vec2(t1.x, t1.y + 6.0),   lit(rock_mid,  d01)),
+                    v(vec2(t0.x, t0.y + 6.0),   lit(rock_mid,  d00)),
+                    // quad 1 — mid band
+                    v(vec2(t0.x, t0.y + 6.0),   lit(rock_mid,  d00)),
+                    v(vec2(t1.x, t1.y + 6.0),   lit(rock_mid,  d01)),
+                    v(vec2(t1.x, t1.y + 14.0),  lit(rock_dark, d01)),
+                    v(vec2(t0.x, t0.y + 14.0),  lit(rock_dark, d00)),
+                    // quad 2 — rock fill (starts at ceiling surface, extends up into rock)
+                    v(t0,                        lit(rock_dark, d00)),
+                    v(t1,                        lit(rock_dark, d01)),
+                    v(vec2(t1.x, far_up),        dark_far),
+                    v(vec2(t0.x, far_up),        dark_far),
+                ],
+                indices: wall_indices.clone(),
+                texture: None,
+            });
+
+            // Bottom wall: three non-overlapping quads, y increases downward
+            draw_mesh(&Mesh {
+                vertices: vec![
+                    // quad 0 — mid highlight (upper air, dark→mid)
+                    v(vec2(b0.x, b0.y - 14.0), lit(rock_dark, d10)),  // TL
+                    v(vec2(b1.x, b1.y - 14.0), lit(rock_dark, d11)),  // TR
+                    v(vec2(b1.x, b1.y -  6.0), lit(rock_mid,  d11)),  // BR
+                    v(vec2(b0.x, b0.y -  6.0), lit(rock_mid,  d10)),  // BL
+                    // quad 1 — edge highlight (lower air, mid→bright)
+                    v(vec2(b0.x, b0.y -  6.0), lit(rock_mid,  d10)),  // TL
+                    v(vec2(b1.x, b1.y -  6.0), lit(rock_mid,  d11)),  // TR
+                    v(b1,                       lit(rock_edge, d11)),  // BR
+                    v(b0,                       lit(rock_edge, d10)),  // BL
+                    // quad 2 — rock fill (surface→deep rock)
+                    v(b0,                       lit(rock_edge, d10)),  // TL
+                    v(b1,                       lit(rock_edge, d11)),  // TR
+                    v(vec2(b1.x, far_down),     dark_far),             // BR
+                    v(vec2(b0.x, far_down),     dark_far),             // BL
+                ],
+                indices: wall_indices.clone(),
+                texture: None,
+            });
         }
 
         // Particles
@@ -312,10 +384,7 @@ async fn main() {
         let rb = rigid_body_set.get_mut(box_handle).unwrap();
         rb.reset_forces(true);
         rb.reset_torques(true);
-        let thrusting = is_mouse_button_down(MouseButton::Left)
-            || is_key_down(KeyCode::Down)
-            || TOUCH_THRUST.load(Ordering::Relaxed) != 0;
-        if thrusting {
+        if thrusting_now {
             let a = rb.rotation().angle();
             rb.add_force(vector![-a.sin() * 8.0, a.cos() * 8.0], true);
         }
@@ -334,7 +403,7 @@ async fn main() {
         let dt = get_frame_time();
 
         // Main thruster: exhaust exits local -Y (out the bottom), 8 particles/frame
-        if thrusting {
+        if thrusting_now {
             for _ in 0..8 {
                 let spread = gen_range(-0.25f32, 0.25);
                 let (px, py) = lp(spread * 0.3, -0.55);
