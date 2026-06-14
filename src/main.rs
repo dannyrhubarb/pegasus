@@ -1,13 +1,5 @@
 use macroquad::prelude::*;
 use rapier2d::prelude::*;
-use std::sync::atomic::{AtomicU32, Ordering};
-
-static DEVICE_TILT: AtomicU32 = AtomicU32::new(0);
-
-#[unsafe(no_mangle)]
-pub extern "C" fn set_device_tilt(gamma: f32) {
-    DEVICE_TILT.store(gamma.to_bits(), Ordering::Relaxed);
-}
 
 fn window_conf() -> Conf {
     Conf {
@@ -130,8 +122,6 @@ async fn main() {
         if is_key_down(KeyCode::Right) {
             rb.add_torque(1.0, true);
         }
-        let tilt = f32::from_bits(DEVICE_TILT.load(Ordering::Relaxed));
-        rb.add_torque((tilt / 45.0).clamp(-1.0, 1.0), true);
 
         // Reset on R
         if is_key_pressed(KeyCode::R) {

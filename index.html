@@ -7,56 +7,12 @@
     * { margin: 0; padding: 0; }
     body { overflow: hidden; background: #14141e; }
     canvas { display: block; width: 100vw; height: 100vh; }
-    #tilt-btn {
-      display: none;
-      position: fixed;
-      z-index: 100;
-      bottom: 40px;
-      left: 50%;
-      transform: translateX(-50%);
-      padding: 16px 32px;
-      background: rgba(255, 200, 0, 0.85);
-      color: #14141e;
-      font-size: 18px;
-      font-weight: bold;
-      border: none;
-      border-radius: 12px;
-      cursor: pointer;
-      white-space: nowrap;
-    }
   </style>
 </head>
 <body>
   <canvas id="glcanvas" tabindex="1"></canvas>
-  <button id="tilt-btn">Enable tilt controls</button>
   <script src="https://not-fl3.github.io/miniquad-samples/mq_js_bundle.js"></script>
   <script>
-    function onTilt(e) {
-      if (typeof wasm_exports !== "undefined" && wasm_exports.set_device_tilt) {
-        wasm_exports.set_device_tilt(e.gamma || 0);
-      }
-    }
-
-    const btn = document.getElementById("tilt-btn");
-
-    if (typeof DeviceOrientationEvent !== "undefined") {
-      if (typeof DeviceOrientationEvent.requestPermission === "function") {
-        // iOS 13+ — must request permission on a user gesture
-        btn.style.display = "block";
-        btn.addEventListener("click", () => {
-          DeviceOrientationEvent.requestPermission().then(state => {
-            if (state === "granted") {
-              window.addEventListener("deviceorientation", onTilt);
-            }
-            btn.style.display = "none";
-          }).catch(() => btn.style.display = "none");
-        });
-      } else {
-        // Android / older iOS — permission not required
-        window.addEventListener("deviceorientation", onTilt);
-      }
-    }
-
     load("./rapier-test.wasm");
   </script>
 </body>
