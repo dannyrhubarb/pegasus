@@ -1,7 +1,15 @@
 use macroquad::prelude::*;
+use macroquad::rand::gen_range;
 use rapier2d::prelude::*;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, Ordering};
+
+struct Particle {
+    x: f32, y: f32,
+    vx: f32, vy: f32,
+    life: f32,  // 1.0 = fresh, 0.0 = dead
+    kind: u8,   // 0 = main thruster, 1 = left RCS, 2 = right RCS
+}
 
 static TOUCH_THRUST: AtomicU32 = AtomicU32::new(0);
 static TOUCH_TORQUE: AtomicU32 = AtomicU32::new(0);
@@ -127,6 +135,8 @@ async fn main() {
         )
     }).collect();
 
+    let mut particles: Vec<Particle> = Vec::with_capacity(512);
+
     let rock_dark = Color::from_rgba(35, 28, 22, 255);
     let rock_mid  = Color::from_rgba(60, 48, 36, 255);
     let rock_edge = Color::from_rgba(90, 72, 52, 255);
@@ -152,10 +162,21 @@ async fn main() {
         let sh = screen_height();
         let sw = screen_width();
 
-        let (cam_x, cam_y, angle) = {
+        let (cam_x, cam_y, angle, ship_vx, ship_vy) = {
             let body = &rigid_body_set[box_handle];
             let p = body.translation();
-            (p.x, p.y, body.rotation().angle())
+            let v = body.linvel();
+            (p.x, p.y, body.rotation().angle(), v.x, v.y)
+        };
+
+        // Local-to-world helpers (position and direction)
+        let lp = |lx: f32, ly: f32| -> (f32, f32) {
+            (cam_x + lx * angle.cos() - ly * angle.sin(),
+             cam_y + lx * angle.sin() + ly * angle.cos())
+        };
+        let ld = |lx: f32, ly: f32| -> (f32, f32) {
+            (lx * angle.cos() - ly * angle.sin(),
+             lx * angle.sin() + ly * angle.cos())
         };
 
         // --- Slide the cave window ---
@@ -238,6 +259,18 @@ async fn main() {
             draw_triangle(b0, vec2(b1.x, b1.y - 6.0), vec2(b0.x, b0.y - 6.0), rock_edge);
         }
 
+        // Particles
+        for p in &particles {
+            let s = w2s(p.x, p.y, sh, cam_x, cam_y);
+            let a = (p.life * 255.0) as u8;
+            let radius = p.life * if p.kind == 0 { 5.0 } else { 3.0 };
+            let color = match p.kind {
+                0 => Color::from_rgba(255, (120.0 + p.life * 100.0) as u8, 20, a), // orange flame
+                _ => Color::from_rgba(100, 180, 255, a),                             // blue RCS
+            };
+            draw_circle(s.x, s.y, radius, color);
+        }
+
         // Ship
         let sc = w2s(cam_x, cam_y, sh, cam_x, cam_y);
         draw_rectangle_ex(sc.x, sc.y, SCALE, SCALE, DrawRectangleParams {
@@ -272,13 +305,73 @@ async fn main() {
             rb.add_force(vector![-a.sin() * 8.0, a.cos() * 8.0], true);
         }
         let touch_torque = f32::from_bits(TOUCH_TORQUE.load(Ordering::Relaxed));
-        if is_key_down(KeyCode::Left) {
+        let rotating_left  = is_key_down(KeyCode::Left)  || touch_torque < -0.1;
+        let rotating_right = is_key_down(KeyCode::Right) || touch_torque >  0.1;
+        if rotating_left {
             rb.add_torque(-1.0, true);
-        } else if is_key_down(KeyCode::Right) {
+        } else if rotating_right {
             rb.add_torque(1.0, true);
         } else {
             rb.add_torque(touch_torque, true);
         }
+
+        // --- Particle emission ---
+        let dt = get_frame_time();
+
+        // Main thruster: exhaust exits local -Y (out the bottom), 8 particles/frame
+        if thrusting {
+            for _ in 0..8 {
+                let spread = gen_range(-0.25f32, 0.25);
+                let (px, py) = lp(spread * 0.3, -0.55);
+                let speed = gen_range(4.0f32, 8.0);
+                let (dvx, dvy) = ld(spread * 1.5, -speed);
+                particles.push(Particle {
+                    x: px, y: py,
+                    vx: ship_vx + dvx, vy: ship_vy + dvy,
+                    life: 1.0, kind: 0,
+                });
+            }
+        }
+
+        // Side RCS thrusters: emit from the side opposite to rotation
+        // rotating_left (clockwise) → right-side thruster fires, exhaust exits local +X
+        if rotating_left {
+            for _ in 0..3 {
+                let spread = gen_range(-0.15f32, 0.15);
+                let (px, py) = lp(-0.45, -0.55);
+                let speed = gen_range(2.0f32, 4.0);
+                let (dvx, dvy) = ld(spread, -speed);
+                particles.push(Particle {
+                    x: px, y: py,
+                    vx: ship_vx + dvx, vy: ship_vy + dvy,
+                    life: 1.0, kind: 1,
+                });
+            }
+        }
+        if rotating_right {
+            for _ in 0..3 {
+                let spread = gen_range(-0.15f32, 0.15);
+                let (px, py) = lp(0.45, -0.55);
+                let speed = gen_range(2.0f32, 4.0);
+                let (dvx, dvy) = ld(spread, -speed);
+                particles.push(Particle {
+                    x: px, y: py,
+                    vx: ship_vx + dvx, vy: ship_vy + dvy,
+                    life: 1.0, kind: 2,
+                });
+            }
+        }
+
+        // Update particles
+        let decay_main = dt / 0.5;  // main thruster lives ~0.5s
+        let decay_rcs  = dt / 0.3;  // RCS lives ~0.3s
+        for p in &mut particles {
+            let decay = if p.kind == 0 { decay_main } else { decay_rcs };
+            p.life -= decay;
+            p.x += p.vx * dt;
+            p.y += p.vy * dt;
+        }
+        particles.retain(|p| p.life > 0.0);
 
         if is_key_pressed(KeyCode::R) {
             let rb = rigid_body_set.get_mut(box_handle).unwrap();
