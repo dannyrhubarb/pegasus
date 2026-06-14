@@ -1,24 +1,31 @@
-use rapier3d::prelude::*;
+use macroquad::prelude::*;
+use rapier2d::prelude::*;
 
-fn main() {
+const SCALE: f32 = 80.0; // pixels per meter
+
+fn world_to_screen(x: f32, y: f32, screen_h: f32) -> (f32, f32) {
+    // Flip Y: rapier Y goes up, screen Y goes down
+    (x * SCALE + screen_width() / 2.0, screen_h - y * SCALE)
+}
+
+#[macroquad::main("Rapier 2D — Box falls")]
+async fn main() {
     let mut rigid_body_set = RigidBodySet::new();
     let mut collider_set = ColliderSet::new();
 
-    // Ground plane
-    let ground = ColliderBuilder::cuboid(10.0, 0.1, 10.0).build();
-    collider_set.insert(ground);
+    // Ground
+    let ground_collider = ColliderBuilder::cuboid(5.0, 0.1).translation(vector![0.0, 0.0]).build();
+    collider_set.insert(ground_collider);
 
-    // Box falling from height 5.0
+    // Box starting high
     let box_body = RigidBodyBuilder::dynamic()
-        .translation(vector![0.0, 5.0, 0.0])
+        .translation(vector![0.0, 5.0])
         .build();
     let box_handle = rigid_body_set.insert(box_body);
-
-    let box_collider = ColliderBuilder::cuboid(0.5, 0.5, 0.5).build();
+    let box_collider = ColliderBuilder::cuboid(0.5, 0.5).restitution(0.4).build();
     collider_set.insert_with_parent(box_collider, box_handle, &mut rigid_body_set);
 
-    // Physics pipeline setup
-    let gravity = vector![0.0, -9.81, 0.0];
+    let gravity = vector![0.0, -9.81];
     let integration_params = IntegrationParameters::default();
     let mut physics_pipeline = PhysicsPipeline::new();
     let mut island_manager = IslandManager::new();
@@ -28,14 +35,8 @@ fn main() {
     let mut multibody_joint_set = MultibodyJointSet::new();
     let mut ccd_solver = CCDSolver::new();
     let mut query_pipeline = QueryPipeline::new();
-    let physics_hooks = ();
-    let event_handler = ();
 
-    println!("Simulating box falling under gravity...");
-    println!("{:<6} {:>10}", "Step", "Height (y)");
-    println!("{}", "-".repeat(18));
-
-    for step in 0..=100 {
+    loop {
         physics_pipeline.step(
             &gravity,
             &integration_params,
@@ -48,19 +49,40 @@ fn main() {
             &mut multibody_joint_set,
             &mut ccd_solver,
             Some(&mut query_pipeline),
-            &physics_hooks,
-            &event_handler,
+            &(),
+            &(),
         );
 
-        if step % 10 == 0 {
-            let pos = rigid_body_set[box_handle].translation();
-            println!("{:<6} {:>10.4}", step, pos.y);
-        }
-    }
+        clear_background(Color::from_rgba(20, 20, 30, 255));
 
-    let final_pos = rigid_body_set[box_handle].translation();
-    println!(
-        "\nFinal box position: ({:.4}, {:.4}, {:.4})",
-        final_pos.x, final_pos.y, final_pos.z
-    );
+        let sh = screen_height();
+
+        // Draw ground
+        let gw = 5.0 * 2.0 * SCALE;
+        let gh = 0.1 * 2.0 * SCALE;
+        let (gx, gy) = world_to_screen(-5.0, 0.1, sh);
+        draw_rectangle(gx, gy, gw, gh, GRAY);
+
+        // Draw box
+        let pos = rigid_body_set[box_handle].translation();
+        let bw = 0.5 * 2.0 * SCALE;
+        let bh = 0.5 * 2.0 * SCALE;
+        let (bx, by) = world_to_screen(pos.x - 0.5, pos.y + 0.5, sh);
+        draw_rectangle(bx, by, bw, bh, ORANGE);
+
+        draw_text(
+            &format!("y = {:.3} m   [press R to reset]", pos.y),
+            10.0, 24.0, 20.0, WHITE,
+        );
+
+        // Reset on R
+        if is_key_pressed(KeyCode::R) {
+            let rb = rigid_body_set.get_mut(box_handle).unwrap();
+            rb.set_translation(vector![0.0, 5.0], true);
+            rb.set_linvel(vector![0.0, 0.0], true);
+            rb.set_angvel(0.0, true);
+        }
+
+        next_frame().await;
+    }
 }
