@@ -93,7 +93,7 @@ async fn main() {
         // Hold to apply upward force
         let rb = rigid_body_set.get_mut(box_handle).unwrap();
         rb.reset_forces(true);
-        if is_mouse_button_down(MouseButton::Left) {
+        if is_mouse_button_down(MouseButton::Left) || is_key_down(KeyCode::Down) {
             rb.add_force(vector![0.0, 8.0], true);
         }
 
