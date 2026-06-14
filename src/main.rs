@@ -34,6 +34,7 @@ async fn main() {
     // Box starting high
     let box_body = RigidBodyBuilder::dynamic()
         .translation(vector![0.0, 5.0])
+        .angular_damping(3.0)
         .build();
     let box_handle = rigid_body_set.insert(box_body);
     let box_collider = ColliderBuilder::cuboid(0.5, 0.5).restitution(0.4).build();
@@ -78,23 +79,48 @@ async fn main() {
         let (gx, gy) = world_to_screen(-5.0, 0.1, sh);
         draw_rectangle(gx, gy, gw, gh, GRAY);
 
-        // Draw box
-        let pos = rigid_body_set[box_handle].translation();
+        // Draw box with rotation
+        let body = &rigid_body_set[box_handle];
+        let pos = body.translation();
+        let angle = body.rotation().angle();
         let bw = 0.5 * 2.0 * SCALE;
         let bh = 0.5 * 2.0 * SCALE;
-        let (bx, by) = world_to_screen(pos.x - 0.5, pos.y + 0.5, sh);
-        draw_rectangle(bx, by, bw, bh, RED);
+        let (cx, cy) = world_to_screen(pos.x, pos.y, sh);
+        draw_rectangle_ex(cx, cy, bw, bh, DrawRectangleParams {
+            offset: vec2(0.5, 0.5),
+            rotation: -angle,
+            color: RED,
+        });
+
+        // Triangle marker on the bottom face (local -Y = thrust direction)
+        let rot = |lx: f32, ly: f32| -> (f32, f32) {
+            let wx = pos.x + lx * angle.cos() - ly * angle.sin();
+            let wy = pos.y + lx * angle.sin() + ly * angle.cos();
+            world_to_screen(wx, wy, sh)
+        };
+        let (tx, ty) = rot(0.0, -0.65);
+        let (lx, ly) = rot(-0.25, -0.45);
+        let (rx, ry) = rot(0.25, -0.45);
+        draw_triangle(vec2(tx, ty), vec2(lx, ly), vec2(rx, ry), YELLOW);
 
         draw_text(
             &format!("y = {:.3} m   [press R to reset]   FPS: {}", pos.y, get_fps()),
             10.0, 24.0, 20.0, WHITE,
         );
 
-        // Hold to apply upward force
         let rb = rigid_body_set.get_mut(box_handle).unwrap();
         rb.reset_forces(true);
+        rb.reset_torques(true);
         if is_mouse_button_down(MouseButton::Left) || is_key_down(KeyCode::Down) {
-            rb.add_force(vector![0.0, 8.0], true);
+            let angle = rb.rotation().angle();
+            let force = vector![-angle.sin() * 8.0, angle.cos() * 8.0];
+            rb.add_force(force, true);
+        }
+        if is_key_down(KeyCode::Left) {
+            rb.add_torque(-1.0, true);
+        }
+        if is_key_down(KeyCode::Right) {
+            rb.add_torque(1.0, true);
         }
 
         // Reset on R
