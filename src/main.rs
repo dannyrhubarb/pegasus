@@ -136,6 +136,7 @@ async fn main() {
     }).collect();
 
     let mut particles: Vec<Particle> = Vec::with_capacity(512);
+    let mut smooth_fps = 60.0f32;
 
     // Pre-compute Y extents over one full period for minimap scaling
     const MM_SAMPLES: usize = 300;
@@ -300,9 +301,10 @@ async fn main() {
         };
         draw_triangle(rot(0.0, -0.65), rot(-0.25, -0.45), rot(0.25, -0.45), YELLOW);
 
+        smooth_fps += (get_fps() as f32 - smooth_fps) * 0.05;
         let cave_x = cam_x.rem_euclid(PERIOD);
         draw_text(
-            &format!("x={:.0}  {:.0}m/{}m   [R] reset   FPS: {}", cam_x, cave_x, PERIOD as i32, get_fps()),
+            &format!("x={:.0}  {:.0}m/{}m   [R] reset   FPS: {:.0}", cam_x, cave_x, PERIOD as i32, smooth_fps),
             10.0, 24.0, 20.0, WHITE,
         );
 
