@@ -1,6 +1,20 @@
 use macroquad::prelude::*;
 use rapier2d::prelude::*;
 
+fn window_conf() -> Conf {
+    Conf {
+        window_title: "Rapier 2D — Box falls".to_string(),
+        window_width: 1440,
+        window_height: 900,
+        high_dpi: false,
+        platform: macroquad::miniquad::conf::Platform {
+            webgl_version: macroquad::miniquad::conf::WebGLVersion::WebGL2,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
 const SCALE: f32 = 80.0; // pixels per meter
 
 fn world_to_screen(x: f32, y: f32, screen_h: f32) -> (f32, f32) {
@@ -8,7 +22,7 @@ fn world_to_screen(x: f32, y: f32, screen_h: f32) -> (f32, f32) {
     (x * SCALE + screen_width() / 2.0, screen_h - y * SCALE)
 }
 
-#[macroquad::main("Rapier 2D — Box falls")]
+#[macroquad::main(window_conf)]
 async fn main() {
     let mut rigid_body_set = RigidBodySet::new();
     let mut collider_set = ColliderSet::new();
@@ -25,8 +39,8 @@ async fn main() {
     let box_collider = ColliderBuilder::cuboid(0.5, 0.5).restitution(0.4).build();
     collider_set.insert_with_parent(box_collider, box_handle, &mut rigid_body_set);
 
-    let gravity = vector![0.0, -9.81];
-    let integration_params = IntegrationParameters::default();
+    let gravity = vector![0.0, -1.62];
+    let mut integration_params = IntegrationParameters::default();
     let mut physics_pipeline = PhysicsPipeline::new();
     let mut island_manager = IslandManager::new();
     let mut broad_phase = DefaultBroadPhase::new();
@@ -37,6 +51,7 @@ async fn main() {
     let mut query_pipeline = QueryPipeline::new();
 
     loop {
+        integration_params.dt = get_frame_time().min(0.05);
         physics_pipeline.step(
             &gravity,
             &integration_params,
@@ -68,10 +83,10 @@ async fn main() {
         let bw = 0.5 * 2.0 * SCALE;
         let bh = 0.5 * 2.0 * SCALE;
         let (bx, by) = world_to_screen(pos.x - 0.5, pos.y + 0.5, sh);
-        draw_rectangle(bx, by, bw, bh, ORANGE);
+        draw_rectangle(bx, by, bw, bh, RED);
 
         draw_text(
-            &format!("y = {:.3} m   [press R to reset]", pos.y),
+            &format!("y = {:.3} m   [press R to reset]   FPS: {}", pos.y, get_fps()),
             10.0, 24.0, 20.0, WHITE,
         );
 
@@ -79,7 +94,7 @@ async fn main() {
         let rb = rigid_body_set.get_mut(box_handle).unwrap();
         rb.reset_forces(true);
         if is_mouse_button_down(MouseButton::Left) {
-            rb.add_force(vector![0.0, 15.0], true);
+            rb.add_force(vector![0.0, 8.0], true);
         }
 
         // Reset on R
