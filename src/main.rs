@@ -1,5 +1,19 @@
 use macroquad::prelude::*;
 use rapier2d::prelude::*;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+static TOUCH_THRUST: AtomicU32 = AtomicU32::new(0);
+static TOUCH_TORQUE: AtomicU32 = AtomicU32::new(0);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_touch_thrust(active: i32) {
+    TOUCH_THRUST.store(active as u32, Ordering::Relaxed);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_touch_torque(value: f32) {
+    TOUCH_TORQUE.store(value.to_bits(), Ordering::Relaxed);
+}
 
 fn window_conf() -> Conf {
     Conf {
@@ -111,16 +125,21 @@ async fn main() {
         let rb = rigid_body_set.get_mut(box_handle).unwrap();
         rb.reset_forces(true);
         rb.reset_torques(true);
-        if is_mouse_button_down(MouseButton::Left) || is_key_down(KeyCode::Down) {
+        let thrusting = is_mouse_button_down(MouseButton::Left)
+            || is_key_down(KeyCode::Down)
+            || TOUCH_THRUST.load(Ordering::Relaxed) != 0;
+        if thrusting {
             let angle = rb.rotation().angle();
             let force = vector![-angle.sin() * 8.0, angle.cos() * 8.0];
             rb.add_force(force, true);
         }
+        let touch_torque = f32::from_bits(TOUCH_TORQUE.load(Ordering::Relaxed));
         if is_key_down(KeyCode::Left) {
             rb.add_torque(-1.0, true);
-        }
-        if is_key_down(KeyCode::Right) {
+        } else if is_key_down(KeyCode::Right) {
             rb.add_torque(1.0, true);
+        } else {
+            rb.add_torque(touch_torque, true);
         }
 
         // Reset on R
