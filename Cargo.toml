@@ -4,4 +4,5 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-rapier3d = { version = "0.23", features = ["default"] }
+rapier2d = { version = "0.23", features = ["default"] }
+macroquad = "0.4"
