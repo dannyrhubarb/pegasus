@@ -75,6 +75,13 @@ async fn main() {
             10.0, 24.0, 20.0, WHITE,
         );
 
+        // Hold to apply upward force
+        let rb = rigid_body_set.get_mut(box_handle).unwrap();
+        rb.reset_forces(true);
+        if is_mouse_button_down(MouseButton::Left) {
+            rb.add_force(vector![0.0, 15.0], true);
+        }
+
         // Reset on R
         if is_key_pressed(KeyCode::R) {
             let rb = rigid_body_set.get_mut(box_handle).unwrap();
