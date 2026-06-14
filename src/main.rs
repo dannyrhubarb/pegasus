@@ -137,6 +137,16 @@ async fn main() {
 
     let mut particles: Vec<Particle> = Vec::with_capacity(512);
 
+    // Pre-compute cave wall profile for the minimap (one full period, 300 samples)
+    const MM_SAMPLES: usize = 300;
+    let mm_profile: Vec<(f32, f32, f32)> = (0..=MM_SAMPLES).map(|i| {
+        let x = i as f32 * PERIOD / MM_SAMPLES as f32;
+        (x, cave_center(x) + cave_half_width(x), cave_center(x) - cave_half_width(x))
+    }).collect();
+    // Y extents of the minimap (with a little padding)
+    let mm_world_y_min = mm_profile.iter().map(|&(_, _, b)| b).fold(f32::INFINITY, f32::min) - 3.0;
+    let mm_world_y_max = mm_profile.iter().map(|&(_, t, _)| t).fold(f32::NEG_INFINITY, f32::max) + 3.0;
+
     let rock_dark = Color::from_rgba(35, 28, 22, 255);
     let rock_mid  = Color::from_rgba(60, 48, 36, 255);
     let rock_edge = Color::from_rgba(90, 72, 52, 255);
@@ -380,6 +390,60 @@ async fn main() {
             rb.set_angvel(0.0, true);
             rb.set_rotation(Rotation::new(0.0), true);
         }
+
+        // --- Minimap ---
+        let mm_w = 480.0f32;
+        let mm_h = 160.0f32;
+        let mm_ox = sw - mm_w - 10.0; // top-right corner
+        let mm_oy = 10.0f32;
+        let mm_y_range = mm_world_y_max - mm_world_y_min;
+
+        // World → minimap screen coords (x wraps to period)
+        let to_mm = |wx: f32, wy: f32| -> Vec2 {
+            vec2(
+                mm_ox + wx.rem_euclid(PERIOD) / PERIOD * mm_w,
+                mm_oy + mm_h - (wy - mm_world_y_min) / mm_y_range * mm_h,
+            )
+        };
+
+        // Fill entire minimap with rock, then carve out the open cave interior
+        draw_rectangle(mm_ox, mm_oy, mm_w, mm_h, rock_mid);
+
+        for i in 0..MM_SAMPLES {
+            let (x0, top0, bot0) = mm_profile[i];
+            let (x1, ..)         = mm_profile[i + 1];
+            let col_x = mm_ox + x0 / PERIOD * mm_w;
+            let col_w = (x1 - x0) / PERIOD * mm_w + 0.5; // +0.5 closes pixel gaps
+            let top_s = (mm_oy + mm_h - (top0 - mm_world_y_min) / mm_y_range * mm_h).clamp(mm_oy, mm_oy + mm_h);
+            let bot_s = (mm_oy + mm_h - (bot0 - mm_world_y_min) / mm_y_range * mm_h).clamp(mm_oy, mm_oy + mm_h);
+            draw_rectangle(col_x, top_s, col_w, bot_s - top_s, Color::from_rgba(8, 8, 18, 220));
+        }
+
+        // Viewport rectangle (ship_in_period ± half-screen in world units)
+        let ship_mm = cam_x.rem_euclid(PERIOD);
+        let vp_hw = sw / (2.0 * SCALE); // half viewport width in world metres
+        let vp_hh = sh / (2.0 * SCALE);
+        let vp_l  = (ship_mm - vp_hw).rem_euclid(PERIOD) / PERIOD * mm_w + mm_ox;
+        let vp_r  = (ship_mm + vp_hw).rem_euclid(PERIOD) / PERIOD * mm_w + mm_ox;
+        let vp_t  = mm_oy + mm_h - (cam_y + vp_hh - mm_world_y_min) / mm_y_range * mm_h;
+        let vp_b  = mm_oy + mm_h - (cam_y - vp_hh - mm_world_y_min) / mm_y_range * mm_h;
+        let vp_t  = vp_t.clamp(mm_oy, mm_oy + mm_h);
+        let vp_b  = vp_b.clamp(mm_oy, mm_oy + mm_h);
+        let vp_col = Color::from_rgba(255, 255, 255, 180);
+        // Handle wrap-around: draw two rects if viewport straddles the period boundary
+        if vp_r > vp_l {
+            draw_rectangle_lines(vp_l, vp_t, vp_r - vp_l, vp_b - vp_t, 1.0, vp_col);
+        } else {
+            draw_rectangle_lines(mm_ox,  vp_t, vp_r - mm_ox,          vp_b - vp_t, 1.0, vp_col);
+            draw_rectangle_lines(vp_l,   vp_t, mm_ox + mm_w - vp_l,   vp_b - vp_t, 1.0, vp_col);
+        }
+
+        // Ship dot
+        let ship_dot = to_mm(cam_x, cam_y);
+        draw_circle(ship_dot.x, ship_dot.y, 3.0, YELLOW);
+
+        // Border
+        draw_rectangle_lines(mm_ox, mm_oy, mm_w, mm_h, 1.0, Color::from_rgba(255, 255, 255, 120));
 
         next_frame().await;
     }
