@@ -305,7 +305,7 @@ async fn main() {
         let cave_x = cam_x.rem_euclid(PERIOD);
         draw_text(
             &format!("x={:.0}  {:.0}m/{}m   [R] reset   FPS: {:.0}", cam_x, cave_x, PERIOD as i32, smooth_fps),
-            10.0, 24.0, 20.0, WHITE,
+            10.0, 10.0 + 160.0 + 36.0, 36.0, WHITE,
         );
 
         // Controls
@@ -399,7 +399,7 @@ async fn main() {
         // --- Minimap (ship always centred) ---
         let mm_w = 480.0f32;
         let mm_h = 160.0f32;
-        let mm_ox = sw - mm_w - 10.0;
+        let mm_ox = 10.0f32;
         let mm_oy = 10.0f32;
         let mm_y_range = mm_world_y_max - mm_world_y_min;
 
