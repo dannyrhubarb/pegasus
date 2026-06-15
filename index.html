@@ -84,6 +84,9 @@
 <body>
   <canvas id="glcanvas" tabindex="1"></canvas>
 
+  <!-- Probe element to read the top/left safe-area insets in CSS pixels -->
+  <div id="safe-area-probe" style="position:fixed;top:0;left:0;height:env(safe-area-inset-top);width:env(safe-area-inset-left);pointer-events:none;"></div>
+
   <div id="touch-controls">
     <div id="thrust-btn">THRUST</div>
     <div id="torque-area">
@@ -148,6 +151,22 @@
       torqueKnob.style.transform = "translateX(0)";
       call("set_touch_torque", 0);
     });
+
+    // Report the safe-area insets (notch / status bar) to the WASM HUD.
+    const safeProbe = document.getElementById("safe-area-probe");
+    function reportSafeArea() {
+      const rect = safeProbe.getBoundingClientRect();
+      call("set_safe_area", rect.height, rect.width);
+    }
+    window.addEventListener("resize", reportSafeArea);
+    window.addEventListener("orientationchange", () => setTimeout(reportSafeArea, 300));
+    // The WASM exports aren't ready immediately; poll briefly until it loads.
+    const safeAreaTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_safe_area) {
+        reportSafeArea();
+        clearInterval(safeAreaTimer);
+      }
+    }, 200);
 
     load("./rapier-test.wasm");
   </script>

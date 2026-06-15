@@ -13,6 +13,8 @@ struct Particle {
 
 static TOUCH_THRUST: AtomicU32 = AtomicU32::new(0);
 static TOUCH_TORQUE: AtomicU32 = AtomicU32::new(0);
+static SAFE_AREA_TOP: AtomicU32 = AtomicU32::new(0);
+static SAFE_AREA_LEFT: AtomicU32 = AtomicU32::new(0);
 
 #[unsafe(no_mangle)]
 pub extern "C" fn set_touch_thrust(active: i32) {
@@ -22,6 +24,12 @@ pub extern "C" fn set_touch_thrust(active: i32) {
 #[unsafe(no_mangle)]
 pub extern "C" fn set_touch_torque(value: f32) {
     TOUCH_TORQUE.store(value.to_bits(), Ordering::Relaxed);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_safe_area(top: f32, left: f32) {
+    SAFE_AREA_TOP.store(top.to_bits(), Ordering::Relaxed);
+    SAFE_AREA_LEFT.store(left.to_bits(), Ordering::Relaxed);
 }
 
 fn window_conf() -> Conf {
@@ -182,6 +190,11 @@ async fn main() {
         // device-width viewport, narrow screens report their true width, so scale
         // fixed-size UI down proportionally (capped at 1.0 so desktop is unchanged).
         let ui = (sw / 980.0).min(1.0);
+
+        // Safe-area insets (notch / status bar), supplied by JS via env(safe-area-inset-*).
+        // Keeps the top-left HUD clear of the notch in both portrait (top) and landscape (left).
+        let safe_top = f32::from_bits(SAFE_AREA_TOP.load(Ordering::Relaxed));
+        let safe_left = f32::from_bits(SAFE_AREA_LEFT.load(Ordering::Relaxed));
 
         let (cam_x, cam_y, angle, ship_vx, ship_vy) = {
             let body = &rigid_body_set[box_handle];
@@ -382,7 +395,7 @@ async fn main() {
         let cave_x = cam_x.rem_euclid(PERIOD);
         draw_text(
             &format!("x={:.0}  {:.0}m/{}m   [R] reset   FPS: {:.0}", cam_x, cave_x, PERIOD as i32, smooth_fps),
-            10.0 * ui, 206.0 * ui, 36.0 * ui, WHITE,
+            safe_left + 10.0 * ui, safe_top + 206.0 * ui, 36.0 * ui, WHITE,
         );
 
         // Controls
@@ -473,8 +486,8 @@ async fn main() {
         // --- Minimap (ship always centred) ---
         let mm_w = 480.0f32 * ui;
         let mm_h = 160.0f32 * ui;
-        let mm_ox = 10.0f32 * ui;
-        let mm_oy = 10.0f32 * ui;
+        let mm_ox = safe_left + 10.0f32 * ui;
+        let mm_oy = safe_top + 10.0f32 * ui;
         let mm_y_range = mm_world_y_max - mm_world_y_min;
 
         // World → minimap: X is relative to ship, Y uses global extents
