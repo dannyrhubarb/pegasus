@@ -178,6 +178,11 @@ async fn main() {
         let sh = screen_height();
         let sw = screen_width();
 
+        // UI scale: HUD/minimap were tuned for a ~980px logical width. With the
+        // device-width viewport, narrow screens report their true width, so scale
+        // fixed-size UI down proportionally (capped at 1.0 so desktop is unchanged).
+        let ui = (sw / 980.0).min(1.0);
+
         let (cam_x, cam_y, angle, ship_vx, ship_vy) = {
             let body = &rigid_body_set[box_handle];
             let p = body.translation();
@@ -377,7 +382,7 @@ async fn main() {
         let cave_x = cam_x.rem_euclid(PERIOD);
         draw_text(
             &format!("x={:.0}  {:.0}m/{}m   [R] reset   FPS: {:.0}", cam_x, cave_x, PERIOD as i32, smooth_fps),
-            10.0, 10.0 + 160.0 + 36.0, 36.0, WHITE,
+            10.0 * ui, 206.0 * ui, 36.0 * ui, WHITE,
         );
 
         // Controls
@@ -466,10 +471,10 @@ async fn main() {
         }
 
         // --- Minimap (ship always centred) ---
-        let mm_w = 480.0f32;
-        let mm_h = 160.0f32;
-        let mm_ox = 10.0f32;
-        let mm_oy = 10.0f32;
+        let mm_w = 480.0f32 * ui;
+        let mm_h = 160.0f32 * ui;
+        let mm_ox = 10.0f32 * ui;
+        let mm_oy = 10.0f32 * ui;
         let mm_y_range = mm_world_y_max - mm_world_y_min;
 
         // World → minimap: X is relative to ship, Y uses global extents
