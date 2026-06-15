@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#1e1e32"/>
+      <stop offset="100%" stop-color="#0a0a14"/>
+    </radialGradient>
+    <radialGradient id="thrustOuter" cx="50%" cy="0%" r="100%">
+      <stop offset="0%" stop-color="#ff6600" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#ff6600" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="thrustInner" cx="50%" cy="0%" r="100%">
+      <stop offset="0%" stop-color="#ffe066" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#ffe066" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softglow">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" fill="url(#bg)"/>
+
+  <!-- Cave wall suggestions at corners -->
+  <polygon points="0,0 180,0 0,220" fill="#0c0c18" opacity="0.9"/>
+  <polygon points="512,0 332,0 512,220" fill="#0c0c18" opacity="0.9"/>
+  <polygon points="0,512 200,512 0,330" fill="#0c0c18" opacity="0.9"/>
+  <polygon points="512,512 312,512 512,330" fill="#0c0c18" opacity="0.9"/>
+
+  <!-- Rock texture hints -->
+  <polygon points="0,0 90,0 0,80" fill="#111120" opacity="0.7"/>
+  <polygon points="512,0 422,0 512,80" fill="#111120" opacity="0.7"/>
+
+  <!-- Thrust glow (soft, behind ship) -->
+  <ellipse cx="256" cy="370" rx="55" ry="90" fill="#ff5500" opacity="0.35" filter="url(#softglow)"/>
+  <ellipse cx="256" cy="360" rx="28" ry="60" fill="#ffaa00" opacity="0.45" filter="url(#softglow)"/>
+
+  <!-- Thrust flame -->
+  <polygon points="236,308 276,308 268,400 256,420 244,400" fill="url(#thrustOuter)"/>
+  <polygon points="244,308 268,308 262,375 256,390 250,375" fill="url(#thrustInner)"/>
+
+  <!-- Ship body -->
+  <polygon points="256,100 316,295 256,268 196,295" fill="#d0d0f0" filter="url(#glow)"/>
+
+  <!-- Ship belly / engine area -->
+  <rect x="220" y="290" width="72" height="22" rx="6" fill="#9090b8"/>
+
+  <!-- Cockpit -->
+  <polygon points="256,128 284,228 256,214 228,228" fill="#7070c8"/>
+  <polygon points="256,140 276,215 256,204 236,215" fill="#a0a0e8" opacity="0.6"/>
+
+  <!-- Wing accents -->
+  <polygon points="316,295 348,318 280,295" fill="#a0a0c8"/>
+  <polygon points="196,295 164,318 232,295" fill="#a0a0c8"/>
+
+  <!-- Nose highlight -->
+  <polygon points="256,100 265,140 256,132 247,140" fill="#ffffff" opacity="0.4"/>
+</svg>

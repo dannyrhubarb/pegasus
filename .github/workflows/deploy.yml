@@ -40,10 +40,19 @@ jobs:
       - name: Fetch miniquad JS bundle
         run: curl -fsSL https://not-fl3.github.io/miniquad-samples/mq_js_bundle.js -o mq_js_bundle.js
 
+      - name: Generate app icons
+        run: |
+          sudo apt-get install -y librsvg2-bin
+          rsvg-convert -w 512 -h 512 icon.svg -o icon-512.png
+          rsvg-convert -w 192 -h 192 icon.svg -o icon-192.png
+          rsvg-convert -w 180 -h 180 icon.svg -o icon-180.png
+
       - name: Assemble site
         run: |
           mkdir -p site
           cp index.html site/
+          cp manifest.json site/
+          cp icon-512.png icon-192.png icon-180.png site/
           cp mq_js_bundle.js site/
           cp target/wasm32-unknown-unknown/release/rapier-test.wasm site/
 
