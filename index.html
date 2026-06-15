@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Rapier 2D</title>
   <link rel="manifest" href="./manifest.json">
   <meta name="theme-color" content="#14141e">
@@ -17,22 +18,22 @@
 
     #touch-controls {
       position: fixed;
-      bottom: 40px;
+      bottom: 20px;
       left: 0;
       right: 0;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 0 40px;
+      padding: 0 20px;
       pointer-events: none;
     }
 
     #thrust-btn {
-      width: 220px;
-      height: 220px;
+      width: 100px;
+      height: 100px;
       border-radius: 50%;
       background: rgba(255, 255, 255, 0.15);
-      border: 3px solid rgba(255, 255, 255, 0.4);
+      border: 2px solid rgba(255, 255, 255, 0.4);
       pointer-events: all;
       touch-action: none;
       display: flex;
@@ -56,19 +57,19 @@
       gap: 8px;
     }
     #torque-track {
-      width: 380px;
-      height: 140px;
-      border-radius: 70px;
+      width: 180px;
+      height: 70px;
+      border-radius: 35px;
       background: rgba(255, 255, 255, 0.1);
-      border: 3px solid rgba(255, 255, 255, 0.4);
+      border: 2px solid rgba(255, 255, 255, 0.4);
       position: relative;
       display: flex;
       align-items: center;
       justify-content: center;
     }
     #torque-knob {
-      width: 110px;
-      height: 110px;
+      width: 54px;
+      height: 54px;
       border-radius: 50%;
       background: rgba(255, 255, 255, 0.5);
       position: absolute;
@@ -119,7 +120,7 @@
     // Torque knob
     const torqueTrack = document.getElementById("torque-track");
     const torqueKnob = document.getElementById("torque-knob");
-    const MAX_DRAG = 100; // px from center = full torque
+    const MAX_DRAG = 60; // px from center = full torque
 
     torqueTrack.addEventListener("touchstart", e => {
       e.preventDefault();
