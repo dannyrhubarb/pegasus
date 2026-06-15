@@ -1,0 +1,14 @@
+{
+  "name": "Rapier 2D",
+  "short_name": "Rapier 2D",
+  "description": "2D physics cave-flying demo built with Rapier and WebAssembly",
+  "start_url": "/rapier-test/",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#14141e",
+  "theme_color": "#14141e",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
