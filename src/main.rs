@@ -51,12 +51,6 @@ const SEG_LEN: f32 = 3.0;
 // How many segments to keep loaded on each side of the ship
 const HALF_WINDOW: i64 = 80;
 
-fn w2s(x: f32, y: f32, sh: f32, cam_x: f32, cam_y: f32) -> Vec2 {
-    vec2(
-        (x - cam_x) * SCALE + screen_width() / 2.0,
-        sh / 2.0 - (y - cam_y) * SCALE,
-    )
-}
 
 // Cave repeats exactly every PERIOD metres. All terms are integer harmonics
 // of the base frequency so they all complete whole cycles together.
@@ -186,6 +180,16 @@ async fn main() {
         let sh = screen_height();
         let sw = screen_width();
 
+        // Zoom out on narrow screens so more of the cave fits (HUD/minimap are unaffected).
+        let view_scale = if sw < 600.0 { SCALE * 0.65 } else { SCALE };
+        // Shadow the module-level w2s so all render calls below use view_scale automatically.
+        let w2s = |x: f32, y: f32, sh: f32, cam_x: f32, cam_y: f32| -> Vec2 {
+            vec2(
+                (x - cam_x) * view_scale + sw / 2.0,
+                sh / 2.0 - (y - cam_y) * view_scale,
+            )
+        };
+
         // UI scale: HUD/minimap were tuned for a ~980px logical width. With the
         // device-width viewport, narrow screens report their true width, so scale
         // fixed-size UI down proportionally (capped at 1.0 so desktop is unchanged).
@@ -256,15 +260,15 @@ async fn main() {
 
         // Stars
         for &(sx, sy) in &stars {
-            let px = (sx - cam_x * SCALE * 0.05).rem_euclid(sw);
-            let py = (sy + cam_y * SCALE * 0.05).rem_euclid(sh);
+            let px = (sx - cam_x * view_scale * 0.05).rem_euclid(sw);
+            let py = (sy + cam_y * view_scale * 0.05).rem_euclid(sh);
             draw_circle(px, py, 1.0, Color::from_rgba(200, 200, 255, 150));
         }
 
         // Cave walls
         let far_up   = -sh * 2.0;
         let far_down =  sh * 3.0;
-        let margin = sw + SCALE * 4.0;
+        let margin = sw + view_scale * 4.0;
         let ship_screen = vec2(sw / 2.0, sh / 2.0);
         // Scale light radius to the screen so it looks right on both desktop and mobile.
         let base_dim = sw.min(sh);
@@ -380,7 +384,7 @@ async fn main() {
 
         // Ship
         let sc = w2s(cam_x, cam_y, sh, cam_x, cam_y);
-        draw_rectangle_ex(sc.x, sc.y, SCALE, SCALE, DrawRectangleParams {
+        draw_rectangle_ex(sc.x, sc.y, view_scale, view_scale, DrawRectangleParams {
             offset: vec2(0.5, 0.5),
             rotation: -angle,
             color: RED,
@@ -512,8 +516,8 @@ async fn main() {
         }
 
         // Viewport rectangle — always centred horizontally, Y follows ship
-        let vp_hw   = sw / (2.0 * SCALE);
-        let vp_hh   = sh / (2.0 * SCALE);
+        let vp_hw   = sw / (2.0 * view_scale);
+        let vp_hh   = sh / (2.0 * view_scale);
         let vp_mm_hw = vp_hw / MM_HALF_X * (mm_w / 2.0);
         let vp_cx   = mm_ox + mm_w / 2.0;
         let vp_t    = to_mm_y(cam_y + vp_hh).clamp(mm_oy, mm_oy + mm_h);
