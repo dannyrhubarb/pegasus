@@ -591,7 +591,7 @@ async fn main() {
             });
         }
 
-        // Obstacles — filled + beveled, lit by the same radial shader as the walls.
+            // Obstacles — filled, lit by the same radial shader as the walls.
         for ob in obstacles.values() {
             let (c, s) = (ob.rot.cos(), ob.rot.sin());
             let poly: Vec<Vec2> = ob.verts.iter().map(|p| {
@@ -609,38 +609,16 @@ async fn main() {
             }
 
             let n = poly.len();
-
-            // Dark fill.
             let mut verts = Vec::with_capacity(n + 1);
-            verts.push(v(center, obs_fill));
-            for p in &poly { verts.push(v(*p, obs_fill)); }
-            let mut fill_idx = Vec::with_capacity(n * 3);
+            verts.push(v(center, rock_mid));
+            for p in &poly { verts.push(v(*p, rock_mid)); }
+            let mut indices = Vec::with_capacity(n * 3);
             for i in 0..n as u16 {
-                fill_idx.push(0);
-                fill_idx.push(1 + i);
-                fill_idx.push(1 + (i + 1) % n as u16);
+                indices.push(0);
+                indices.push(1 + i);
+                indices.push(1 + (i + 1) % n as u16);
             }
-            draw_mesh(&Mesh { vertices: verts, indices: fill_idx, texture: None });
-
-            // Bevel: two quads per edge, inset into the surface — same palette as walls.
-            for i in 0..n {
-                let a = poly[i];
-                let b = poly[(i + 1) % n];
-                let perp = vec2(-(b.y - a.y), b.x - a.x);
-                let to_center = center - (a + b) * 0.5;
-                let inward = if perp.dot(to_center) >= 0.0 { perp } else { -perp };
-                let inward = inward.normalize();
-                let (a1, b1) = (a + inward * 6.0,  b + inward * 6.0);
-                let (a2, b2) = (a + inward * 14.0, b + inward * 14.0);
-                draw_mesh(&Mesh {
-                    vertices: vec![
-                        v(a,  obs_edge), v(b,  obs_edge), v(b1, rock_mid), v(a1, rock_mid),
-                        v(a1, rock_mid), v(b1, rock_mid), v(b2, obs_fill), v(a2, obs_fill),
-                    ],
-                    indices: vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7],
-                    texture: None,
-                });
-            }
+            draw_mesh(&Mesh { vertices: verts, indices, texture: None });
         }
 
         gl_use_default_material();
