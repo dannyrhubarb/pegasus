@@ -91,7 +91,7 @@ void main() {
     float dist    = distance(frag_pos, ship_pos);
     float t       = clamp(1.0 - dist / light_radius, 0.0, 1.0);
     float falloff = t * t;
-    float ambient = 0.15;
+    float ambient = 0.38;
     float l       = min(ambient + (1.0 - ambient) * falloff, 1.0);
     float warm    = glow * falloff * 0.28;
 
