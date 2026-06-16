@@ -266,20 +266,22 @@ async fn main() {
         let far_down =  sh * 3.0;
         let margin = sw + SCALE * 4.0;
         let ship_screen = vec2(sw / 2.0, sh / 2.0);
-        let light_radius = 650.0 + glow * 350.0; // px — wide radial coverage, expands with thrust
+        // Scale light radius to the screen so it looks right on both desktop and mobile.
+        let base_dim = sw.min(sh);
+        let light_radius = base_dim * 0.55 + glow * base_dim * 0.30;
 
         // Apply point-light to a base rock colour.
         // `dist` is screen-space distance from ship to the wall face.
         // `glow` adds warm orange tint during thrust.
         let lit = |base: Color, dist: f32| -> Color {
-            let ambient = 0.12f32;
+            let ambient = 0.15f32;
             let t = (1.0 - (dist / light_radius)).max(0.0);
             let falloff = t * t;
             let l = (ambient + (1.0 - ambient) * falloff).min(1.0);
-            let warm = glow * falloff * 0.55;
+            let warm = glow * falloff * 0.28;
             Color::new(
                 (base.r * l + warm).min(1.0),
-                (base.g * l + warm * 0.35).min(1.0),
+                (base.g * l + warm * 0.4).min(1.0),
                 (base.b * l).min(1.0),
                 1.0,
             )
@@ -374,18 +376,6 @@ async fn main() {
                 _ => Color::from_rgba(100, 180, 255, a),                             // blue RCS
             };
             draw_circle(s.x, s.y, radius, color);
-        }
-
-        // Radial thrust halo around the ship
-        if glow > 0.01 {
-            let halo_r = 180.0 + glow * 120.0;
-            let hc = w2s(cam_x, cam_y, sh, cam_x, cam_y);
-            for i in (0u8..10).rev() {
-                let frac = i as f32 / 10.0;
-                let r = halo_r * (1.0 - frac * 0.85);
-                let a = (glow * (1.0 - frac) * 55.0) as u8;
-                draw_circle(hc.x, hc.y, r, Color::from_rgba(255, 140, 30, a));
-            }
         }
 
         // Ship
