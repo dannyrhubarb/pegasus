@@ -94,7 +94,15 @@ Random convex-polygon boulders are placed deterministically along the cave so th
 Static Rapier `convex_hull` collider, translated and rotated to match. Hull vertices are read back from the collider for rendering so visuals exactly match the collision shape.
 
 ### Rendering
-Drawn as a `draw_mesh` **triangle fan** (center vertex + hull vertices) with **uniform `rock_mid` color on every vertex**. The radial light shader (same material active as during cave wall draws) provides all brightness variation — no vertex color gradient. Using different colors at center vs rim causes a visible dark/light Gouraud gradient; avoid it.
+Drawn as a single `draw_mesh` with the light shader active (same material as cave walls). Uses a **shrink-inset bevel**:
+
+1. Compute `inset[]`: each hull vertex pulled `BEVEL = 10 px` toward the screen-space centroid.
+2. **Bevel ring** (hull → inset): one quad per edge (`hull[i], hull[j], inset[j], inset[i]`), colors `rock_edge` → `rock_mid`.
+3. **Inner fill** (inset → center): triangle fan, colors `rock_mid` → `rock_dark`.
+
+This avoids the corner-gap artifact of the old per-edge inset strips because inset vertices are shared between adjacent quads — no mitering needed. Vertex layout in the mesh: indices `0..n` = hull, `n..2n` = inset, `2n` = center.
+
+**Do not** use different colors at the center vs outer rim of a plain triangle fan — the GPU interpolates a visible Gouraud gradient across the polygon.
 
 ### Minimap
 Obstacles are drawn on the minimap as their actual polygon shape (triangle fan + outline) projected into minimap space, not as dots.
