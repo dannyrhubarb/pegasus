@@ -554,9 +554,9 @@ async fn main() {
                     v(vec2(t1.x, t1.y - 6.0),   rock_mid),
                     v(vec2(t1.x, t1.y - 14.0),  rock_dark),
                     v(vec2(t0.x, t0.y - 14.0),  rock_dark),
-                    // quad 2 — rock fill (ceiling surface to far off-screen)
-                    v(t0,                        rock_dark),
-                    v(t1,                        rock_dark),
+                    // quad 2 — rock fill (picks up where the bevel ends)
+                    v(vec2(t0.x, t0.y - 14.0),  rock_dark),
+                    v(vec2(t1.x, t1.y - 14.0),  rock_dark),
                     v(vec2(t1.x, far_up),        rock_dark),
                     v(vec2(t0.x, far_up),        rock_dark),
                 ],
@@ -580,9 +580,9 @@ async fn main() {
                     v(vec2(b1.x, b1.y +  6.0), rock_mid),   // TR
                     v(b1,                       rock_edge),  // BR
                     v(b0,                       rock_edge),  // BL
-                    // quad 2 — rock fill (floor surface to far off-screen)
-                    v(b0,                       rock_dark),  // TL
-                    v(b1,                       rock_dark),  // TR
+                    // quad 2 — rock fill (picks up where the bevel ends)
+                    v(vec2(b0.x, b0.y + 14.0), rock_dark),  // TL
+                    v(vec2(b1.x, b1.y + 14.0), rock_dark),  // TR
                     v(vec2(b1.x, far_down),     rock_dark),  // BR
                     v(vec2(b0.x, far_down),     rock_dark),  // BL
                 ],
