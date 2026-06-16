@@ -218,9 +218,10 @@ fn obstacle_spec(k: i64) -> Option<ObstacleSpec> {
         return None;
     }
 
-    // Obstacle size, capped so a generous gap always remains.
-    let max_r = (hw * 0.30).min(1.6);
-    let r = rng.range(0.65, 1.0) * max_r;
+    // Obstacle size. Large boulders (up to 3.5 m radius) appear in wide
+    // sections; the cap scales down in narrower passages so a gap always fits.
+    let max_r = (hw * 0.48).min(3.5);
+    let r = rng.range(0.3, 1.0) * max_r;
 
     // Centre offset, leaving at least ~1.3 m clearance to the nearer wall so
     // there is always a flyable gap on at least one side.
