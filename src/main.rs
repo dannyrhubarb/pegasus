@@ -538,18 +538,22 @@ async fn main() {
 
             // Top wall: three stacked quads (edge → mid → dark fill).
             // All vertices carry raw base colors; the shader applies radial lighting.
+            // The lit edge sits exactly on the wall line (= the collider), and the
+            // bevel bands recede UP into the rock (screen y -), never into the cave.
+            // Drawing them inward would make the visible surface poke past the
+            // collider, so the ship would appear to sink into the rock.
             draw_mesh(&Mesh {
                 vertices: vec![
                     // quad 0 — bright lit edge face
                     v(t0,                        rock_edge),
                     v(t1,                        rock_edge),
-                    v(vec2(t1.x, t1.y + 6.0),   rock_mid),
-                    v(vec2(t0.x, t0.y + 6.0),   rock_mid),
+                    v(vec2(t1.x, t1.y - 6.0),   rock_mid),
+                    v(vec2(t0.x, t0.y - 6.0),   rock_mid),
                     // quad 1 — mid band
-                    v(vec2(t0.x, t0.y + 6.0),   rock_mid),
-                    v(vec2(t1.x, t1.y + 6.0),   rock_mid),
-                    v(vec2(t1.x, t1.y + 14.0),  rock_dark),
-                    v(vec2(t0.x, t0.y + 14.0),  rock_dark),
+                    v(vec2(t0.x, t0.y - 6.0),   rock_mid),
+                    v(vec2(t1.x, t1.y - 6.0),   rock_mid),
+                    v(vec2(t1.x, t1.y - 14.0),  rock_dark),
+                    v(vec2(t0.x, t0.y - 14.0),  rock_dark),
                     // quad 2 — rock fill (ceiling surface to far off-screen)
                     v(t0,                        rock_dark),
                     v(t1,                        rock_dark),
@@ -560,17 +564,20 @@ async fn main() {
                 texture: None,
             });
 
-            // Bottom wall: three non-overlapping quads, y increases downward
+            // Bottom wall: three non-overlapping quads, y increases downward.
+            // As with the ceiling, the lit edge sits on the wall line and the
+            // bevel bands recede DOWN into the rock (screen y +), so the visible
+            // floor surface coincides with the collider the ship rests on.
             draw_mesh(&Mesh {
                 vertices: vec![
                     // quad 0 — dark→mid band
-                    v(vec2(b0.x, b0.y - 14.0), rock_dark),  // TL
-                    v(vec2(b1.x, b1.y - 14.0), rock_dark),  // TR
-                    v(vec2(b1.x, b1.y -  6.0), rock_mid),   // BR
-                    v(vec2(b0.x, b0.y -  6.0), rock_mid),   // BL
+                    v(vec2(b0.x, b0.y + 14.0), rock_dark),  // TL
+                    v(vec2(b1.x, b1.y + 14.0), rock_dark),  // TR
+                    v(vec2(b1.x, b1.y +  6.0), rock_mid),   // BR
+                    v(vec2(b0.x, b0.y +  6.0), rock_mid),   // BL
                     // quad 1 — edge highlight
-                    v(vec2(b0.x, b0.y -  6.0), rock_mid),   // TL
-                    v(vec2(b1.x, b1.y -  6.0), rock_mid),   // TR
+                    v(vec2(b0.x, b0.y +  6.0), rock_mid),   // TL
+                    v(vec2(b1.x, b1.y +  6.0), rock_mid),   // TR
                     v(b1,                       rock_edge),  // BR
                     v(b0,                       rock_edge),  // BL
                     // quad 2 — rock fill (floor surface to far off-screen)
