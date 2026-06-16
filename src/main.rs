@@ -612,8 +612,8 @@ async fn main() {
 
             let n = poly.len();
             let mut verts = Vec::with_capacity(n + 1);
-            verts.push(v(center, obs_fill));
-            for p in &poly { verts.push(v(*p, obs_edge)); }
+            verts.push(v(center, rock_mid));
+            for p in &poly { verts.push(v(*p, rock_mid)); }
             let mut indices = Vec::with_capacity(n * 3);
             for i in 0..n as u16 {
                 indices.push(0);
