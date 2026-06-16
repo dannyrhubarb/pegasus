@@ -2,6 +2,8 @@
 
 Rust + macroquad 0.4.15 + Rapier 2D cave-flying game compiled to WebAssembly and served via GitHub Pages. The player pilots a ship through a procedurally-generated scrolling cave using thrust and rotation controls.
 
+> **Keep this file current.** At the end of every session, update CLAUDE.md to reflect any architectural changes, new systems, renamed constants, corrected gotchas, or lessons learned. Future sessions start cold — this file is the only durable context.
+
 ## Build & deploy
 ```bash
 cargo build          # native dev build (quick sanity check)
@@ -77,18 +79,28 @@ Each cave wall segment is drawn as a single `draw_mesh` call containing **3 quad
 
 **Screen-space coordinate convention**: `w2s` inverts Y (`sh/2 - (y - cam_y) * view_scale`). For the ceiling (top wall), "into the rock" = decreasing screen Y (`t0.y - offset`). For the floor (bottom wall), "into the rock" = increasing screen Y (`b0.y + offset`). The wall line is the Rapier segment collider; the visible lit edge must sit exactly on it so the ship's collision and visual surface coincide.
 
-## Obstacle bevel rendering
+## Polygon obstacle system
 
-Obstacles use the same three-layer bevel as the walls. Per-edge inward normals are computed in screen space:
+Random convex-polygon boulders are placed deterministically along the cave so they load/unload with the same sliding window as the walls and are identical every time the player revisits a location.
 
-```rust
-let perp = vec2(-(b.y - a.y), b.x - a.x);          // perpendicular to edge
-let to_center = center - (a + b) * 0.5;
-let inward = if perp.dot(to_center) >= 0.0 { perp } else { -perp };
-let inward = inward.normalize();
-```
+### Generation
+- `OBSTACLE_SPACING = 16.0 m` between slots. Each slot `k` maps to a fixed world-x position plus ±3 m jitter.
+- A tiny integer-hash PRNG (`Rng` struct, seeded by slot index) drives all randomness: position jitter, size, rotation, vertex count, vertex radii.
+- Slot is skipped if: `cx.abs() < 9.0` (spawn-clear zone), `hw < 4.5` (pinch point), or 1-in-6 random empty.
+- Size: `max_r = (hw * 0.65).min(5.5)`, `r = rng.range(0.3, 1.0) * max_r`. Wide sections get genuine boulders (up to 5.5 m radius).
+- Centre offset: `max_off = (hw - r - 1.3).max(0.0)` — guarantees ≥ 1.3 m gap to the nearer wall.
 
-Two quads per edge: `obs_edge → rock_mid` (0–6px) and `rock_mid → obs_fill` (6–14px). The fill fan uses `obs_fill` uniformly. `obs_fill = rock_dark`, `obs_edge = rock_edge` (same palette as walls).
+### Collider
+Static Rapier `convex_hull` collider, translated and rotated to match. Hull vertices are read back from the collider for rendering so visuals exactly match the collision shape.
+
+### Rendering
+Drawn as a `draw_mesh` **triangle fan** (center vertex + hull vertices) with **uniform `rock_mid` color on every vertex**. The radial light shader (same material active as during cave wall draws) provides all brightness variation — no vertex color gradient. Using different colors at center vs rim causes a visible dark/light Gouraud gradient; avoid it.
+
+### Minimap
+Obstacles are drawn on the minimap as their actual polygon shape (triangle fan + outline) projected into minimap space, not as dots.
+
+### Storage
+`HashMap<i64, Obstacle>` keyed by slot index. Load/evict each frame in sync with the wall window (`k_left` / `k_right` derived from `want_left` / `want_right`).
 
 ## Color / rendering alignment rule
 
@@ -99,7 +111,7 @@ Two quads per edge: `obs_edge → rock_mid` (0–6px) and `rock_mid → obs_fill
 The ship uses a 1×1 m Rapier `cuboid` collider; cave walls are `segment` colliders (zero thickness). Headless testing confirms the ship (max ~17 m/s under normal thrust) never tunnels through walls — CCD is not necessary. The collision is physically correct; visual misalignment was the only issue.
 
 ## Git workflow
-- Development branch: `claude/ship-cave-collision-sefg83` (current); previous: `claude/radial-light-thrust-shader-uuqt21`
+- Development branch: `claude/cave-polygon-obstacles-8lxhh2` (current); previous: `claude/ship-cave-collision-sefg83`
 - Merges to `main` via rebase PRs using the GitHub MCP tools (`mcp__github__create_pull_request`, `mcp__github__merge_pull_request`).
 - Branch consistently diverges from main after merges — always `git fetch origin main && git rebase origin/main && git push --force-with-lease` before creating a PR to avoid merge conflicts.
 - The wasm binary (`rapier-test.wasm`) conflicts on every rebase — always resolve by rebuilding from source: `cargo build --release --target wasm32-unknown-unknown && cp target/wasm32-unknown-unknown/release/rapier-test.wasm rapier-test.wasm`, then `git add rapier-test.wasm` before `git rebase --continue`.
