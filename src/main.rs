@@ -591,7 +591,12 @@ async fn main() {
             });
         }
 
-            // Obstacles — filled, lit by the same radial shader as the walls.
+        // Obstacles — beveled fill, lit by the same radial shader as the walls.
+        // Bevel: each hull vertex is shrunk toward the centroid by BEVEL px,
+        // producing an inset polygon. The ring between hull and inset is the
+        // bevel band; the inset interior is the flat fill. Because the inset
+        // vertices are shared between adjacent quads there are no corner gaps.
+        const BEVEL: f32 = 10.0;
         for ob in obstacles.values() {
             let (c, s) = (ob.rot.cos(), ob.rot.sin());
             let poly: Vec<Vec2> = ob.verts.iter().map(|p| {
@@ -609,14 +614,29 @@ async fn main() {
             }
 
             let n = poly.len();
-            let mut verts = Vec::with_capacity(n + 1);
-            verts.push(v(center, rock_mid));
-            for p in &poly { verts.push(v(*p, rock_mid)); }
-            let mut indices = Vec::with_capacity(n * 3);
+
+            // Inset polygon: each vertex pulled BEVEL px toward the centroid.
+            let inset: Vec<Vec2> = poly.iter().map(|p| {
+                let d = center - *p;
+                let len = d.length();
+                *p + d * (BEVEL / len).min(0.5)
+            }).collect();
+
+            // One combined mesh: bevel ring + inner fill, all under the light shader.
+            // Layout: verts 0..n = hull (rock_edge), n..2n = inset (rock_mid), 2n = center (rock_dark)
+            let mut verts: Vec<Vertex> = Vec::with_capacity(2 * n + 1);
+            for p in &poly  { verts.push(v(*p, rock_edge)); }  // 0..n
+            for p in &inset { verts.push(v(*p, rock_mid));  }  // n..2n
+            verts.push(v(center, rock_dark));                   // 2n
+            let center_i = 2 * n as u16;
+
+            let mut indices: Vec<u16> = Vec::with_capacity(n * 9);
             for i in 0..n as u16 {
-                indices.push(0);
-                indices.push(1 + i);
-                indices.push(1 + (i + 1) % n as u16);
+                let j = (i + 1) % n as u16;
+                // Bevel quad: hull[i], hull[j], inset[j], inset[i]
+                indices.extend_from_slice(&[i, j, n as u16 + j, i, n as u16 + j, n as u16 + i]);
+                // Inner fill: center, inset[i], inset[j]
+                indices.extend_from_slice(&[center_i, n as u16 + i, n as u16 + j]);
             }
             draw_mesh(&Mesh { vertices: verts, indices, texture: None });
         }
