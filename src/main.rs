@@ -91,7 +91,7 @@ void main() {
     float dist    = distance(frag_pos, ship_pos);
     float t       = clamp(1.0 - dist / light_radius, 0.0, 1.0);
     float falloff = t * t;
-    float ambient = 0.60;
+    float ambient = 0.45;
     float l       = min(ambient + (1.0 - ambient) * falloff, 1.0);
     float warm    = glow * falloff * 0.28;
 
@@ -205,9 +205,9 @@ async fn main() {
     );
     const MM_HALF_X: f32 = 150.0; // world metres shown each side of ship
 
-    let rock_dark = Color::from_rgba(35, 28, 22, 255);
-    let rock_mid  = Color::from_rgba(60, 48, 36, 255);
-    let rock_edge = Color::from_rgba(90, 72, 52, 255);
+    let rock_dark = Color::from_rgba(80,  64,  50,  255);
+    let rock_mid  = Color::from_rgba(118, 95,  72,  255);
+    let rock_edge = Color::from_rgba(150, 120, 88,  255);
 
     let mut glow = 0.0f32; // 0 = idle, 1 = full thrust
 
