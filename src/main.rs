@@ -51,6 +51,58 @@ const SEG_LEN: f32 = 3.0;
 // How many segments to keep loaded on each side of the ship
 const HALF_WINDOW: i64 = 80;
 
+// Vertex shader: passes screen-pixel position as a varying so the
+// fragment shader can compute per-pixel distance from the ship.
+const LIGHT_VERTEX: &str = r#"#version 100
+attribute vec3 position;
+attribute vec2 texcoord;
+attribute vec4 color0;
+
+varying lowp vec2 uv;
+varying lowp vec4 color;
+varying highp vec2 frag_pos;
+
+uniform mat4 Model;
+uniform mat4 Projection;
+
+void main() {
+    gl_Position = Projection * Model * vec4(position, 1);
+    color = color0 / 255.0;
+    uv = texcoord;
+    frag_pos = position.xy;
+}"#;
+
+// Fragment shader: true per-pixel radial falloff from the ship.
+// Eliminates the vertical "column" that Gouraud shading produces over
+// the large fill quads.
+const LIGHT_FRAGMENT: &str = r#"#version 100
+precision highp float;
+
+varying vec2 uv;
+varying vec4 color;
+varying vec2 frag_pos;
+
+uniform sampler2D Texture;
+uniform vec2  ship_pos;
+uniform float light_radius;
+uniform float glow;
+
+void main() {
+    float dist    = distance(frag_pos, ship_pos);
+    float t       = clamp(1.0 - dist / light_radius, 0.0, 1.0);
+    float falloff = t * t;
+    float ambient = 0.15;
+    float l       = min(ambient + (1.0 - ambient) * falloff, 1.0);
+    float warm    = glow * falloff * 0.28;
+
+    vec4 base = color * texture2D(Texture, uv);
+    gl_FragColor = vec4(
+        min(base.r * l + warm,       1.0),
+        min(base.g * l + warm * 0.4, 1.0),
+        min(base.b * l,              1.0),
+        1.0);
+}"#;
+
 
 // Cave repeats exactly every PERIOD metres. All terms are integer harmonics
 // of the base frequency so they all complete whole cycles together.
@@ -158,6 +210,18 @@ async fn main() {
     let rock_edge = Color::from_rgba(90, 72, 52, 255);
 
     let mut glow = 0.0f32; // 0 = idle, 1 = full thrust
+
+    let light_material = load_material(
+        ShaderSource::Glsl { vertex: LIGHT_VERTEX, fragment: LIGHT_FRAGMENT },
+        MaterialParams {
+            uniforms: vec![
+                UniformDesc::new("ship_pos",     UniformType::Float2),
+                UniformDesc::new("light_radius", UniformType::Float1),
+                UniformDesc::new("glow",         UniformType::Float1),
+            ],
+            ..Default::default()
+        },
+    ).expect("cave light shader");
 
     loop {
         integration_params.dt = get_frame_time().min(0.05);
@@ -270,26 +334,8 @@ async fn main() {
         let far_down =  sh * 3.0;
         let margin = sw + view_scale * 4.0;
         let ship_screen = vec2(sw / 2.0, sh / 2.0);
-        // Scale light radius to the screen so it looks right on both desktop and mobile.
         let base_dim = sw.min(sh);
         let light_radius = base_dim * 0.55 + glow * base_dim * 0.30;
-
-        // Apply point-light to a base rock colour.
-        // `dist` is screen-space distance from ship to the wall face.
-        // `glow` adds warm orange tint during thrust.
-        let lit = |base: Color, dist: f32| -> Color {
-            let ambient = 0.15f32;
-            let t = (1.0 - (dist / light_radius)).max(0.0);
-            let falloff = t * t;
-            let l = (ambient + (1.0 - ambient) * falloff).min(1.0);
-            let warm = glow * falloff * 0.28;
-            Color::new(
-                (base.r * l + warm).min(1.0),
-                (base.g * l + warm * 0.4).min(1.0),
-                (base.b * l).min(1.0),
-                1.0,
-            )
-        };
 
         // Indices for two quads stacked: face-edge, face-mid, fill-to-infinity
         // Each quad = 2 triangles = 6 indices, layout:
@@ -303,7 +349,12 @@ async fn main() {
         let v = |p: Vec2, c: Color| -> Vertex {
             Vertex { position: vec3(p.x, p.y, 0.0), uv: vec2(0., 0.), color: c.into(), normal: vec4(0., 0., 1., 0.) }
         };
-        let dark_far = lit(rock_dark, light_radius * 2.0); // ambient-only for deep rock
+
+        // Bind per-pixel radial-light shader for all cave wall draws.
+        gl_use_material(&light_material);
+        light_material.set_uniform("ship_pos",     ship_screen);
+        light_material.set_uniform("light_radius", light_radius);
+        light_material.set_uniform("glow",         glow);
 
         for &(idx, ..) in &cave {
             let (ta, tb, ba, bb) = seg_points(idx);
@@ -317,30 +368,25 @@ async fn main() {
             let b0 = w2s(ba.x, ba.y, sh, cam_x, cam_y);
             let b1 = w2s(bb.x, bb.y, sh, cam_x, cam_y);
 
-            // Per-corner distances for smooth gradient across the segment
-            let d00 = (t0 - ship_screen).length();
-            let d01 = (t1 - ship_screen).length();
-            let d10 = (b0 - ship_screen).length();
-            let d11 = (b1 - ship_screen).length();
-
-            // Top wall: three stacked quads (edge → mid → dark fill)
+            // Top wall: three stacked quads (edge → mid → dark fill).
+            // All vertices carry raw base colors; the shader applies radial lighting.
             draw_mesh(&Mesh {
                 vertices: vec![
                     // quad 0 — bright lit edge face
-                    v(t0,                        lit(rock_edge, d00)),
-                    v(t1,                        lit(rock_edge, d01)),
-                    v(vec2(t1.x, t1.y + 6.0),   lit(rock_mid,  d01)),
-                    v(vec2(t0.x, t0.y + 6.0),   lit(rock_mid,  d00)),
+                    v(t0,                        rock_edge),
+                    v(t1,                        rock_edge),
+                    v(vec2(t1.x, t1.y + 6.0),   rock_mid),
+                    v(vec2(t0.x, t0.y + 6.0),   rock_mid),
                     // quad 1 — mid band
-                    v(vec2(t0.x, t0.y + 6.0),   lit(rock_mid,  d00)),
-                    v(vec2(t1.x, t1.y + 6.0),   lit(rock_mid,  d01)),
-                    v(vec2(t1.x, t1.y + 14.0),  lit(rock_dark, d01)),
-                    v(vec2(t0.x, t0.y + 14.0),  lit(rock_dark, d00)),
-                    // quad 2 — rock fill (starts at ceiling surface, extends up into rock)
-                    v(t0,                        lit(rock_dark, d00)),
-                    v(t1,                        lit(rock_dark, d01)),
-                    v(vec2(t1.x, far_up),        dark_far),
-                    v(vec2(t0.x, far_up),        dark_far),
+                    v(vec2(t0.x, t0.y + 6.0),   rock_mid),
+                    v(vec2(t1.x, t1.y + 6.0),   rock_mid),
+                    v(vec2(t1.x, t1.y + 14.0),  rock_dark),
+                    v(vec2(t0.x, t0.y + 14.0),  rock_dark),
+                    // quad 2 — rock fill (ceiling surface to far off-screen)
+                    v(t0,                        rock_dark),
+                    v(t1,                        rock_dark),
+                    v(vec2(t1.x, far_up),        rock_dark),
+                    v(vec2(t0.x, far_up),        rock_dark),
                 ],
                 indices: wall_indices.clone(),
                 texture: None,
@@ -349,26 +395,28 @@ async fn main() {
             // Bottom wall: three non-overlapping quads, y increases downward
             draw_mesh(&Mesh {
                 vertices: vec![
-                    // quad 0 — mid highlight (upper air, dark→mid)
-                    v(vec2(b0.x, b0.y - 14.0), lit(rock_dark, d10)),  // TL
-                    v(vec2(b1.x, b1.y - 14.0), lit(rock_dark, d11)),  // TR
-                    v(vec2(b1.x, b1.y -  6.0), lit(rock_mid,  d11)),  // BR
-                    v(vec2(b0.x, b0.y -  6.0), lit(rock_mid,  d10)),  // BL
-                    // quad 1 — edge highlight (lower air, mid→bright)
-                    v(vec2(b0.x, b0.y -  6.0), lit(rock_mid,  d10)),  // TL
-                    v(vec2(b1.x, b1.y -  6.0), lit(rock_mid,  d11)),  // TR
-                    v(b1,                       lit(rock_edge, d11)),  // BR
-                    v(b0,                       lit(rock_edge, d10)),  // BL
-                    // quad 2 — rock fill (surface→deep rock)
-                    v(b0,                       lit(rock_edge, d10)),  // TL
-                    v(b1,                       lit(rock_edge, d11)),  // TR
-                    v(vec2(b1.x, far_down),     dark_far),             // BR
-                    v(vec2(b0.x, far_down),     dark_far),             // BL
+                    // quad 0 — dark→mid band
+                    v(vec2(b0.x, b0.y - 14.0), rock_dark),  // TL
+                    v(vec2(b1.x, b1.y - 14.0), rock_dark),  // TR
+                    v(vec2(b1.x, b1.y -  6.0), rock_mid),   // BR
+                    v(vec2(b0.x, b0.y -  6.0), rock_mid),   // BL
+                    // quad 1 — edge highlight
+                    v(vec2(b0.x, b0.y -  6.0), rock_mid),   // TL
+                    v(vec2(b1.x, b1.y -  6.0), rock_mid),   // TR
+                    v(b1,                       rock_edge),  // BR
+                    v(b0,                       rock_edge),  // BL
+                    // quad 2 — rock fill (floor surface to far off-screen)
+                    v(b0,                       rock_dark),  // TL
+                    v(b1,                       rock_dark),  // TR
+                    v(vec2(b1.x, far_down),     rock_dark),  // BR
+                    v(vec2(b0.x, far_down),     rock_dark),  // BL
                 ],
                 indices: wall_indices.clone(),
                 texture: None,
             });
         }
+
+        gl_use_default_material();
 
         // Particles
         for p in &particles {
