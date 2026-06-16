@@ -2,7 +2,7 @@
 
 Rust + macroquad 0.4.15 + Rapier 2D cave-flying game compiled to WebAssembly and served via GitHub Pages. The player pilots a ship through a procedurally-generated scrolling cave using thrust and rotation controls.
 
-> **Keep this file current.** At the end of every session, update CLAUDE.md to reflect any architectural changes, new systems, renamed constants, corrected gotchas, or lessons learned. Future sessions start cold — this file is the only durable context.
+> **Keep this file current.** Update CLAUDE.md as part of every commit that changes architecture, adds a system, renames constants, fixes a gotcha, or reveals a lesson. Don't batch it up — update it while the context is fresh.
 
 ## Build & deploy
 ```bash
