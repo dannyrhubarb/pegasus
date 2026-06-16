@@ -596,7 +596,7 @@ async fn main() {
         // producing an inset polygon. The ring between hull and inset is the
         // bevel band; the inset interior is the flat fill. Because the inset
         // vertices are shared between adjacent quads there are no corner gaps.
-        const BEVEL: f32 = 10.0;
+        const BEVEL: f32 = 16.0;
         for ob in obstacles.values() {
             let (c, s) = (ob.rot.cos(), ob.rot.sin());
             let poly: Vec<Vec2> = ob.verts.iter().map(|p| {
@@ -627,7 +627,7 @@ async fn main() {
             let mut verts: Vec<Vertex> = Vec::with_capacity(2 * n + 1);
             for p in &poly  { verts.push(v(*p, rock_edge)); }  // 0..n
             for p in &inset { verts.push(v(*p, rock_mid));  }  // n..2n
-            verts.push(v(center, rock_dark));                   // 2n
+            verts.push(v(center, rock_mid));                    // 2n
             let center_i = 2 * n as u16;
 
             let mut indices: Vec<u16> = Vec::with_capacity(n * 9);
