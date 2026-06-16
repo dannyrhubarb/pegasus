@@ -218,9 +218,9 @@ fn obstacle_spec(k: i64) -> Option<ObstacleSpec> {
         return None;
     }
 
-    // Obstacle size. Large boulders (up to 3.5 m radius) appear in wide
-    // sections; the cap scales down in narrower passages so a gap always fits.
-    let max_r = (hw * 0.48).min(3.5);
+    // Obstacle size. Boulders up to 5.5 m radius appear in the widest
+    // sections; the cap scales with local half-width so a gap always fits.
+    let max_r = (hw * 0.65).min(5.5);
     let r = rng.range(0.3, 1.0) * max_r;
 
     // Centre offset, leaving at least ~1.3 m clearance to the nearer wall so
@@ -350,10 +350,9 @@ async fn main() {
     let rock_mid  = Color::from_rgba(118, 95,  72,  255);
     let rock_edge = Color::from_rgba(150, 120, 88,  255);
 
-    // Obstacle palette — a cool blue-grey crystal so rocks stand out clearly
-    // against the warm cave walls and the red ship.
-    let obs_fill = Color::from_rgba(96,  120, 150, 255);
-    let obs_edge = Color::from_rgba(150, 190, 220, 255);
+    // Obstacles use the same rock palette as the walls.
+    let obs_fill = rock_dark;
+    let obs_edge = rock_edge;
 
     let mut glow = 0.0f32; // 0 = idle, 1 = full thrust
 
@@ -776,15 +775,33 @@ async fn main() {
             draw_rectangle(col_x, top_s, col_w, bot_s - top_s, Color::from_rgba(8, 8, 18, 220));
         }
 
-        // Obstacle markers on the minimap (only those within the X span shown)
+        // Obstacle shapes on the minimap — actual polygon, not just a dot.
+        let to_mm_x = |wx: f32| -> f32 {
+            mm_ox + (wx - cam_x + MM_HALF_X) / (2.0 * MM_HALF_X) * mm_w
+        };
         for ob in obstacles.values() {
-            let rel = ob.cx - cam_x;
-            if rel.abs() > MM_HALF_X {
+            if (ob.cx - cam_x).abs() > MM_HALF_X + 6.0 {
                 continue;
             }
-            let mx = mm_ox + (rel + MM_HALF_X) / (2.0 * MM_HALF_X) * mm_w;
-            let my = to_mm_y(ob.cy).clamp(mm_oy, mm_oy + mm_h);
-            draw_circle(mx, my, 2.0 * ui, obs_edge);
+            let (c, s) = (ob.rot.cos(), ob.rot.sin());
+            let mm_poly: Vec<Vec2> = ob.verts.iter().map(|p| {
+                let wx = ob.cx + p.x * c - p.y * s;
+                let wy = ob.cy + p.x * s + p.y * c;
+                vec2(
+                    to_mm_x(wx).clamp(mm_ox, mm_ox + mm_w),
+                    to_mm_y(wy).clamp(mm_oy, mm_oy + mm_h),
+                )
+            }).collect();
+            let mc = vec2(to_mm_x(ob.cx), to_mm_y(ob.cy).clamp(mm_oy, mm_oy + mm_h));
+            let n = mm_poly.len();
+            for i in 0..n {
+                draw_triangle(mc, mm_poly[i], mm_poly[(i + 1) % n], obs_fill);
+            }
+            for i in 0..n {
+                draw_line(mm_poly[i].x, mm_poly[i].y,
+                          mm_poly[(i + 1) % n].x, mm_poly[(i + 1) % n].y,
+                          1.0, obs_edge);
+            }
         }
 
         // Viewport rectangle — always centred horizontally, Y follows ship
