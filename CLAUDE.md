@@ -96,13 +96,13 @@ Static Rapier `convex_hull` collider, translated and rotated to match. Hull vert
 ### Rendering
 Drawn as a single `draw_mesh` with the light shader active (same material as cave walls). Uses a **shrink-inset bevel**:
 
-1. Compute `inset[]`: each hull vertex pulled `BEVEL = 10 px` toward the screen-space centroid.
+1. Compute `inset[]`: each hull vertex pulled `BEVEL = 16 px` toward the screen-space centroid.
 2. **Bevel ring** (hull → inset): one quad per edge (`hull[i], hull[j], inset[j], inset[i]`), colors `rock_edge` → `rock_mid`.
-3. **Inner fill** (inset → center): triangle fan, colors `rock_mid` → `rock_dark`.
+3. **Inner fill** (inset → center): triangle fan, colors `rock_mid` uniformly (center vertex is also `rock_mid`).
 
 This avoids the corner-gap artifact of the old per-edge inset strips because inset vertices are shared between adjacent quads — no mitering needed. Vertex layout in the mesh: indices `0..n` = hull, `n..2n` = inset, `2n` = center.
 
-**Do not** use different colors at the center vs outer rim of a plain triangle fan — the GPU interpolates a visible Gouraud gradient across the polygon.
+**Do not** use `rock_dark` at the center vertex of the inner fill fan — the GPU interpolates it against the `rock_mid` inset ring producing a visible dark gradient in the middle. Keep center and inset both `rock_mid` so only the bevel ring varies.
 
 ### Minimap
 Obstacles are drawn on the minimap as their actual polygon shape (triangle fan + outline) projected into minimap space, not as dots.
