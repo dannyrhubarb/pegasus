@@ -93,7 +93,7 @@ void main() {
     float falloff = t * t;
     float ambient = 0.45;
     float l       = min(ambient + (1.0 - ambient) * falloff, 1.0);
-    float warm    = glow * falloff * 0.28;
+    float warm    = glow * falloff * 0.12;
 
     vec4 base = color * texture2D(Texture, uv);
     gl_FragColor = vec4(
@@ -184,6 +184,66 @@ impl Rng {
     fn range_int(&mut self, a: i32, b: i32) -> i32 {
         a + (self.next() % (b - a + 1) as u32) as i32
     }
+}
+
+// --- Low-poly faceted wall lattice ---------------------------------------
+// The cave walls are rendered as a grid of flat-shaded triangles ("facets").
+// Geometry is a pure function of a GLOBAL column index so the shared boundary
+// between adjacent segments is computed identically on both sides — no cracks.
+
+const SUBCOLS: i64 = 3;                       // sub-columns per 3 m segment → ~1 m facets
+const COL_DX: f32 = SEG_LEN / SUBCOLS as f32; // world width of one facet column
+const ROW_DEPTHS: [f32; 4] = [0.0, 0.45, 1.1, 2.2]; // metres into rock; row 0 on the edge
+const N_ROWS: usize = 4;
+
+// World x for a global facet column. Pure function → identical on both sides
+// of any segment boundary, so adjacent strips share an exact x.
+fn col_x(col: i64) -> f32 {
+    col as f32 * COL_DX
+}
+
+// World-space lattice point for (col, row, side). Row 0 sits EXACTLY on the
+// wall edge (collider-aligned, no jitter); deeper rows recede into the rock
+// with small deterministic jitter for the faceted look.
+// side 0 = ceiling (rock is +y), side 1 = floor (rock is -y).
+fn lattice_point(col: i64, row: usize, side: u8) -> Vec2 {
+    let x = col_x(col);
+    let edge_y = if side == 0 {
+        cave_center(x) + cave_half_width(x)
+    } else {
+        cave_center(x) - cave_half_width(x)
+    };
+    if row == 0 {
+        return vec2(x, edge_y); // locked to the collider line
+    }
+    let depth = ROW_DEPTHS[row];
+    let dir = if side == 0 { 1.0 } else { -1.0 };
+    let h = hash_u32(
+        (col as u32).wrapping_mul(73856093)
+            ^ (row as u32).wrapping_mul(19349663)
+            ^ (side as u32).wrapping_mul(83492791),
+    );
+    let jx = ((h & 0xffff) as f32 / 65535.0 - 0.5) * (COL_DX * 0.5); // ±0.25 m
+    let jy = (((h >> 16) & 0xffff) as f32 / 65535.0 - 0.5) * (depth * 0.35);
+    vec2(x + jx, edge_y + dir * (depth + jy))
+}
+
+// Flat-shade color for a wall facet: a band base color (by row) modulated by a
+// deterministic per-facet brightness so each triangle reads as a distinct facet.
+fn facet_shade(base: Color, col: i64, row: usize, side: u8, salt: u32) -> Color {
+    let h = hash_u32(
+        (col as u32).wrapping_mul(2246822519)
+            ^ (row as u32).wrapping_mul(3266489917)
+            ^ (side as u32)
+            ^ salt,
+    );
+    let b = 0.82 + (h & 0xffff) as f32 / 65535.0 * 0.30; // ~[0.82, 1.12]
+    Color::new(
+        (base.r * b).min(1.0),
+        (base.g * b).min(1.0),
+        (base.b * b).min(1.0),
+        1.0,
+    )
 }
 
 // Deterministic spec for obstacle slot `k`. Returns None where the cave is
@@ -346,9 +406,9 @@ async fn main() {
     );
     const MM_HALF_X: f32 = 150.0; // world metres shown each side of ship
 
-    let rock_dark = Color::from_rgba(80,  64,  50,  255);
-    let rock_mid  = Color::from_rgba(118, 95,  72,  255);
-    let rock_edge = Color::from_rgba(150, 120, 88,  255);
+    let rock_dark = Color::from_rgba(28,  38,  58,  255); // deep navy-slate
+    let rock_mid  = Color::from_rgba(52,  68,  96,  255); // mid slate-blue
+    let rock_edge = Color::from_rgba(92,  116, 150, 255); // lit cool edge
 
     // Obstacles use the same rock palette as the walls.
     let obs_fill = rock_dark;
@@ -505,15 +565,6 @@ async fn main() {
         let base_dim = sw.min(sh);
         let light_radius = base_dim * 0.55 + glow * base_dim * 0.30;
 
-        // Indices for two quads stacked: face-edge, face-mid, fill-to-infinity
-        // Each quad = 2 triangles = 6 indices, layout:
-        //   0--1
-        //   |\ |
-        //   | \|
-        //   3--2
-        let quad_idx: [u16; 6] = [0, 1, 2, 0, 2, 3];
-        let wall_indices: Vec<u16> = (0u16..3).flat_map(|q| quad_idx.map(|i| i + q * 4)).collect();
-
         let v = |p: Vec2, c: Color| -> Vertex {
             Vertex { position: vec3(p.x, p.y, 0.0), uv: vec2(0., 0.), color: c.into(), normal: vec4(0., 0., 1., 0.) }
         };
@@ -524,80 +575,73 @@ async fn main() {
         light_material.set_uniform("light_radius", light_radius);
         light_material.set_uniform("glow",         glow);
 
-        for &(idx, ..) in &cave {
-            let (ta, tb, ba, bb) = seg_points(idx);
-            let t0 = w2s(ta.x, ta.y, sh, cam_x, cam_y);
-            let t1 = w2s(tb.x, tb.y, sh, cam_x, cam_y);
+        // Faceted cave walls. Each wall (ceiling = side 0, floor = side 1) is one
+        // continuous mesh of flat-shaded triangles spanning all visible columns.
+        // Lattice positions are pure functions of the GLOBAL column index, so
+        // adjacent segments share exact boundary vertices (no cracks); row 0 sits
+        // on the wall line (= the collider) so the lit surface stays aligned.
+        let col_lo = cave.front().map_or(0, |&(idx, ..)| idx) * SUBCOLS;
+        let col_hi = (cave.back().map_or(0, |&(idx, ..)| idx) + 1) * SUBCOLS;
 
-            if t0.x.min(t1.x) > sw + margin || t0.x.max(t1.x) < -margin {
-                continue;
+        for (side, far_y) in [(0u8, far_up), (1u8, far_down)] {
+            let mut verts: Vec<Vertex> = Vec::new();
+            for col in col_lo..col_hi {
+                // Cull columns fully off-screen in x.
+                let sx0 = w2s(col_x(col),     0.0, sh, cam_x, cam_y).x;
+                let sx1 = w2s(col_x(col + 1), 0.0, sh, cam_x, cam_y).x;
+                if sx0.min(sx1) > sw + margin || sx0.max(sx1) < -margin {
+                    continue;
+                }
+
+                // Facet rows: each cell is two flat-shaded triangles.
+                for row in 0..N_ROWS - 1 {
+                    let w00 = lattice_point(col,     row,     side);
+                    let w10 = lattice_point(col + 1, row,     side);
+                    let w11 = lattice_point(col + 1, row + 1, side);
+                    let w01 = lattice_point(col,     row + 1, side);
+                    let s00 = w2s(w00.x, w00.y, sh, cam_x, cam_y);
+                    let s10 = w2s(w10.x, w10.y, sh, cam_x, cam_y);
+                    let s11 = w2s(w11.x, w11.y, sh, cam_x, cam_y);
+                    let s01 = w2s(w01.x, w01.y, sh, cam_x, cam_y);
+
+                    let base = match row { 0 => rock_edge, 1 => rock_mid, _ => rock_dark };
+                    let ca = facet_shade(base, col, row, side, 0);
+                    let cb = facet_shade(base, col, row, side, 0x5bd1_e995);
+
+                    // Hashed diagonal so the lattice doesn't read as a regular grid.
+                    if hash_u32(col as u32 ^ (row as u32).wrapping_mul(2654435761)) & 1 == 0 {
+                        verts.push(v(s00, ca)); verts.push(v(s10, ca)); verts.push(v(s11, ca));
+                        verts.push(v(s00, cb)); verts.push(v(s11, cb)); verts.push(v(s01, cb));
+                    } else {
+                        verts.push(v(s00, ca)); verts.push(v(s10, ca)); verts.push(v(s01, ca));
+                        verts.push(v(s10, cb)); verts.push(v(s11, cb)); verts.push(v(s01, cb));
+                    }
+                }
+
+                // Solid dark fill from the deepest facet row out to far_y.
+                let wd0 = lattice_point(col,     N_ROWS - 1, side);
+                let wd1 = lattice_point(col + 1, N_ROWS - 1, side);
+                let sd0 = w2s(wd0.x, wd0.y, sh, cam_x, cam_y);
+                let sd1 = w2s(wd1.x, wd1.y, sh, cam_x, cam_y);
+                let f0 = vec2(sd0.x, far_y);
+                let f1 = vec2(sd1.x, far_y);
+                verts.push(v(sd0, rock_dark)); verts.push(v(sd1, rock_dark)); verts.push(v(f1, rock_dark));
+                verts.push(v(sd0, rock_dark)); verts.push(v(f1, rock_dark)); verts.push(v(f0, rock_dark));
             }
 
-            let b0 = w2s(ba.x, ba.y, sh, cam_x, cam_y);
-            let b1 = w2s(bb.x, bb.y, sh, cam_x, cam_y);
-
-            // Top wall: three stacked quads (edge → mid → dark fill).
-            // All vertices carry raw base colors; the shader applies radial lighting.
-            // The lit edge sits exactly on the wall line (= the collider), and the
-            // bevel bands recede UP into the rock (screen y -), never into the cave.
-            // Drawing them inward would make the visible surface poke past the
-            // collider, so the ship would appear to sink into the rock.
-            draw_mesh(&Mesh {
-                vertices: vec![
-                    // quad 0 — bright lit edge face
-                    v(t0,                        rock_edge),
-                    v(t1,                        rock_edge),
-                    v(vec2(t1.x, t1.y - 6.0),   rock_mid),
-                    v(vec2(t0.x, t0.y - 6.0),   rock_mid),
-                    // quad 1 — mid band
-                    v(vec2(t0.x, t0.y - 6.0),   rock_mid),
-                    v(vec2(t1.x, t1.y - 6.0),   rock_mid),
-                    v(vec2(t1.x, t1.y - 14.0),  rock_dark),
-                    v(vec2(t0.x, t0.y - 14.0),  rock_dark),
-                    // quad 2 — rock fill (picks up where the bevel ends)
-                    v(vec2(t0.x, t0.y - 14.0),  rock_dark),
-                    v(vec2(t1.x, t1.y - 14.0),  rock_dark),
-                    v(vec2(t1.x, far_up),        rock_dark),
-                    v(vec2(t0.x, far_up),        rock_dark),
-                ],
-                indices: wall_indices.clone(),
-                texture: None,
-            });
-
-            // Bottom wall: three non-overlapping quads, y increases downward.
-            // As with the ceiling, the lit edge sits on the wall line and the
-            // bevel bands recede DOWN into the rock (screen y +), so the visible
-            // floor surface coincides with the collider the ship rests on.
-            draw_mesh(&Mesh {
-                vertices: vec![
-                    // quad 0 — dark→mid band
-                    v(vec2(b0.x, b0.y + 14.0), rock_dark),  // TL
-                    v(vec2(b1.x, b1.y + 14.0), rock_dark),  // TR
-                    v(vec2(b1.x, b1.y +  6.0), rock_mid),   // BR
-                    v(vec2(b0.x, b0.y +  6.0), rock_mid),   // BL
-                    // quad 1 — edge highlight
-                    v(vec2(b0.x, b0.y +  6.0), rock_mid),   // TL
-                    v(vec2(b1.x, b1.y +  6.0), rock_mid),   // TR
-                    v(b1,                       rock_edge),  // BR
-                    v(b0,                       rock_edge),  // BL
-                    // quad 2 — rock fill (picks up where the bevel ends)
-                    v(vec2(b0.x, b0.y + 14.0), rock_dark),  // TL
-                    v(vec2(b1.x, b1.y + 14.0), rock_dark),  // TR
-                    v(vec2(b1.x, far_down),     rock_dark),  // BR
-                    v(vec2(b0.x, far_down),     rock_dark),  // BL
-                ],
-                indices: wall_indices.clone(),
-                texture: None,
-            });
+            if !verts.is_empty() {
+                let indices: Vec<u16> = (0..verts.len() as u16).collect();
+                draw_mesh(&Mesh { vertices: verts, indices, texture: None });
+            }
         }
 
-        // Obstacles — beveled fill, lit by the same radial shader as the walls.
-        // Bevel: each hull vertex is shrunk toward the centroid by BEVEL px,
-        // producing an inset polygon. The ring between hull and inset is the
-        // bevel band; the inset interior is the flat fill. Because the inset
-        // vertices are shared between adjacent quads there are no corner gaps.
+        // Obstacles — faceted pebbles lit by the same radial shader as the walls.
+        // Same hull→inset ring + center fan topology as before (outer ring = the
+        // exact hull = collider), but each triangle is FLAT-shaded with a
+        // deterministic per-facet brightness plus a fake top-light gradient, so
+        // boulders read as low-poly rocks with brighter tops.
         const BEVEL: f32 = 16.0;
-        for ob in obstacles.values() {
+        for (&k, ob) in obstacles.iter() {
             let (c, s) = (ob.rot.cos(), ob.rot.sin());
             let poly: Vec<Vec2> = ob.verts.iter().map(|p| {
                 let wx = ob.cx + p.x * c - p.y * s;
@@ -622,22 +666,37 @@ async fn main() {
                 *p + d * (BEVEL / len).min(0.5)
             }).collect();
 
-            // One combined mesh: bevel ring + inner fill, all under the light shader.
-            // Layout: verts 0..n = hull (rock_edge), n..2n = inset (rock_mid), 2n = center (rock_dark)
-            let mut verts: Vec<Vertex> = Vec::with_capacity(2 * n + 1);
-            for p in &poly  { verts.push(v(*p, rock_edge)); }  // 0..n
-            for p in &inset { verts.push(v(*p, rock_mid));  }  // n..2n
-            verts.push(v(center, rock_mid));                    // 2n
-            let center_i = 2 * n as u16;
+            // Screen radius for normalising the top-light gradient.
+            let radius_px = poly.iter()
+                .map(|p| (center - *p).length())
+                .fold(1.0f32, f32::max);
 
-            let mut indices: Vec<u16> = Vec::with_capacity(n * 9);
-            for i in 0..n as u16 {
-                let j = (i + 1) % n as u16;
-                // Bevel quad: hull[i], hull[j], inset[j], inset[i]
-                indices.extend_from_slice(&[i, j, n as u16 + j, i, n as u16 + j, n as u16 + i]);
-                // Inner fill: center, inset[i], inset[j]
-                indices.extend_from_slice(&[center_i, n as u16 + i, n as u16 + j]);
+            // Flat-shade a facet: base colour × stable per-facet brightness
+            // (keyed on the obstacle slot + edge, so it never flickers as the
+            // boulder rotates) × top-light gradient (higher on screen = brighter).
+            let facet = |base: Color, edge: usize, salt: u32, tri_cy: f32| -> Color {
+                let h = hash_u32((k as u32).wrapping_mul(2654435761) ^ (edge as u32) ^ salt);
+                let bj = 0.85 + (h & 0xffff) as f32 / 65535.0 * 0.28;
+                let g = 1.0 + ((center.y - tri_cy) / radius_px).clamp(-1.0, 1.0) * 0.18;
+                let b = bj * g;
+                Color::new((base.r * b).min(1.0), (base.g * b).min(1.0), (base.b * b).min(1.0), 1.0)
+            };
+
+            let mut verts: Vec<Vertex> = Vec::with_capacity(n * 9);
+            for i in 0..n {
+                let j = (i + 1) % n;
+                // Bevel ring — two flat-shaded triangles per edge.
+                let ring_cy = (poly[i].y + poly[j].y + inset[j].y + inset[i].y) * 0.25;
+                let c_edge = facet(rock_edge, i, 0, ring_cy);
+                let c_mid  = facet(rock_mid,  i, 0x9e37_79b9, ring_cy);
+                verts.push(v(poly[i], c_edge)); verts.push(v(poly[j], c_edge)); verts.push(v(inset[j], c_edge));
+                verts.push(v(poly[i], c_mid));  verts.push(v(inset[j], c_mid)); verts.push(v(inset[i], c_mid));
+                // Inner fan triangle.
+                let fan_cy = (inset[i].y + inset[j].y + center.y) / 3.0;
+                let c_fan = facet(rock_mid, i, 0x85eb_ca6b, fan_cy);
+                verts.push(v(center, c_fan)); verts.push(v(inset[i], c_fan)); verts.push(v(inset[j], c_fan));
             }
+            let indices: Vec<u16> = (0..verts.len() as u16).collect();
             draw_mesh(&Mesh { vertices: verts, indices, texture: None });
         }
 
