@@ -1,7 +1,7 @@
 use macroquad::prelude::*;
 use macroquad::rand::gen_range;
 use rapier2d::prelude::*;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 struct Particle {
@@ -144,6 +144,107 @@ fn insert_seg(
     (top, bot)
 }
 
+// ---- Random polygon obstacles -------------------------------------------
+//
+// Obstacles are placed deterministically along the cave so they stay put as
+// the player flies back and forth, and so they load/unload with the same
+// sliding window as the walls. Each obstacle slot `k` maps to a fixed
+// position and a fixed random convex polygon, derived purely from `k`.
+
+// Average spacing between obstacle slots, in metres.
+const OBSTACLE_SPACING: f32 = 16.0;
+
+// Tiny deterministic PRNG (integer hash). Seeded per obstacle slot so the
+// same slot always produces the same obstacle, independent of when it loads.
+struct Rng(u32);
+
+fn hash_u32(mut x: u32) -> u32 {
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x7feb_352d);
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x846c_a68b);
+    x ^= x >> 16;
+    x
+}
+
+impl Rng {
+    fn new(seed: u32) -> Self {
+        Rng(hash_u32(seed ^ 0x9e37_79b9))
+    }
+    fn next(&mut self) -> u32 {
+        self.0 = hash_u32(self.0);
+        self.0
+    }
+    fn unit(&mut self) -> f32 {
+        (self.next() >> 8) as f32 / (1u32 << 24) as f32
+    }
+    fn range(&mut self, a: f32, b: f32) -> f32 {
+        a + (b - a) * self.unit()
+    }
+    fn range_int(&mut self, a: i32, b: i32) -> i32 {
+        a + (self.next() % (b - a + 1) as u32) as i32
+    }
+}
+
+// Deterministic spec for obstacle slot `k`. Returns None where the cave is
+// too narrow (or too close to the spawn point) to fit a fair obstacle.
+struct ObstacleSpec {
+    cx: f32,
+    cy: f32,
+    rot: f32,
+    pts: Vec<Point<f32>>, // local-space candidate vertices for the convex hull
+}
+
+fn obstacle_spec(k: i64) -> Option<ObstacleSpec> {
+    let mut rng = Rng::new(k as u32);
+
+    let cx = k as f32 * OBSTACLE_SPACING + rng.range(-3.0, 3.0);
+
+    // Keep the spawn area clear so a reset never drops the ship onto a rock.
+    if cx.abs() < 9.0 {
+        return None;
+    }
+
+    let cy_wall = cave_center(cx);
+    let hw = cave_half_width(cx);
+
+    // Skip pinch points — no room for an obstacle plus a passable gap.
+    if hw < 4.5 {
+        return None;
+    }
+
+    // Roughly 1 in 6 slots is empty, for uneven, natural-feeling spacing.
+    if rng.range_int(0, 5) == 0 {
+        return None;
+    }
+
+    // Obstacle size, capped so a generous gap always remains.
+    let max_r = (hw * 0.30).min(1.6);
+    let r = rng.range(0.65, 1.0) * max_r;
+
+    // Centre offset, leaving at least ~1.3 m clearance to the nearer wall so
+    // there is always a flyable gap on at least one side.
+    let max_off = (hw - r - 1.3).max(0.0);
+    let cy = cy_wall + rng.range(-max_off, max_off);
+
+    // Build a lumpy convex polygon: vertices at sorted angles, varying radius.
+    let n = rng.range_int(6, 9);
+    let mut pts = Vec::with_capacity(n as usize);
+    for i in 0..n {
+        let base = i as f32 / n as f32 * std::f32::consts::TAU;
+        let ang = base + rng.range(-0.25, 0.25);
+        let rad = r * rng.range(0.6, 1.0);
+        pts.push(point![rad * ang.cos(), rad * ang.sin()]);
+    }
+
+    Some(ObstacleSpec {
+        cx,
+        cy,
+        rot: rng.range(0.0, std::f32::consts::TAU),
+        pts,
+    })
+}
+
 #[macroquad::main(window_conf)]
 async fn main() {
     let mut rigid_body_set = RigidBodySet::new();
@@ -157,6 +258,45 @@ async fn main() {
         let (top, bot) = insert_seg(idx, &mut collider_set);
         cave.push_back((idx, top, bot));
     }
+
+    // Loaded obstacles, keyed by their slot index. Each carries its collider
+    // handle plus the hull vertices (local space) used for rendering.
+    struct Obstacle {
+        handle: ColliderHandle,
+        cx: f32,
+        cy: f32,
+        rot: f32,
+        verts: Vec<Vec2>,
+    }
+    let mut obstacles: HashMap<i64, Obstacle> = HashMap::new();
+
+    // Insert the obstacle for slot `k` (if any) into the world + render map.
+    let spawn_obstacle = |k: i64, collider_set: &mut ColliderSet,
+                              obstacles: &mut HashMap<i64, Obstacle>| {
+        let Some(spec) = obstacle_spec(k) else { return };
+        let Some(builder) = ColliderBuilder::convex_hull(&spec.pts) else { return };
+        let handle = collider_set.insert(
+            builder
+                .translation(vector![spec.cx, spec.cy])
+                .rotation(spec.rot)
+                .friction(0.6)
+                .restitution(0.2)
+                .build(),
+        );
+        // Read the actual hull vertices back so rendering matches the collider.
+        let verts = collider_set[handle]
+            .shape()
+            .as_convex_polygon()
+            .map(|cp| cp.points().iter().map(|p| vec2(p.x, p.y)).collect())
+            .unwrap_or_else(|| spec.pts.iter().map(|p| vec2(p.x, p.y)).collect());
+        obstacles.insert(k, Obstacle {
+            handle,
+            cx: spec.cx,
+            cy: spec.cy,
+            rot: spec.rot,
+            verts,
+        });
+    };
 
     // Ship starts at cave centre
     let box_body = RigidBodyBuilder::dynamic()
@@ -208,6 +348,11 @@ async fn main() {
     let rock_dark = Color::from_rgba(80,  64,  50,  255);
     let rock_mid  = Color::from_rgba(118, 95,  72,  255);
     let rock_edge = Color::from_rgba(150, 120, 88,  255);
+
+    // Obstacle palette — a cool blue-grey crystal so rocks stand out clearly
+    // against the warm cave walls and the red ship.
+    let obs_fill = Color::from_rgba(96,  120, 150, 255);
+    let obs_edge = Color::from_rgba(150, 190, 220, 255);
 
     let mut glow = 0.0f32; // 0 = idle, 1 = full thrust
 
@@ -319,6 +464,29 @@ async fn main() {
             cave.push_back((new_idx, top, bot));
         }
 
+        // --- Slide the obstacle window (mirrors the wall window) ---
+        let win_left_x  = want_left as f32 * SEG_LEN;
+        let win_right_x = (want_right + 1) as f32 * SEG_LEN;
+        // Slot index covers position jitter (±3 m) with a margin.
+        let k_left  = ((win_left_x  - 3.0) / OBSTACLE_SPACING).floor() as i64;
+        let k_right = ((win_right_x + 3.0) / OBSTACLE_SPACING).ceil()  as i64;
+
+        // Evict obstacles whose slot fell outside the window.
+        obstacles.retain(|&k, ob| {
+            if k < k_left || k > k_right {
+                collider_set.remove(ob.handle, &mut island_manager, &mut rigid_body_set, false);
+                false
+            } else {
+                true
+            }
+        });
+        // Load any newly-in-range obstacles.
+        for k in k_left..=k_right {
+            if !obstacles.contains_key(&k) {
+                spawn_obstacle(k, &mut collider_set, &mut obstacles);
+            }
+        }
+
         // --- Draw ---
         clear_background(Color::from_rgba(8, 8, 18, 255));
 
@@ -416,7 +584,51 @@ async fn main() {
             });
         }
 
+        // Obstacles — filled, lit by the same radial shader as the walls.
+        // Compute screen-space polygons once and reuse them for the outline.
+        let mut obs_screens: Vec<(Vec2, Vec<Vec2>)> = Vec::with_capacity(obstacles.len());
+        for ob in obstacles.values() {
+            let (c, s) = (ob.rot.cos(), ob.rot.sin());
+            let poly: Vec<Vec2> = ob.verts.iter().map(|p| {
+                let wx = ob.cx + p.x * c - p.y * s;
+                let wy = ob.cy + p.x * s + p.y * c;
+                w2s(wx, wy, sh, cam_x, cam_y)
+            }).collect();
+            let center = w2s(ob.cx, ob.cy, sh, cam_x, cam_y);
+
+            // Cull obstacles fully off-screen.
+            let (mut minx, mut maxx) = (f32::INFINITY, f32::NEG_INFINITY);
+            for p in &poly { minx = minx.min(p.x); maxx = maxx.max(p.x); }
+            if maxx < -margin || minx > sw + margin {
+                continue;
+            }
+
+            let n = poly.len();
+            let mut verts = Vec::with_capacity(n + 1);
+            verts.push(v(center, obs_fill));
+            for p in &poly { verts.push(v(*p, obs_edge)); }
+            let mut indices = Vec::with_capacity(n * 3);
+            for i in 0..n as u16 {
+                indices.push(0);
+                indices.push(1 + i);
+                indices.push(1 + (i + 1) % n as u16);
+            }
+            draw_mesh(&Mesh { vertices: verts, indices, texture: None });
+
+            obs_screens.push((center, poly));
+        }
+
         gl_use_default_material();
+
+        // Crisp outline on top of each obstacle (default material).
+        for (_, poly) in &obs_screens {
+            let n = poly.len();
+            for i in 0..n {
+                let a = poly[i];
+                let b = poly[(i + 1) % n];
+                draw_line(a.x, a.y, b.x, b.y, 1.5, obs_edge);
+            }
+        }
 
         // Particles
         for p in &particles {
@@ -561,6 +773,17 @@ async fn main() {
             let top_s = to_mm_y(top).clamp(mm_oy, mm_oy + mm_h);
             let bot_s = to_mm_y(bot).clamp(mm_oy, mm_oy + mm_h);
             draw_rectangle(col_x, top_s, col_w, bot_s - top_s, Color::from_rgba(8, 8, 18, 220));
+        }
+
+        // Obstacle markers on the minimap (only those within the X span shown)
+        for ob in obstacles.values() {
+            let rel = ob.cx - cam_x;
+            if rel.abs() > MM_HALF_X {
+                continue;
+            }
+            let mx = mm_ox + (rel + MM_HALF_X) / (2.0 * MM_HALF_X) * mm_w;
+            let my = to_mm_y(ob.cy).clamp(mm_oy, mm_oy + mm_h);
+            draw_circle(mx, my, 2.0 * ui, obs_edge);
         }
 
         // Viewport rectangle — always centred horizontally, Y follows ship
