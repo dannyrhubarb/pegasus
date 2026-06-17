@@ -46,6 +46,7 @@ fn window_conf() -> Conf {
     }
 }
 
+const GIT_REVISION: &str = env!("GIT_REVISION");
 const SCALE: f32 = 80.0;
 const SEG_LEN: f32 = 3.0;
 // How many segments to keep loaded on each side of the ship
@@ -559,6 +560,7 @@ async fn main() {
 
     let mut particles: Vec<Particle> = Vec::with_capacity(512);
     let mut smooth_fps = 60.0f32;
+    let mut show_info = false;
 
     // Pre-compute Y extents over one full period for minimap scaling
     const MM_SAMPLES: usize = 300;
@@ -653,8 +655,22 @@ async fn main() {
              lx * angle.sin() + ly * angle.cos())
         };
 
+        // Info button — top-right corner
+        let btn_r = 18.0 * ui;
+        let bx = sw - 10.0 * ui - btn_r;
+        let by = safe_top + 10.0 * ui + btn_r;
+        let mp = mouse_position();
+        let over_info_btn = {
+            let dx = mp.0 - bx;
+            let dy = mp.1 - by;
+            dx * dx + dy * dy <= btn_r * btn_r
+        };
+        if is_mouse_button_pressed(MouseButton::Left) && over_info_btn {
+            show_info = !show_info;
+        }
+
         // Read thrust state early so lighting can use it
-        let thrusting_now = is_mouse_button_down(MouseButton::Left)
+        let thrusting_now = (is_mouse_button_down(MouseButton::Left) && !over_info_btn)
             || is_key_down(KeyCode::Down)
             || TOUCH_THRUST.load(Ordering::Relaxed) != 0;
         glow += (if thrusting_now { 1.0 } else { 0.0 } - glow) * 0.12;
@@ -1093,6 +1109,32 @@ async fn main() {
 
         // Border
         draw_rectangle_lines(mm_ox, mm_oy, mm_w, mm_h, 1.0, Color::from_rgba(255, 255, 255, 120));
+
+        // Info button (circle with "i")
+        let btn_bg = if show_info {
+            Color::from_rgba(80, 140, 220, 230)
+        } else {
+            Color::from_rgba(40, 60, 100, 200)
+        };
+        draw_circle(bx, by, btn_r, btn_bg);
+        draw_circle_lines(bx, by, btn_r, 1.5, Color::from_rgba(180, 210, 255, 180));
+        let i_size = btn_r * 1.2;
+        let i_w = measure_text("i", None, i_size as u16, 1.0).width;
+        draw_text("i", bx - i_w / 2.0, by + i_size * 0.35, i_size, Color::from_rgba(220, 235, 255, 255));
+
+        // Info panel overlay
+        if show_info {
+            let panel_w = 320.0 * ui;
+            let panel_h = 60.0 * ui;
+            let panel_x = bx - panel_w - 8.0 * ui;
+            let panel_y = by - panel_h / 2.0;
+            draw_rectangle(panel_x, panel_y, panel_w, panel_h, Color::from_rgba(10, 18, 35, 220));
+            draw_rectangle_lines(panel_x, panel_y, panel_w, panel_h, 1.0, Color::from_rgba(180, 210, 255, 120));
+            let label_size = 20.0 * ui;
+            draw_text("Build revision:", panel_x + 12.0 * ui, panel_y + 22.0 * ui, label_size, Color::from_rgba(160, 190, 230, 200));
+            let rev_size = 22.0 * ui;
+            draw_text(GIT_REVISION, panel_x + 12.0 * ui, panel_y + 48.0 * ui, rev_size, Color::from_rgba(220, 235, 255, 255));
+        }
 
         next_frame().await;
     }
