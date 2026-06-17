@@ -145,8 +145,10 @@
       background: rgba(255, 255, 255, 0.1);
       border: 1.5px solid rgba(255, 255, 255, 0.4);
       color: #dde9ff;
-      font: 700 26px/44px sans-serif;
-      text-align: center;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font: 700 22px/1 sans-serif;
       cursor: pointer;
       user-select: none;
       -webkit-user-select: none;
@@ -266,7 +268,9 @@
 
     // If the deploy-time placeholder wasn't substituted (e.g. opened locally),
     // show a friendly fallback instead of the raw token.
-    if (gitRev.textContent.trim() === "__GIT_REVISION__") {
+    // sed replaces __GIT_REVISION__ everywhere including in string literals,
+    // so compare with startsWith("__") rather than a literal match.
+    if (gitRev.textContent.trim().startsWith("__")) {
       gitRev.textContent = "dev (local build)";
     }
 
