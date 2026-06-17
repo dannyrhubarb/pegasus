@@ -159,7 +159,12 @@ surface pokes past the collider and the ship appears to sink into the rock.
 
 ## Physics notes
 
-The ship uses a `cuboid(0.28, 0.65)` Rapier collider (0.56 m wide × 1.30 m tall) — sized to match the fuselage of the 1.5× scaled ship (visual extents ~0.81 m wide × 1.43 m tall). Cave walls are `segment` colliders (zero thickness). The ship (max ~17 m/s under normal thrust) never tunnels through walls — CCD is not necessary.
+The ship uses a **compound collider** — three cuboids parented to the same rigid body, matching the lander silhouette of the 1.5× scaled visual:
+- **Fuselage**: `cuboid(0.25, 0.47)` at local offset `(0, +0.24)` — covers nose to shoulder join (y ≈ +0.71 → −0.23).
+- **Left leg pod**: `cuboid(0.14, 0.24)` at `(−0.27, −0.47)` — covers left leg x ≈ −0.41 → −0.13.
+- **Right leg pod**: `cuboid(0.14, 0.24)` at `(+0.27, −0.47)` — mirror.
+
+Each uses `ColliderBuilder::cuboid(…).position(Isometry::translation(x, y)).restitution(0.2)` (`Isometry` from `rapier2d::prelude::*`; `Isometry2` is **not** in scope — use `Isometry`). Cave walls are `segment` colliders (zero thickness). The ship (max ~17 m/s under normal thrust) never tunnels through walls — CCD is not necessary.
 
 ## Git workflow
 - Development branch: `claude/vector-spaceship-extraction-njnuoq` (current); previous: `claude/walls-obstacles-appearance-qj1rpp`
