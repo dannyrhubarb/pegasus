@@ -51,6 +51,54 @@ const SEG_LEN: f32 = 3.0;
 // How many segments to keep loaded on each side of the ship
 const HALF_WINDOW: i64 = 80;
 
+// Ship hull mesh: 41 triangles extracted from the original Flash SWF
+// (mcSpaceship, character id 41 in completeHS8replay.swf), ear-clip triangulated
+// from the rasterised vector silhouette. Local ship space: +Y = nose/forward,
+// origin at hull centroid; full height ≈ 0.95 world units.
+const SHIP_TRIS: [[f32; 6]; 41] = [
+    [0.000,0.472, -0.022,0.472, -0.047,0.460],
+    [0.000,0.472, -0.047,0.460, -0.084,0.421],
+    [0.000,0.472, -0.084,0.421, -0.114,0.369],
+    [0.000,0.472, -0.114,0.369, -0.143,0.287],
+    [0.003,0.475, 0.000,0.472, -0.143,0.287],
+    [0.003,0.475, -0.143,0.287, -0.168,0.183],
+    [0.003,0.475, -0.168,0.183, -0.178,0.087],
+    [0.003,0.475, -0.178,0.087, -0.181,-0.079],
+    [0.003,0.475, -0.181,-0.079, -0.171,-0.171],
+    [-0.188,-0.181, -0.208,-0.178, -0.237,-0.200],
+    [-0.188,-0.181, -0.237,-0.200, -0.260,-0.245],
+    [-0.171,-0.171, -0.188,-0.181, -0.260,-0.245],
+    [-0.171,-0.171, -0.260,-0.245, -0.270,-0.292],
+    [-0.171,-0.171, -0.270,-0.292, -0.270,-0.379],
+    [-0.171,-0.171, -0.270,-0.379, -0.250,-0.443],
+    [-0.171,-0.171, -0.250,-0.443, -0.250,-0.475],
+    [0.003,0.475, -0.171,-0.171, -0.250,-0.475],
+    [-0.250,-0.475, -0.153,-0.475, -0.153,-0.448],
+    [0.003,0.475, -0.250,-0.475, -0.153,-0.448],
+    [0.003,0.475, -0.153,-0.448, -0.114,-0.386],
+    [0.003,0.475, -0.114,-0.386, -0.082,-0.440],
+    [0.003,0.475, -0.082,-0.440, -0.082,-0.475],
+    [0.003,0.475, -0.082,-0.475, 0.082,-0.475],
+    [0.003,0.475, 0.082,-0.475, 0.082,-0.448],
+    [0.003,0.475, 0.082,-0.448, 0.121,-0.391],
+    [0.003,0.475, 0.121,-0.391, 0.151,-0.448],
+    [0.151,-0.448, 0.151,-0.475, 0.247,-0.475],
+    [0.003,0.475, 0.151,-0.448, 0.247,-0.475],
+    [0.247,-0.475, 0.270,-0.364, 0.267,-0.287],
+    [0.247,-0.475, 0.267,-0.287, 0.237,-0.200],
+    [0.247,-0.475, 0.237,-0.200, 0.208,-0.178],
+    [0.247,-0.475, 0.208,-0.178, 0.188,-0.181],
+    [0.247,-0.475, 0.188,-0.181, 0.176,-0.171],
+    [0.003,0.475, 0.247,-0.475, 0.176,-0.171],
+    [0.003,0.475, 0.176,-0.171, 0.185,-0.050],
+    [0.003,0.475, 0.185,-0.050, 0.183,0.072],
+    [0.003,0.475, 0.183,0.072, 0.171,0.183],
+    [0.003,0.475, 0.171,0.183, 0.148,0.287],
+    [0.003,0.475, 0.148,0.287, 0.119,0.369],
+    [0.003,0.475, 0.119,0.369, 0.089,0.421],
+    [0.089,0.421, 0.050,0.460, 0.003,0.475],
+];
+
 // Vertex shader: passes screen-pixel position as a varying so the
 // fragment shader can compute per-pixel distance from the ship.
 const LIGHT_VERTEX: &str = r#"#version 100
@@ -725,53 +773,40 @@ async fn main() {
             )
         };
 
-        // Palette from the original Flash mcSpaceship: silver-grey hull (#CCCCCC)
-        // with red trim (#FF0000) and engine.
-        let hull_hi   = Color::from_rgba(225, 228, 234, 255); // bright silver
-        let hull_mid  = Color::from_rgba(168, 172, 182, 255); // mid grey (~#CCCCCC lit)
-        let hull_lo   = Color::from_rgba(104, 108, 120, 255); // shaded grey
-        let engine_c  = Color::from_rgba(58,  60,  70,  255); // dark nozzle
-        let wing_c    = Color::from_rgba(200, 56,  48,  255); // red fins
-        let wing_lo   = Color::from_rgba(140, 36,  32,  255); // shaded red
-        let cockpit_c = Color::from_rgba(120, 220, 235, 220); // cyan canopy
-
-        // Thruster flame drawn first (behind hull)
+        // Thruster flame drawn first (behind the hull), out of the engine base
+        // at local -Y. Scales with `glow`.
         if glow > 0.02 {
-            let fw = 0.08 + glow * 0.04;
-            let ft = glow * 0.30;
-            let fa = (glow * 210.0) as u8;
+            let base = -0.475;
+            let fw = 0.10 + glow * 0.05;
+            let ft = glow * 0.36;
+            let fa = (glow * 220.0) as u8;
             draw_triangle(
-                rot(0.0, -0.46 - ft), rot(-fw, -0.46), rot(fw, -0.46),
-                Color::from_rgba(255, (100.0 + glow * 110.0) as u8, 30, fa),
+                rot(0.0, base - ft), rot(-fw, base + 0.03), rot(fw, base + 0.03),
+                Color::from_rgba(255, (110.0 + glow * 110.0) as u8, 30, fa),
             );
             draw_triangle(
-                rot(0.0, -0.46 - ft * 0.5), rot(-fw * 0.45, -0.46), rot(fw * 0.45, -0.46),
-                Color::from_rgba(255, 230, 120, (fa as f32 * 0.7) as u8),
+                rot(0.0, base - ft * 0.55), rot(-fw * 0.5, base + 0.03), rot(fw * 0.5, base + 0.03),
+                Color::from_rgba(255, 232, 120, (fa as f32 * 0.7) as u8),
             );
         }
 
-        // Nose (bright tip)
-        draw_triangle(rot(0.0, 0.48), rot(0.12, 0.28), rot(-0.12, 0.28), hull_hi);
-        // Upper body
-        draw_triangle(rot(-0.12, 0.28), rot(0.12, 0.28), rot(0.15, 0.05), hull_mid);
-        draw_triangle(rot(-0.12, 0.28), rot(0.15, 0.05), rot(-0.15, 0.05), hull_mid);
-        // Mid body
-        draw_triangle(rot(-0.15, 0.05), rot(0.15, 0.05), rot(0.12, -0.18), hull_lo);
-        draw_triangle(rot(-0.15, 0.05), rot(0.12, -0.18), rot(-0.12, -0.18), hull_lo);
-        // Lower body
-        draw_triangle(rot(-0.12, -0.18), rot(0.12, -0.18), rot(0.10, -0.38), hull_lo);
-        draw_triangle(rot(-0.12, -0.18), rot(0.10, -0.38), rot(-0.10, -0.38), hull_lo);
-        // Engine bell (dark nozzle)
-        draw_triangle(rot(-0.10, -0.38), rot(0.10, -0.38), rot(0.07, -0.46), engine_c);
-        draw_triangle(rot(-0.10, -0.38), rot(0.07, -0.46), rot(-0.07, -0.46), engine_c);
-        // Wings (swept-back delta) — red fins
-        draw_triangle(rot(-0.15, 0.05), rot(-0.44, -0.15), rot(-0.12, -0.24), wing_c);
-        draw_triangle(rot(0.15,  0.05), rot(0.44,  -0.15), rot(0.12,  -0.24), wing_c);
-        // Wing shadow inset
-        draw_triangle(rot(-0.15, 0.05), rot(-0.28, -0.07), rot(-0.13, -0.18), wing_lo);
-        draw_triangle(rot(0.15,  0.05), rot(0.28,  -0.07), rot(0.13,  -0.18), wing_lo);
-        // Cockpit window
-        draw_triangle(rot(0.0, 0.42), rot(0.07, 0.30), rot(-0.07, 0.30), cockpit_c);
+        // Hull: faceted silver mesh extracted from the original Flash ship.
+        // Per-facet brightness from centroid height (nose lit, base shaded).
+        let hull_base = (168.0_f32, 174.0_f32, 188.0_f32); // silver (#CCCCCC family)
+        for t in SHIP_TRIS.iter() {
+            let cy = (t[1] + t[3] + t[5]) / 3.0;
+            let s = (0.84 + (cy + 0.475) / 0.95 * 0.34).min(1.25);
+            let col = Color::new(
+                (hull_base.0 * s / 255.0).min(1.0),
+                (hull_base.1 * s / 255.0).min(1.0),
+                (hull_base.2 * s / 255.0).min(1.0),
+                1.0,
+            );
+            draw_triangle(rot(t[0], t[1]), rot(t[2], t[3]), rot(t[4], t[5]), col);
+        }
+        // Cyan canopy near the nose.
+        draw_triangle(rot(0.0, 0.33), rot(0.06, 0.20), rot(-0.06, 0.20),
+                      Color::from_rgba(120, 220, 235, 220));
 
         smooth_fps += (get_fps() as f32 - smooth_fps) * 0.05;
         let cave_x = cam_x.rem_euclid(PERIOD);
