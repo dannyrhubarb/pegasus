@@ -973,15 +973,15 @@ async fn main() {
         }
 
         // Side RCS thrusters (cosmetic): bottom nozzles flanking the main booster vent
-        // sideways to swing the ship. Turning left → RIGHT nozzle fires gas out +X
-        // (reaction torque turns nose left); turning right → LEFT nozzle fires out −X.
+        // downward (out the bottom, like a mini main thruster) to swing the ship.
+        // Turning left → LEFT nozzle fires; turning right → RIGHT nozzle fires.
         // Coords are in scaled world units — lp() does NOT apply SHIP_SCALE.
         if rotating_left {
             for _ in 0..3 {
                 let spread = gen_range(-0.15f32, 0.15);
-                let (px, py) = lp(0.18, -0.64);     // right bottom nozzle, beside main booster
+                let (px, py) = lp(-0.18, -0.64);    // left bottom nozzle, beside main booster
                 let speed = gen_range(2.0f32, 4.0);
-                let (dvx, dvy) = ld(speed, spread); // gas exits +X (rightward)
+                let (dvx, dvy) = ld(spread, -speed); // gas exits downward (−Y)
                 particles.push(Particle {
                     x: px, y: py,
                     vx: ship_vx + dvx, vy: ship_vy + dvy,
@@ -992,9 +992,9 @@ async fn main() {
         if rotating_right {
             for _ in 0..3 {
                 let spread = gen_range(-0.15f32, 0.15);
-                let (px, py) = lp(-0.18, -0.64);     // left bottom nozzle, beside main booster
+                let (px, py) = lp(0.18, -0.64);     // right bottom nozzle, beside main booster
                 let speed = gen_range(2.0f32, 4.0);
-                let (dvx, dvy) = ld(-speed, spread); // gas exits −X (leftward)
+                let (dvx, dvy) = ld(spread, -speed); // gas exits downward (−Y)
                 particles.push(Particle {
                     x: px, y: py,
                     vx: ship_vx + dvx, vy: ship_vy + dvy,
