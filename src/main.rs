@@ -50,6 +50,8 @@ const SCALE: f32 = 80.0;
 const SEG_LEN: f32 = 3.0;
 // How many segments to keep loaded on each side of the ship
 const HALF_WINDOW: i64 = 80;
+// Render scale for the ship mesh relative to the raw SWF coordinates
+const SHIP_SCALE: f32 = 1.5;
 
 // Ship hull mesh: 41 triangles extracted from the original Flash SWF
 // (mcSpaceship, character id 41 in completeHS8replay.swf), ear-clip triangulated
@@ -508,7 +510,7 @@ async fn main() {
         .build();
     let box_handle = rigid_body_set.insert(box_body);
     collider_set.insert_with_parent(
-        ColliderBuilder::cuboid(0.5, 0.5).restitution(0.2).build(),
+        ColliderBuilder::cuboid(0.28, 0.65).restitution(0.2).build(),
         box_handle,
         &mut rigid_body_set,
     );
@@ -858,9 +860,11 @@ async fn main() {
 
         // Ship — vector spaceship
         let rot = |lx: f32, ly: f32| -> Vec2 {
+            let sx = lx * SHIP_SCALE;
+            let sy = ly * SHIP_SCALE;
             w2s(
-                cam_x + lx * angle.cos() - ly * angle.sin(),
-                cam_y + lx * angle.sin() + ly * angle.cos(),
+                cam_x + sx * angle.cos() - sy * angle.sin(),
+                cam_y + sx * angle.sin() + sy * angle.cos(),
                 sh, cam_x, cam_y,
             )
         };
@@ -936,7 +940,7 @@ async fn main() {
         if thrusting_now {
             for _ in 0..8 {
                 let spread = gen_range(-0.25f32, 0.25);
-                let (px, py) = lp(spread * 0.3, -0.55);
+                let (px, py) = lp(spread * 0.45, -0.72);
                 let speed = gen_range(4.0f32, 8.0);
                 let (dvx, dvy) = ld(spread * 1.5, -speed);
                 particles.push(Particle {
@@ -947,12 +951,12 @@ async fn main() {
             }
         }
 
-        // Side RCS thrusters: emit from the side opposite to rotation
+        // Side RCS thrusters: emit from the leg-pods (outer edge at mid-height).
         // rotating_left (clockwise) → right-side thruster fires, exhaust exits local +X
         if rotating_left {
             for _ in 0..3 {
                 let spread = gen_range(-0.15f32, 0.15);
-                let (px, py) = lp(-0.45, -0.55);
+                let (px, py) = lp(-0.40 * SHIP_SCALE, -0.30 * SHIP_SCALE);
                 let speed = gen_range(2.0f32, 4.0);
                 let (dvx, dvy) = ld(spread, -speed);
                 particles.push(Particle {
@@ -965,7 +969,7 @@ async fn main() {
         if rotating_right {
             for _ in 0..3 {
                 let spread = gen_range(-0.15f32, 0.15);
-                let (px, py) = lp(0.45, -0.55);
+                let (px, py) = lp(0.40 * SHIP_SCALE, -0.30 * SHIP_SCALE);
                 let speed = gen_range(2.0f32, 4.0);
                 let (dvx, dvy) = ld(spread, -speed);
                 particles.push(Particle {
