@@ -725,12 +725,15 @@ async fn main() {
             )
         };
 
-        let hull_hi   = Color::from_rgba(175, 195, 220, 255);
-        let hull_mid  = Color::from_rgba(110, 130, 165, 255);
-        let hull_lo   = Color::from_rgba(65,  78,  105, 255);
-        let engine_c  = Color::from_rgba(45,  55,  75,  255);
-        let wing_c    = Color::from_rgba(88,  108, 138, 255);
-        let cockpit_c = Color::from_rgba(100, 215, 235, 200);
+        // Palette from the original Flash mcSpaceship: silver-grey hull (#CCCCCC)
+        // with red trim (#FF0000) and engine.
+        let hull_hi   = Color::from_rgba(225, 228, 234, 255); // bright silver
+        let hull_mid  = Color::from_rgba(168, 172, 182, 255); // mid grey (~#CCCCCC lit)
+        let hull_lo   = Color::from_rgba(104, 108, 120, 255); // shaded grey
+        let engine_c  = Color::from_rgba(58,  60,  70,  255); // dark nozzle
+        let wing_c    = Color::from_rgba(200, 56,  48,  255); // red fins
+        let wing_lo   = Color::from_rgba(140, 36,  32,  255); // shaded red
+        let cockpit_c = Color::from_rgba(120, 220, 235, 220); // cyan canopy
 
         // Thruster flame drawn first (behind hull)
         if glow > 0.02 {
@@ -761,12 +764,12 @@ async fn main() {
         // Engine bell (dark nozzle)
         draw_triangle(rot(-0.10, -0.38), rot(0.10, -0.38), rot(0.07, -0.46), engine_c);
         draw_triangle(rot(-0.10, -0.38), rot(0.07, -0.46), rot(-0.07, -0.46), engine_c);
-        // Wings (swept-back delta)
+        // Wings (swept-back delta) — red fins
         draw_triangle(rot(-0.15, 0.05), rot(-0.44, -0.15), rot(-0.12, -0.24), wing_c);
         draw_triangle(rot(0.15,  0.05), rot(0.44,  -0.15), rot(0.12,  -0.24), wing_c);
         // Wing shadow inset
-        draw_triangle(rot(-0.15, 0.05), rot(-0.28, -0.07), rot(-0.13, -0.18), hull_lo);
-        draw_triangle(rot(0.15,  0.05), rot(0.28,  -0.07), rot(0.13,  -0.18), hull_lo);
+        draw_triangle(rot(-0.15, 0.05), rot(-0.28, -0.07), rot(-0.13, -0.18), wing_lo);
+        draw_triangle(rot(0.15,  0.05), rot(0.28,  -0.07), rot(0.13,  -0.18), wing_lo);
         // Cockpit window
         draw_triangle(rot(0.0, 0.42), rot(0.07, 0.30), rot(-0.07, 0.30), cockpit_c);
 
