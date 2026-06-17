@@ -979,7 +979,7 @@ async fn main() {
         if rotating_left {
             for _ in 0..3 {
                 let spread = gen_range(-0.15f32, 0.15);
-                let (px, py) = lp(-0.155, -0.71);   // gap between centre booster and left leg nozzle
+                let (px, py) = lp(-0.30, -0.71);   // left leg nozzle (gold accent, scaled)
                 let speed = gen_range(2.0f32, 4.0);
                 let (dvx, dvy) = ld(spread, -speed);
                 particles.push(Particle {
@@ -992,7 +992,7 @@ async fn main() {
         if rotating_right {
             for _ in 0..3 {
                 let spread = gen_range(-0.15f32, 0.15);
-                let (px, py) = lp(0.155, -0.71);    // gap between centre booster and right leg nozzle
+                let (px, py) = lp(0.30, -0.71);    // right leg nozzle (gold accent, scaled)
                 let speed = gen_range(2.0f32, 4.0);
                 let (dvx, dvy) = ld(spread, -speed);
                 particles.push(Particle {
