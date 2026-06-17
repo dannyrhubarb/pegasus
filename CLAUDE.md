@@ -12,7 +12,18 @@ Deploy is automatic: any push to `main` triggers the GitHub Actions workflow `.g
 
 ## Project structure
 - `src/main.rs` — entire game (single file): physics, rendering, cave generation, HUD, minimap, touch controls
-- `index.html` — web wrapper, touch event forwarding, safe-area insets
+- `index.html` — web wrapper, touch event forwarding, safe-area insets, **info overlay**
+
+## Info overlay (web only)
+A fixed top-right "i" button (`#info-btn`) opens a fullscreen `#info-overlay`
+(HTML/CSS, not drawn in-canvas — so it stays crisp/readable at any size). It
+shows the build's **git revision**. The revision is injected at deploy time:
+`index.html` ships with the literal placeholder `__GIT_REVISION__`, and the
+`Assemble site` step in `.github/workflows/deploy.yml` runs
+`sed -i "s/__GIT_REVISION__/$(git rev-parse --short HEAD)/g" site/index.html`.
+Opened locally without that substitution, the JS falls back to "dev (local
+build)". Button/overlay handlers `stopPropagation` on `mousedown` so a desktop
+click doesn't bleed through to the canvas and fire the thruster.
 
 ## Key constants & configuration (`src/main.rs`)
 

@@ -79,6 +79,83 @@
       background: rgba(255, 200, 0, 0.8);
       transition: none;
     }
+
+    /* Info button — top-right corner, clear of the notch */
+    #info-btn {
+      position: fixed;
+      top: calc(env(safe-area-inset-top) + 12px);
+      right: calc(env(safe-area-inset-right) + 12px);
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: rgba(40, 60, 100, 0.55);
+      border: 1.5px solid rgba(180, 210, 255, 0.7);
+      color: rgba(220, 235, 255, 0.95);
+      font: italic 700 24px/40px Georgia, "Times New Roman", serif;
+      text-align: center;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      pointer-events: all;
+      touch-action: manipulation;
+      z-index: 10;
+    }
+    #info-btn:hover { background: rgba(80, 140, 220, 0.7); }
+
+    /* Fullscreen info overlay */
+    #info-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(10, 16, 30, 0.92);
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 28px;
+      padding: max(env(safe-area-inset-top), 24px) 24px max(env(safe-area-inset-bottom), 24px);
+      color: #dde9ff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      text-align: center;
+      z-index: 20;
+      pointer-events: all;
+    }
+    #info-overlay.open { display: flex; }
+    #info-overlay h1 {
+      font-size: clamp(28px, 6vw, 48px);
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+    #info-overlay .info-row { font-size: clamp(16px, 3.5vw, 24px); }
+    #info-overlay .info-label {
+      color: #8ba8d6;
+      margin-bottom: 6px;
+    }
+    #info-overlay .info-value {
+      font-family: "SF Mono", "Menlo", "Consolas", monospace;
+      font-size: clamp(20px, 5vw, 34px);
+      color: #ffffff;
+    }
+    #info-close {
+      position: fixed;
+      top: calc(env(safe-area-inset-top) + 12px);
+      right: calc(env(safe-area-inset-right) + 12px);
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1.5px solid rgba(255, 255, 255, 0.4);
+      color: #dde9ff;
+      font: 700 26px/44px sans-serif;
+      text-align: center;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    #info-overlay .info-hint {
+      font-size: 14px;
+      color: #6c84ad;
+      margin-top: 8px;
+    }
   </style>
 </head>
 <body>
@@ -86,6 +163,18 @@
 
   <!-- Probe element to read the top/left safe-area insets in CSS pixels -->
   <div id="safe-area-probe" style="position:fixed;top:0;left:0;height:env(safe-area-inset-top);width:env(safe-area-inset-left);pointer-events:none;"></div>
+
+  <!-- Info button + fullscreen overlay -->
+  <div id="info-btn" role="button" aria-label="Info" title="Info">i</div>
+  <div id="info-overlay" role="dialog" aria-modal="true">
+    <div id="info-close" role="button" aria-label="Close">&times;</div>
+    <h1>Rapier 2D — Cave Flyer</h1>
+    <div class="info-row">
+      <div class="info-label">Build revision</div>
+      <div class="info-value" id="git-rev">__GIT_REVISION__</div>
+    </div>
+    <div class="info-hint">Tap anywhere to close</div>
+  </div>
 
   <div id="touch-controls">
     <div id="thrust-btn">THRUST</div>
@@ -167,6 +256,40 @@
         clearInterval(safeAreaTimer);
       }
     }, 200);
+
+    // Info overlay toggle. Stop propagation so taps on the button/overlay
+    // don't reach the canvas (which would fire the thruster).
+    const infoBtn = document.getElementById("info-btn");
+    const infoOverlay = document.getElementById("info-overlay");
+    const infoClose = document.getElementById("info-close");
+    const gitRev = document.getElementById("git-rev");
+
+    // If the deploy-time placeholder wasn't substituted (e.g. opened locally),
+    // show a friendly fallback instead of the raw token.
+    if (gitRev.textContent.trim() === "__GIT_REVISION__") {
+      gitRev.textContent = "dev (local build)";
+    }
+
+    function openInfo(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      infoOverlay.classList.add("open");
+    }
+    function closeInfo(e) {
+      if (e) { e.preventDefault(); e.stopPropagation(); }
+      infoOverlay.classList.remove("open");
+    }
+    // Swallow mousedown so it never reaches the canvas/window listener that
+    // fires the thruster on desktop (mousedown precedes click).
+    const swallow = e => e.stopPropagation();
+    infoBtn.addEventListener("mousedown", swallow);
+    infoOverlay.addEventListener("mousedown", swallow);
+
+    infoBtn.addEventListener("click", openInfo);
+    infoBtn.addEventListener("touchstart", openInfo, { passive: false });
+    infoOverlay.addEventListener("click", closeInfo);
+    infoOverlay.addEventListener("touchstart", closeInfo, { passive: false });
+    infoClose.addEventListener("click", closeInfo);
 
     load("./rapier-test.wasm");
   </script>

@@ -55,6 +55,9 @@ jobs:
           cp icon-512.png icon-192.png icon-180.png site/
           cp mq_js_bundle.js site/
           cp target/wasm32-unknown-unknown/release/rapier-test.wasm site/
+          # Inject the build's git revision into the info overlay.
+          GIT_REV=$(git rev-parse --short HEAD)
+          sed -i "s/__GIT_REVISION__/${GIT_REV}/g" site/index.html
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
