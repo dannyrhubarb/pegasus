@@ -237,7 +237,9 @@ fn facet_shade(base: Color, col: i64, row: usize, side: u8, salt: u32) -> Color 
             ^ (side as u32)
             ^ salt,
     );
-    let b = 0.82 + (h & 0xffff) as f32 / 65535.0 * 0.30; // ~[0.82, 1.12]
+    // Wider contrast on deeper (darker) rows so facets stay readable in shadow.
+    let (lo, hi) = match row { 0 => (0.82, 1.12), 1 => (0.65, 1.25), _ => (0.45, 1.40) };
+    let b = lo + (h & 0xffff) as f32 / 65535.0 * (hi - lo);
     Color::new(
         (base.r * b).min(1.0),
         (base.g * b).min(1.0),
@@ -816,7 +818,7 @@ async fn main() {
 
         if is_key_pressed(KeyCode::R) {
             let rb = rigid_body_set.get_mut(box_handle).unwrap();
-            rb.set_translation(vector![0.0, cave_center(0.0)], true);
+            rb.set_translation(vector![64.0, cave_center(64.0)], true);
             rb.set_linvel(vector![0.0, 0.0], true);
             rb.set_angvel(0.0, true);
             rb.set_rotation(Rotation::new(0.0), true);
