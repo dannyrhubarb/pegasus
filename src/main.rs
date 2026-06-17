@@ -34,7 +34,7 @@ pub extern "C" fn set_safe_area(top: f32, left: f32) {
 
 fn window_conf() -> Conf {
     Conf {
-        window_title: "Rapier 2D — Cave".to_string(),
+        window_title: "Pegasus — Moon Lander".to_string(),
         window_width: 1440,
         window_height: 900,
         high_dpi: false,

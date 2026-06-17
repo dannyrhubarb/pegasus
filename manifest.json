@@ -1,7 +1,7 @@
 {
-  "name": "Rapier 2D",
-  "short_name": "Rapier 2D",
-  "description": "2D physics cave-flying demo built with Rapier and WebAssembly",
+  "name": "Pegasus — Moon Lander",
+  "short_name": "Pegasus",
+  "description": "Moon lander game built with Rapier physics and WebAssembly",
   "start_url": "/rapier-test/",
   "display": "fullscreen",
   "orientation": "landscape",
