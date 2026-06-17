@@ -281,8 +281,8 @@ fn insert_seg(
     collider_set: &mut ColliderSet,
 ) -> (ColliderHandle, ColliderHandle) {
     let (ta, tb, ba, bb) = seg_points(idx);
-    let top = collider_set.insert(ColliderBuilder::segment(ta, tb).friction(0.5).build());
-    let bot = collider_set.insert(ColliderBuilder::segment(ba, bb).friction(0.5).build());
+    let top = collider_set.insert(ColliderBuilder::segment(ta, tb).friction(0.0).build());
+    let bot = collider_set.insert(ColliderBuilder::segment(ba, bb).friction(0.0).build());
     (top, bot)
 }
 
@@ -507,6 +507,7 @@ async fn main() {
     let box_body = RigidBodyBuilder::dynamic()
         .translation(vector![0.0, cave_center(0.0)])
         .angular_damping(3.0)
+        .ccd_enabled(true)
         .build();
     let box_handle = rigid_body_set.insert(box_body);
     // Compound collider of three capsules (stadium shapes) tracing the 1.5× scaled
@@ -538,6 +539,7 @@ async fn main() {
 
     let gravity = vector![0.0, -1.62];
     let mut integration_params = IntegrationParameters::default();
+    integration_params.num_solver_iterations = std::num::NonZeroUsize::new(8).unwrap();
     let mut physics_pipeline = PhysicsPipeline::new();
     let mut island_manager = IslandManager::new();
     let mut broad_phase = DefaultBroadPhase::new();
