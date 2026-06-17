@@ -159,12 +159,14 @@ surface pokes past the collider and the ship appears to sink into the rock.
 
 ## Physics notes
 
-The ship uses a **compound collider** — three cuboids parented to the same rigid body, matching the lander silhouette of the 1.5× scaled visual:
-- **Fuselage**: `cuboid(0.25, 0.47)` at local offset `(0, +0.24)` — covers nose to shoulder join (y ≈ +0.71 → −0.23).
-- **Left leg pod**: `cuboid(0.14, 0.24)` at `(−0.27, −0.47)` — covers left leg x ≈ −0.41 → −0.13.
-- **Right leg pod**: `cuboid(0.14, 0.24)` at `(+0.27, −0.47)` — mirror.
+The ship uses a **compound collider** of three **capsules** (stadium shapes) parented to the same rigid body, tracing the lander silhouette of the 1.5× scaled visual. Capsules are the closest primitive Rapier offers to an ellipse — they hug the rounded hull tighter than boxes and slide off rocks without corners catching. Endpoints are in scaled world units (ship-local frame):
+- **Fuselage**: `capsule((0, +0.42), (0, −0.08), r=0.26)` — rounded nose down to mid-hull.
+- **Left leg pod**: `capsule((−0.26, −0.30), (−0.33, −0.64), r=0.09)` — angled out to the foot.
+- **Right leg pod**: `capsule((+0.26, −0.30), (+0.33, −0.64), r=0.09)` — mirror.
 
-Each uses `ColliderBuilder::cuboid(…).position(Isometry::translation(x, y)).restitution(0.2)` (`Isometry` from `rapier2d::prelude::*`; `Isometry2` is **not** in scope — use `Isometry`). Cave walls are `segment` colliders (zero thickness). The ship (max ~17 m/s under normal thrust) never tunnels through walls — CCD is not necessary.
+Each is built `ColliderBuilder::new(SharedShape::capsule(a, b, r)).restitution(0.2)` (`SharedShape`, `point!` from `rapier2d::prelude::*`). Rapier 2D has **no ellipse primitive** — capsule is the smooth-rounded alternative; for an even tighter (but faceted) fit you could use `convex_hull` of the `SHIP_TRIS` vertices, at the cost of filling the concave notch between the feet. Cave walls are `segment` colliders (zero thickness). The ship (max ~17 m/s under normal thrust) never tunnels through walls — CCD is not necessary.
+
+**RCS / attitude thrusters** (cosmetic particles, `kind 1/2`): a nose-mounted nozzle vents sideways to swing the ship. Turning **left** → right nozzle at scaled-local `(0.27, 0.20)` fires gas out `+X`; turning **right** → left nozzle at `(−0.27, 0.20)` fires gas out `−X`. Emission coords are in **scaled world units** — `lp()`/`ld()` do **not** apply `SHIP_SCALE` (only the render-time `rot` closure does), so don't multiply these by `SHIP_SCALE` (an earlier bug double-scaled them to ±0.60 and spawned the puffs outside the hull).
 
 ## Git workflow
 - Development branch: `claude/vector-spaceship-extraction-njnuoq` (current); previous: `claude/walls-obstacles-appearance-qj1rpp`
