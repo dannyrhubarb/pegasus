@@ -191,9 +191,9 @@ impl Rng {
 // Geometry is a pure function of a GLOBAL column index so the shared boundary
 // between adjacent segments is computed identically on both sides — no cracks.
 
-const SUBCOLS: i64 = 3;                       // sub-columns per 3 m segment → ~1 m facets
+const SUBCOLS: i64 = 2;                       // sub-columns per 3 m segment → ~1.5 m facets
 const COL_DX: f32 = SEG_LEN / SUBCOLS as f32; // world width of one facet column
-const ROW_DEPTHS: [f32; 4] = [0.0, 0.45, 1.1, 2.2]; // metres into rock; row 0 on the edge
+const ROW_DEPTHS: [f32; 4] = [0.0, 1.0, 3.0, 6.5]; // metres into rock; row 0 on the edge
 const N_ROWS: usize = 4;
 
 // World x for a global facet column. Pure function → identical on both sides
