@@ -972,16 +972,16 @@ async fn main() {
             }
         }
 
-        // Side RCS thrusters (cosmetic): a nose-mounted nozzle vents sideways to
-        // swing the ship. Turning left → right nozzle fires gas out +X (reaction
-        // pushes the nose left); turning right → left nozzle fires gas out −X.
-        // Coords are already in scaled world units (lp does not apply SHIP_SCALE).
+        // Side RCS thrusters (cosmetic): bottom nozzles flanking the main booster vent
+        // sideways to swing the ship. Turning left → RIGHT nozzle fires gas out +X
+        // (reaction torque turns nose left); turning right → LEFT nozzle fires out −X.
+        // Coords are in scaled world units — lp() does NOT apply SHIP_SCALE.
         if rotating_left {
             for _ in 0..3 {
-                let spread = gen_range(-0.12f32, 0.12);
-                let (px, py) = lp(0.27, 0.20);      // right-side nozzle on the hull
+                let spread = gen_range(-0.15f32, 0.15);
+                let (px, py) = lp(0.18, -0.64);     // right bottom nozzle, beside main booster
                 let speed = gen_range(2.0f32, 4.0);
-                let (dvx, dvy) = ld(speed, spread); // gas exits outward (+X)
+                let (dvx, dvy) = ld(speed, spread); // gas exits +X (rightward)
                 particles.push(Particle {
                     x: px, y: py,
                     vx: ship_vx + dvx, vy: ship_vy + dvy,
@@ -991,10 +991,10 @@ async fn main() {
         }
         if rotating_right {
             for _ in 0..3 {
-                let spread = gen_range(-0.12f32, 0.12);
-                let (px, py) = lp(-0.27, 0.20);     // left-side nozzle on the hull
+                let spread = gen_range(-0.15f32, 0.15);
+                let (px, py) = lp(-0.18, -0.64);     // left bottom nozzle, beside main booster
                 let speed = gen_range(2.0f32, 4.0);
-                let (dvx, dvy) = ld(-speed, spread); // gas exits outward (−X)
+                let (dvx, dvy) = ld(-speed, spread); // gas exits −X (leftward)
                 particles.push(Particle {
                     x: px, y: py,
                     vx: ship_vx + dvx, vy: ship_vy + dvy,
