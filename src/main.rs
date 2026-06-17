@@ -716,13 +716,7 @@ async fn main() {
             draw_circle(s.x, s.y, radius, color);
         }
 
-        // Ship
-        let sc = w2s(cam_x, cam_y, sh, cam_x, cam_y);
-        draw_rectangle_ex(sc.x, sc.y, view_scale, view_scale, DrawRectangleParams {
-            offset: vec2(0.5, 0.5),
-            rotation: -angle,
-            color: RED,
-        });
+        // Ship — vector spaceship
         let rot = |lx: f32, ly: f32| -> Vec2 {
             w2s(
                 cam_x + lx * angle.cos() - ly * angle.sin(),
@@ -730,7 +724,51 @@ async fn main() {
                 sh, cam_x, cam_y,
             )
         };
-        draw_triangle(rot(0.0, -0.65), rot(-0.25, -0.45), rot(0.25, -0.45), YELLOW);
+
+        let hull_hi   = Color::from_rgba(175, 195, 220, 255);
+        let hull_mid  = Color::from_rgba(110, 130, 165, 255);
+        let hull_lo   = Color::from_rgba(65,  78,  105, 255);
+        let engine_c  = Color::from_rgba(45,  55,  75,  255);
+        let wing_c    = Color::from_rgba(88,  108, 138, 255);
+        let cockpit_c = Color::from_rgba(100, 215, 235, 200);
+
+        // Thruster flame drawn first (behind hull)
+        if glow > 0.02 {
+            let fw = 0.08 + glow * 0.04;
+            let ft = glow * 0.30;
+            let fa = (glow * 210.0) as u8;
+            draw_triangle(
+                rot(0.0, -0.46 - ft), rot(-fw, -0.46), rot(fw, -0.46),
+                Color::from_rgba(255, (100.0 + glow * 110.0) as u8, 30, fa),
+            );
+            draw_triangle(
+                rot(0.0, -0.46 - ft * 0.5), rot(-fw * 0.45, -0.46), rot(fw * 0.45, -0.46),
+                Color::from_rgba(255, 230, 120, (fa as f32 * 0.7) as u8),
+            );
+        }
+
+        // Nose (bright tip)
+        draw_triangle(rot(0.0, 0.48), rot(0.12, 0.28), rot(-0.12, 0.28), hull_hi);
+        // Upper body
+        draw_triangle(rot(-0.12, 0.28), rot(0.12, 0.28), rot(0.15, 0.05), hull_mid);
+        draw_triangle(rot(-0.12, 0.28), rot(0.15, 0.05), rot(-0.15, 0.05), hull_mid);
+        // Mid body
+        draw_triangle(rot(-0.15, 0.05), rot(0.15, 0.05), rot(0.12, -0.18), hull_lo);
+        draw_triangle(rot(-0.15, 0.05), rot(0.12, -0.18), rot(-0.12, -0.18), hull_lo);
+        // Lower body
+        draw_triangle(rot(-0.12, -0.18), rot(0.12, -0.18), rot(0.10, -0.38), hull_lo);
+        draw_triangle(rot(-0.12, -0.18), rot(0.10, -0.38), rot(-0.10, -0.38), hull_lo);
+        // Engine bell (dark nozzle)
+        draw_triangle(rot(-0.10, -0.38), rot(0.10, -0.38), rot(0.07, -0.46), engine_c);
+        draw_triangle(rot(-0.10, -0.38), rot(0.07, -0.46), rot(-0.07, -0.46), engine_c);
+        // Wings (swept-back delta)
+        draw_triangle(rot(-0.15, 0.05), rot(-0.44, -0.15), rot(-0.12, -0.24), wing_c);
+        draw_triangle(rot(0.15,  0.05), rot(0.44,  -0.15), rot(0.12,  -0.24), wing_c);
+        // Wing shadow inset
+        draw_triangle(rot(-0.15, 0.05), rot(-0.28, -0.07), rot(-0.13, -0.18), hull_lo);
+        draw_triangle(rot(0.15,  0.05), rot(0.28,  -0.07), rot(0.13,  -0.18), hull_lo);
+        // Cockpit window
+        draw_triangle(rot(0.0, 0.42), rot(0.07, 0.30), rot(-0.07, 0.30), cockpit_c);
 
         smooth_fps += (get_fps() as f32 - smooth_fps) * 0.05;
         let cave_x = cam_x.rem_euclid(PERIOD);

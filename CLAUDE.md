@@ -30,6 +30,7 @@ Deploy is automatic: any push to `main` triggers the GitHub Actions workflow `.g
 - **Radial light shader** (`LIGHT_VERTEX` / `LIGHT_FRAGMENT` constants): a custom macroquad `Material` active only during the cave-wall and obstacle draws (`gl_use_material` / `gl_use_default_material`). Computes per-pixel radial falloff from the ship's screen position. Uniforms set each frame: `ship_pos` (vec2), `light_radius` (float), `glow` (float).
 - **Shader math**: `ambient = 0.45`, quadratic falloff `t*t`, *subtle* warm orange tint `glow * falloff * 0.12` added to red (×1.0) and green (×0.4) — kept low so the cool slate rock stays blue with only a faint thruster flush. `light_radius = min(sw,sh) * 0.55 + glow * min(sw,sh) * 0.30`.
 - Stars, particles, ship, HUD text, and minimap all use the default macroquad material — the radial shader does not affect them.
+- **Ship rendering**: drawn as a set of `draw_triangle` calls in local ship-space coordinates (y+ = nose/thrust direction, origin = center). Triangles: nose (hull_hi), upper/mid/lower body bands (hull_mid/hull_lo), engine bell (engine_c), swept-back delta wings with shadow inset (wing_c/hull_lo), cockpit window (cockpit_c). Thruster flame (two overlapping triangles in orange/yellow) is drawn first (behind hull) and scales with `glow` (hidden when `glow ≤ 0.02`). All geometry uses the `rot(lx, ly)` closure to rotate into world space then `w2s` to screen.
 
 ## Rock colors (base, pre-lighting)
 ```rust
