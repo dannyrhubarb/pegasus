@@ -509,29 +509,30 @@ async fn main() {
         .angular_damping(3.0)
         .build();
     let box_handle = rigid_body_set.insert(box_body);
-    // Compound collider: fuselage + two leg-pods, matching the 1.5× scaled visual.
-    // Fuselage: nose to shoulder-join (y ≈ +0.71 → −0.23), narrow.
+    // Compound collider of three capsules (stadium shapes) tracing the 1.5× scaled
+    // lander: a rounded fuselage + two splayed leg-pods. Capsules are the closest
+    // primitive Rapier offers to an ellipse, so they hug the rounded hull tighter
+    // than boxes and slide off rocks without corners catching. Endpoints are in
+    // scaled world units (ship-local frame).
+    // Fuselage: vertical capsule, rounded nose to mid-hull.
     collider_set.insert_with_parent(
-        ColliderBuilder::cuboid(0.25, 0.47)
-            .position(Isometry::translation(0.0, 0.24))
-            .restitution(0.2)
-            .build(),
+        ColliderBuilder::new(SharedShape::capsule(
+            point![0.0, 0.42], point![0.0, -0.08], 0.26))
+            .restitution(0.2).build(),
         box_handle, &mut rigid_body_set,
     );
-    // Left leg pod (x ≈ −0.13 → −0.41, y ≈ −0.23 → −0.71).
+    // Left leg pod: capsule angled out to the foot.
     collider_set.insert_with_parent(
-        ColliderBuilder::cuboid(0.14, 0.24)
-            .position(Isometry::translation(-0.27, -0.47))
-            .restitution(0.2)
-            .build(),
+        ColliderBuilder::new(SharedShape::capsule(
+            point![-0.26, -0.30], point![-0.33, -0.64], 0.09))
+            .restitution(0.2).build(),
         box_handle, &mut rigid_body_set,
     );
     // Right leg pod, mirrored.
     collider_set.insert_with_parent(
-        ColliderBuilder::cuboid(0.14, 0.24)
-            .position(Isometry::translation(0.27, -0.47))
-            .restitution(0.2)
-            .build(),
+        ColliderBuilder::new(SharedShape::capsule(
+            point![0.26, -0.30], point![0.33, -0.64], 0.09))
+            .restitution(0.2).build(),
         box_handle, &mut rigid_body_set,
     );
 
@@ -971,14 +972,16 @@ async fn main() {
             }
         }
 
-        // Side RCS thrusters: emit from the leg-pods (outer edge at mid-height).
-        // rotating_left (clockwise) → right-side thruster fires, exhaust exits local +X
+        // Side RCS thrusters (cosmetic): a nose-mounted nozzle vents sideways to
+        // swing the ship. Turning left → right nozzle fires gas out +X (reaction
+        // pushes the nose left); turning right → left nozzle fires gas out −X.
+        // Coords are already in scaled world units (lp does not apply SHIP_SCALE).
         if rotating_left {
             for _ in 0..3 {
-                let spread = gen_range(-0.15f32, 0.15);
-                let (px, py) = lp(-0.40 * SHIP_SCALE, -0.30 * SHIP_SCALE);
+                let spread = gen_range(-0.12f32, 0.12);
+                let (px, py) = lp(0.27, 0.20);      // right-side nozzle on the hull
                 let speed = gen_range(2.0f32, 4.0);
-                let (dvx, dvy) = ld(spread, -speed);
+                let (dvx, dvy) = ld(speed, spread); // gas exits outward (+X)
                 particles.push(Particle {
                     x: px, y: py,
                     vx: ship_vx + dvx, vy: ship_vy + dvy,
@@ -988,10 +991,10 @@ async fn main() {
         }
         if rotating_right {
             for _ in 0..3 {
-                let spread = gen_range(-0.15f32, 0.15);
-                let (px, py) = lp(0.40 * SHIP_SCALE, -0.30 * SHIP_SCALE);
+                let spread = gen_range(-0.12f32, 0.12);
+                let (px, py) = lp(-0.27, 0.20);     // left-side nozzle on the hull
                 let speed = gen_range(2.0f32, 4.0);
-                let (dvx, dvy) = ld(spread, -speed);
+                let (dvx, dvy) = ld(-speed, spread); // gas exits outward (−X)
                 particles.push(Particle {
                     x: px, y: py,
                     vx: ship_vx + dvx, vy: ship_vy + dvy,
