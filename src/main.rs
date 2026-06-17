@@ -509,10 +509,30 @@ async fn main() {
         .angular_damping(3.0)
         .build();
     let box_handle = rigid_body_set.insert(box_body);
+    // Compound collider: fuselage + two leg-pods, matching the 1.5× scaled visual.
+    // Fuselage: nose to shoulder-join (y ≈ +0.71 → −0.23), narrow.
     collider_set.insert_with_parent(
-        ColliderBuilder::cuboid(0.28, 0.65).restitution(0.2).build(),
-        box_handle,
-        &mut rigid_body_set,
+        ColliderBuilder::cuboid(0.25, 0.47)
+            .position(Isometry::translation(0.0, 0.24))
+            .restitution(0.2)
+            .build(),
+        box_handle, &mut rigid_body_set,
+    );
+    // Left leg pod (x ≈ −0.13 → −0.41, y ≈ −0.23 → −0.71).
+    collider_set.insert_with_parent(
+        ColliderBuilder::cuboid(0.14, 0.24)
+            .position(Isometry::translation(-0.27, -0.47))
+            .restitution(0.2)
+            .build(),
+        box_handle, &mut rigid_body_set,
+    );
+    // Right leg pod, mirrored.
+    collider_set.insert_with_parent(
+        ColliderBuilder::cuboid(0.14, 0.24)
+            .position(Isometry::translation(0.27, -0.47))
+            .restitution(0.2)
+            .build(),
+        box_handle, &mut rigid_body_set,
     );
 
     let gravity = vector![0.0, -1.62];
