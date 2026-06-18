@@ -948,12 +948,24 @@ async fn main() {
         let touch_torque = f32::from_bits(TOUCH_TORQUE.load(Ordering::Relaxed));
         let rotating_left  = is_key_down(KeyCode::Left)  || touch_torque < -0.1;
         let rotating_right = is_key_down(KeyCode::Right) || touch_torque >  0.1;
+        // Rotate by firing a side RCS booster: apply the force *at the nozzle*
+        // (off-center) instead of a pure couple, so the ship pivots about where
+        // the boosters actually push. Nozzles exhaust downward (-Y local) → the
+        // reaction force is +Y local at x = ∓0.30: left nozzle → clockwise,
+        // right nozzle → counter-clockwise. RCS_FORCE is tuned so the x-lever
+        // (~0.30) yields roughly the previous ±1.0 pure torque.
+        const RCS_FORCE: f32 = 3.3;
+        let fire_rcs = |rb: &mut RigidBody, side: f32, mag: f32| {
+            let (px, py) = lp(0.30 * side, -0.71);
+            let (fx, fy) = ld(0.0, mag);
+            rb.add_force_at_point(vector![fx, fy], point![px, py], true);
+        };
         if rotating_left {
-            rb.add_torque(-1.0, true);
+            fire_rcs(rb, -1.0, RCS_FORCE);
         } else if rotating_right {
-            rb.add_torque(1.0, true);
-        } else {
-            rb.add_torque(touch_torque, true);
+            fire_rcs(rb, 1.0, RCS_FORCE);
+        } else if touch_torque != 0.0 {
+            fire_rcs(rb, touch_torque.signum(), RCS_FORCE * touch_torque.abs());
         }
 
         // --- Particle emission ---
