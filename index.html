@@ -175,6 +175,10 @@
       <div class="info-label">Build revision</div>
       <div class="info-value" id="git-rev">__GIT_REVISION__</div>
     </div>
+    <div class="info-row">
+      <div class="info-label">Build time</div>
+      <div class="info-value" id="build-time">__BUILD_TIME__</div>
+    </div>
     <div class="info-hint">Tap anywhere to close</div>
   </div>
 
@@ -265,13 +269,17 @@
     const infoOverlay = document.getElementById("info-overlay");
     const infoClose = document.getElementById("info-close");
     const gitRev = document.getElementById("git-rev");
+    const buildTime = document.getElementById("build-time");
 
-    // If the deploy-time placeholder wasn't substituted (e.g. opened locally),
+    // If the deploy-time placeholders weren't substituted (e.g. opened locally),
     // show a friendly fallback instead of the raw token.
-    // sed replaces __GIT_REVISION__ everywhere including in string literals,
+    // sed replaces the placeholders everywhere including in string literals,
     // so compare with startsWith("__") rather than a literal match.
     if (gitRev.textContent.trim().startsWith("__")) {
       gitRev.textContent = "dev (local build)";
+    }
+    if (buildTime.textContent.trim().startsWith("__")) {
+      buildTime.textContent = "dev (local build)";
     }
 
     function openInfo(e) {
