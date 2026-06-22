@@ -247,6 +247,73 @@
       call("set_touch_torque", 0);
     });
 
+    // --- Bluetooth / USB game controller (Web Gamepad API) ---
+    // A controller paired with the device shows up in navigator.getGamepads().
+    // We poll it each animation frame and forward to dedicated WASM exports
+    // (set_pad_*), which are combined with touch/keyboard inside the game.
+    //   Thrust   : A / Cross (0), R2 trigger (7), or D-pad up (12)
+    //   Steer    : left stick X (axes[0], dead-zoned) or D-pad left/right (14/15)
+    //   Reset    : Start (9) or Y / Triangle (3)
+    // Standard mapping is assumed (the common layout for BT pads in browsers).
+    const STICK_DEADZONE = 0.18;
+    let padPolling = false;
+    let prevResetPressed = false;
+
+    function firstGamepad() {
+      const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+      for (const p of pads) if (p) return p;
+      return null;
+    }
+
+    function pollGamepad() {
+      const pad = firstGamepad();
+      if (!pad) {
+        // Controller dropped out — release any held inputs and stop polling.
+        call("set_pad_thrust", 0);
+        call("set_pad_torque", 0);
+        prevResetPressed = false;
+        padPolling = false;
+        return;
+      }
+
+      const btn = i => pad.buttons[i] && pad.buttons[i].pressed;
+      const val = i => (pad.buttons[i] ? pad.buttons[i].value : 0);
+
+      // Thrust: A button, R2 trigger (analog → treat >0.3 as on), or D-pad up.
+      const thrust = (btn(0) || val(7) > 0.3 || btn(12)) ? 1 : 0;
+      call("set_pad_thrust", thrust);
+
+      // Steering: analog left stick with a dead-zone, rescaled so it still
+      // reaches ±1 past the dead-zone. D-pad overrides to full deflection.
+      let x = pad.axes[0] || 0;
+      if (Math.abs(x) < STICK_DEADZONE) {
+        x = 0;
+      } else {
+        x = (x - Math.sign(x) * STICK_DEADZONE) / (1 - STICK_DEADZONE);
+      }
+      if (btn(14)) x = -1;
+      else if (btn(15)) x = 1;
+      call("set_pad_torque", Math.max(-1, Math.min(1, x)));
+
+      // Reset: edge-triggered so a held button fires once.
+      const resetPressed = btn(9) || btn(3);
+      if (resetPressed && !prevResetPressed) call("set_pad_reset");
+      prevResetPressed = resetPressed;
+
+      requestAnimationFrame(pollGamepad);
+    }
+
+    function startPadPolling() {
+      if (padPolling) return;
+      padPolling = true;
+      requestAnimationFrame(pollGamepad);
+    }
+
+    window.addEventListener("gamepadconnected", startPadPolling);
+    // Some browsers report an already-connected pad without firing the event
+    // (e.g. after a reload), so probe once the WASM exports are ready too.
+    if (firstGamepad()) startPadPolling();
+
     // Report the safe-area insets (notch / status bar) to the WASM HUD.
     const safeProbe = document.getElementById("safe-area-probe");
     function reportSafeArea() {
