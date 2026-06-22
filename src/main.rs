@@ -911,22 +911,34 @@ async fn main() {
 
         // Hull: faceted silver mesh extracted from the original Flash ship.
         // Per-facet brightness from centroid height (nose lit, base shaded).
+        // The nose cone (centroid above TIP_Y) is recoloured red.
         let hull_base = (168.0_f32, 174.0_f32, 188.0_f32); // silver (#CCCCCC family)
+        let tip_base  = (210.0_f32, 50.0_f32,  45.0_f32);  // red nose cone
+        const TIP_Y: f32 = 0.30;
         for t in SHIP_TRIS.iter() {
             let cy = (t[1] + t[3] + t[5]) / 3.0;
             let s = (0.84 + (cy + 0.475) / 0.95 * 0.34).min(1.25);
+            let base = if cy > TIP_Y { tip_base } else { hull_base };
             let col = Color::new(
-                (hull_base.0 * s / 255.0).min(1.0),
-                (hull_base.1 * s / 255.0).min(1.0),
-                (hull_base.2 * s / 255.0).min(1.0),
+                (base.0 * s / 255.0).min(1.0),
+                (base.1 * s / 255.0).min(1.0),
+                (base.2 * s / 255.0).min(1.0),
                 1.0,
             );
             draw_triangle(rot(t[0], t[1]), rot(t[2], t[3]), rot(t[4], t[5]), col);
         }
         // Detail overlays (window, leg-pods, engine cup, gold accent) — exact
-        // sub-shapes from the original ship, drawn on top of the hull.
+        // sub-shapes from the original ship, drawn on top of the hull. The two
+        // leg-pods (extracted dark-silver 0.518/0.537/0.588) are recoloured red.
         for d in SHIP_DETAILS.iter() {
-            let col = Color::new(d[6], d[7], d[8], 1.0);
+            let is_leg = (d[6] - 0.518).abs() < 0.001
+                && (d[7] - 0.537).abs() < 0.001
+                && (d[8] - 0.588).abs() < 0.001;
+            let col = if is_leg {
+                Color::new(0.784, 0.188, 0.169, 1.0) // red legs
+            } else {
+                Color::new(d[6], d[7], d[8], 1.0)
+            };
             draw_triangle(rot(d[0], d[1]), rot(d[2], d[3]), rot(d[4], d[5]), col);
         }
 
