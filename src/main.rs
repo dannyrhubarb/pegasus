@@ -941,6 +941,21 @@ async fn main() {
             };
             draw_triangle(rot(d[0], d[1]), rot(d[2], d[3]), rot(d[4], d[5]), col);
         }
+        // Red nose cone protruding from the tip. Two faces meeting at a vertical
+        // centre ridge (apex → base): the left face is shaded darker and the
+        // right lit brighter, so the flat 2D triangle pair reads as a 3D cone.
+        // The slightly-lower centre base point gives the base an elliptical
+        // "seen from above" curve. Drawn last so it sits on top of the hull.
+        {
+            let apex     = (0.0,   0.66);  // straight ahead (+Y = nose/forward)
+            let base_l   = (-0.10, 0.40);
+            let base_r   = (0.10,  0.40);
+            let base_mid = (0.0,   0.36);  // dips below the rim → elliptical base
+            let red_dark = Color::from_rgba(150, 34, 30, 255);  // shaded face
+            let red_lit  = Color::from_rgba(235, 80, 60, 255);  // lit face
+            draw_triangle(rot(apex.0, apex.1), rot(base_l.0, base_l.1), rot(base_mid.0, base_mid.1), red_dark);
+            draw_triangle(rot(apex.0, apex.1), rot(base_mid.0, base_mid.1), rot(base_r.0, base_r.1), red_lit);
+        }
 
         smooth_fps += (get_fps() as f32 - smooth_fps) * 0.05;
         let cave_x = cam_x.rem_euclid(PERIOD);
