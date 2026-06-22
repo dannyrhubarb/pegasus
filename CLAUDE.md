@@ -12,7 +12,26 @@ Deploy is automatic: any push to `main` triggers the GitHub Actions workflow `.g
 
 ## Project structure
 - `src/main.rs` — entire game (single file): physics, rendering, cave generation, HUD, minimap, touch controls
-- `index.html` — web wrapper, touch event forwarding, safe-area insets, **info overlay**
+- `index.html` — web wrapper, touch event forwarding, safe-area insets, **info overlay**, **gamepad polling**
+
+## Input sources
+Four input paths feed the same physics, combined in the main loop:
+- **Keyboard** (desktop): `Down` thrust, `Left`/`Right` rotate, `R` reset.
+- **Mouse**: left-button held = thrust.
+- **Touch** (mobile): on-screen THRUST button + analog torque slider, forwarded
+  from `index.html` via exported `set_touch_thrust(i32)` / `set_touch_torque(f32)`.
+- **Game controller** (BT/USB, web): `index.html` polls the **Web Gamepad API**
+  each `requestAnimationFrame` and forwards to exported `set_pad_thrust(i32)` /
+  `set_pad_torque(f32)` / `set_pad_reset()`. Mapping (standard layout): thrust =
+  A/Cross (0), R2 (7, analog>0.3), or D-pad up (12); steer = left stick X
+  (axes[0], dead-zoned/rescaled) or D-pad L/R (14/15); reset = Start (9) or
+  Y/Triangle (3, edge-triggered). Polling starts on `gamepadconnected` and stops
+  (releasing held inputs) if the pad drops out.
+
+Touch and gamepad use **separate atomics** (`TOUCH_*` vs `PAD_*`) so a
+connected-but-idle source never stomps the other; thrust is OR'd and analog
+torque is summed-then-clamped to ±1. `PAD_RESET` is a swap-to-consume flag so a
+held reset button fires exactly once.
 
 ## Info overlay (web only)
 A fixed top-right "i" button (`#info-btn`) opens a fullscreen `#info-overlay`

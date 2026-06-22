@@ -13,6 +13,12 @@ struct Particle {
 
 static TOUCH_THRUST: AtomicU32 = AtomicU32::new(0);
 static TOUCH_TORQUE: AtomicU32 = AtomicU32::new(0);
+// Gamepad state lives on its own atomics (not the touch ones) so a connected-but-
+// idle controller never stomps an active touch input, and vice versa. The two
+// sources are combined in the main loop.
+static PAD_THRUST: AtomicU32 = AtomicU32::new(0);
+static PAD_TORQUE: AtomicU32 = AtomicU32::new(0);
+static PAD_RESET: AtomicU32 = AtomicU32::new(0);
 static SAFE_AREA_TOP: AtomicU32 = AtomicU32::new(0);
 static SAFE_AREA_LEFT: AtomicU32 = AtomicU32::new(0);
 
@@ -24,6 +30,24 @@ pub extern "C" fn set_touch_thrust(active: i32) {
 #[unsafe(no_mangle)]
 pub extern "C" fn set_touch_torque(value: f32) {
     TOUCH_TORQUE.store(value.to_bits(), Ordering::Relaxed);
+}
+
+// --- Bluetooth / USB game controller bridge (Web Gamepad API, see index.html) ---
+#[unsafe(no_mangle)]
+pub extern "C" fn set_pad_thrust(active: i32) {
+    PAD_THRUST.store(active as u32, Ordering::Relaxed);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_pad_torque(value: f32) {
+    PAD_TORQUE.store(value.to_bits(), Ordering::Relaxed);
+}
+
+// Edge-triggered reset (Start / Y button). JS sets the flag on a fresh press;
+// the loop consumes it with a swap so it fires exactly once.
+#[unsafe(no_mangle)]
+pub extern "C" fn set_pad_reset() {
+    PAD_RESET.store(1, Ordering::Relaxed);
 }
 
 #[unsafe(no_mangle)]
@@ -656,7 +680,8 @@ async fn main() {
         // Read thrust state early so lighting can use it
         let thrusting_now = is_mouse_button_down(MouseButton::Left)
             || is_key_down(KeyCode::Down)
-            || TOUCH_THRUST.load(Ordering::Relaxed) != 0;
+            || TOUCH_THRUST.load(Ordering::Relaxed) != 0
+            || PAD_THRUST.load(Ordering::Relaxed) != 0;
         glow += (if thrusting_now { 1.0 } else { 0.0 } - glow) * 0.12;
 
         // --- Slide the cave window ---
@@ -957,7 +982,12 @@ async fn main() {
             let a = rb.rotation().angle();
             rb.add_force(vector![-a.sin() * 8.0, a.cos() * 8.0], true);
         }
-        let touch_torque = f32::from_bits(TOUCH_TORQUE.load(Ordering::Relaxed));
+        // Analog steering: touch slider + gamepad stick share one value. They
+        // live on separate atomics so neither stomps the other; sum and clamp
+        // (you won't push both at once, and clamping keeps |torque| ≤ 1).
+        let touch_torque = (f32::from_bits(TOUCH_TORQUE.load(Ordering::Relaxed))
+            + f32::from_bits(PAD_TORQUE.load(Ordering::Relaxed)))
+            .clamp(-1.0, 1.0);
         let rotating_left  = is_key_down(KeyCode::Left)  || touch_torque < -0.1;
         let rotating_right = is_key_down(KeyCode::Right) || touch_torque >  0.1;
         // Rotate by firing a side RCS booster: apply the force *at the nozzle*
@@ -1040,7 +1070,7 @@ async fn main() {
         }
         particles.retain(|p| p.life > 0.0);
 
-        if is_key_pressed(KeyCode::R) {
+        if is_key_pressed(KeyCode::R) || PAD_RESET.swap(0, Ordering::Relaxed) != 0 {
             let rb = rigid_body_set.get_mut(box_handle).unwrap();
             rb.set_translation(vector![64.0, cave_center(64.0)], true);
             rb.set_linvel(vector![0.0, 0.0], true);
