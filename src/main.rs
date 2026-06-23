@@ -573,11 +573,14 @@ async fn main() {
     let mut ccd_solver = CCDSolver::new();
     let mut query_pipeline = QueryPipeline::new();
 
+    // Normalized [0,1) star field — scaled to the current screen size each frame so
+    // it fills the whole viewport in any orientation. (Storing absolute pixel coords
+    // captured the startup size, leaving a gap after rotating to a wider screen.)
     let stars: Vec<(f32, f32)> = (0..200).map(|i| {
         let t = i as f32 * 2.399f32;
         (
-            ((t * 17.3).sin() * 0.5 + 0.5) * screen_width(),
-            ((t * 11.7).cos() * 0.5 + 0.5) * screen_height(),
+            (t * 17.3).sin() * 0.5 + 0.5,
+            (t * 11.7).cos() * 0.5 + 0.5,
         )
     }).collect();
 
@@ -656,7 +659,9 @@ async fn main() {
         // UI scale: HUD/minimap were tuned for a ~980px logical width. With the
         // device-width viewport, narrow screens report their true width, so scale
         // fixed-size UI down proportionally (capped at 1.0 so desktop is unchanged).
-        let ui = (sw / 980.0).min(1.0);
+        // Keyed on the *smaller* dimension so a phone keeps the same HUD/minimap size
+        // across portrait/landscape — `sw` alone grew the minimap on rotation.
+        let ui = (sw.min(sh) / 980.0).min(1.0);
 
         // Safe-area insets (notch / status bar), supplied by JS via env(safe-area-inset-*).
         // Keeps the top-left HUD clear of the notch in both portrait (top) and landscape (left).
@@ -747,8 +752,8 @@ async fn main() {
 
         // Stars
         for &(sx, sy) in &stars {
-            let px = (sx - cam_x * view_scale * 0.05).rem_euclid(sw);
-            let py = (sy + cam_y * view_scale * 0.05).rem_euclid(sh);
+            let px = (sx * sw - cam_x * view_scale * 0.05).rem_euclid(sw);
+            let py = (sy * sh + cam_y * view_scale * 0.05).rem_euclid(sh);
             draw_circle(px, py, 1.0, Color::from_rgba(200, 200, 255, 150));
         }
 
