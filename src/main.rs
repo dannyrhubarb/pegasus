@@ -640,8 +640,11 @@ async fn main() {
         let sh = screen_height();
         let sw = screen_width();
 
-        // Zoom out on narrow screens so more of the cave fits (HUD/minimap are unaffected).
-        let view_scale = if sw < 600.0 { SCALE * 0.38 } else { SCALE };
+        // Zoom out on small (mobile) screens so more of the cave fits (HUD/minimap are
+        // unaffected). Keyed on the *smaller* screen dimension so a phone keeps the same
+        // zoom in portrait and landscape — a phone's narrow side stays small in both
+        // orientations, whereas `sw` alone would flip to desktop zoom on rotation.
+        let view_scale = if sw.min(sh) < 600.0 { SCALE * 0.38 } else { SCALE };
         // Shadow the module-level w2s so all render calls below use view_scale automatically.
         let w2s = |x: f32, y: f32, sh: f32, cam_x: f32, cam_y: f32| -> Vec2 {
             vec2(

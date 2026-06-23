@@ -57,7 +57,7 @@ click doesn't bleed through to the canvas and fire the thruster.
 
 ## Rendering architecture
 - **World-to-screen**: a per-frame closure `w2s` (defined inside the `loop {}`, shadows the removed module-level function) converts world coords to screen pixels using `view_scale`.
-- **`view_scale`**: `SCALE * 0.38` on narrow screens (`sw < 600px`, i.e. mobile portrait), `SCALE` on desktop. Controls zoom; HUD/minimap are unaffected.
+- **`view_scale`**: `SCALE * 0.38` on small screens (`sw.min(sh) < 600px`, i.e. mobile in either orientation), `SCALE` on desktop. Controls zoom; HUD/minimap are unaffected. Keyed on the *smaller* dimension (not `sw`) so a phone keeps the same zoom across portrait/landscape — using `sw` alone made landscape flip to desktop zoom and appear zoomed-in.
 - **Cave walls**: drawn as **low-poly faceted** triangle meshes — two `draw_mesh` calls per frame (one ceiling, one floor), each a continuous lattice of flat-shaded triangles. See "Faceted wall rendering" below. Per-facet base colors carry deterministic brightness jitter; radial lighting is added on top by the fragment shader.
 - **Radial light shader** (`LIGHT_VERTEX` / `LIGHT_FRAGMENT` constants): a custom macroquad `Material` active only during the cave-wall and obstacle draws (`gl_use_material` / `gl_use_default_material`). Computes per-pixel radial falloff from the ship's screen position. Uniforms set each frame: `ship_pos` (vec2), `light_radius` (float), `glow` (float).
 - **Shader math**: `ambient = 0.45`, quadratic falloff `t*t`, *subtle* warm orange tint `glow * falloff * 0.12` added to red (×1.0) and green (×0.4) — kept low so the cool slate rock stays blue with only a faint thruster flush. `light_radius = min(sw,sh) * 0.55 + glow * min(sw,sh) * 0.30`.
