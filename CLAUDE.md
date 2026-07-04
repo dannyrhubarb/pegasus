@@ -260,6 +260,14 @@ surface pokes past the collider and the ship appears to sink into the rock.
 
 ## Physics notes
 
+**Fixed timestep**: physics steps at `PHYSICS_DT = 1/120 s` through an
+accumulator in the main loop (catch-up capped at 0.05 s per frame), so handling
+is identical on 60/120/144 Hz displays. Rendering interpolates the ship between
+the last two physics states (`prev_ship` + `alpha = accum/PHYSICS_DT`); anything
+that teleports the body (reset/respawn) must also snap `prev_ship` or the camera
+lerps across the jump for a frame. Forces set in the controls section persist
+across all substeps of the following frame (reset each frame via `reset_forces`).
+
 The ship uses a **compound collider** of three **capsules** (stadium shapes) parented to the same rigid body, tracing the lander silhouette of the 1.5× scaled visual. Capsules are the closest primitive Rapier offers to an ellipse — they hug the rounded hull tighter than boxes and slide off rocks without corners catching. Endpoints are in scaled world units (ship-local frame):
 - **Fuselage**: `capsule((0, +0.42), (0, −0.08), r=0.26)` — rounded nose down to mid-hull.
 - **Left leg pod**: `capsule((−0.26, −0.30), (−0.33, −0.64), r=0.09)` — angled out to the foot.

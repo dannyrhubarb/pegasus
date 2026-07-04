@@ -79,6 +79,10 @@ const SHIP_SCALE: f32 = 1.5;
 // Where [R] / gamepad reset drops the ship. Obstacles keep clear of this point
 // (like the x = 0 spawn) so a reset never lands on a rock.
 const RESET_X: f32 = 64.0;
+// Physics runs on a fixed timestep (accumulator in the main loop) so handling
+// is identical on every display refresh rate; rendering interpolates the ship
+// between the last two steps.
+const PHYSICS_DT: f32 = 1.0 / 120.0;
 
 // Ship hull mesh: 41 triangles extracted from the original Flash SWF
 // (mcSpaceship, character id 41 in completeHS8replay.swf), ear-clip triangulated
@@ -759,23 +763,37 @@ async fn main() {
         },
     ).expect("cave light shader");
 
+    integration_params.dt = PHYSICS_DT;
+    let mut phys_accum = 0.0f32;
+    // Ship state at the previous physics step, for render interpolation.
+    let mut prev_ship = (0.0f32, cave_center(0.0), 0.0f32); // x, y, angle
+
     loop {
-        integration_params.dt = get_frame_time().min(0.05);
-        physics_pipeline.step(
-            &gravity,
-            &integration_params,
-            &mut island_manager,
-            &mut broad_phase,
-            &mut narrow_phase,
-            &mut rigid_body_set,
-            &mut collider_set,
-            &mut impulse_joint_set,
-            &mut multibody_joint_set,
-            &mut ccd_solver,
-            Some(&mut query_pipeline),
-            &(),
-            &(),
-        );
+        // Fixed-timestep accumulator: the cap bounds catch-up work after a
+        // hitch (same role as the old per-frame dt cap of 0.05 s).
+        phys_accum = (phys_accum + get_frame_time()).min(0.05);
+        while phys_accum >= PHYSICS_DT {
+            {
+                let body = &rigid_body_set[box_handle];
+                prev_ship = (body.translation().x, body.translation().y, body.rotation().angle());
+            }
+            physics_pipeline.step(
+                &gravity,
+                &integration_params,
+                &mut island_manager,
+                &mut broad_phase,
+                &mut narrow_phase,
+                &mut rigid_body_set,
+                &mut collider_set,
+                &mut impulse_joint_set,
+                &mut multibody_joint_set,
+                &mut ccd_solver,
+                Some(&mut query_pipeline),
+                &(),
+                &(),
+            );
+            phys_accum -= PHYSICS_DT;
+        }
 
         let sh = screen_height();
         let sw = screen_width();
@@ -809,7 +827,20 @@ async fn main() {
             let body = &rigid_body_set[box_handle];
             let p = body.translation();
             let v = body.linvel();
-            (p.x, p.y, body.rotation().angle(), v.x, v.y)
+            // Interpolate between the last two physics steps so rendering
+            // stays smooth when the frame rate and PHYSICS_DT don't divide
+            // evenly (e.g. 144 Hz display over a 120 Hz simulation).
+            let alpha = (phys_accum / PHYSICS_DT).clamp(0.0, 1.0);
+            let (px, py, pa) = prev_ship;
+            let mut da = body.rotation().angle() - pa;
+            if da > std::f32::consts::PI { da -= std::f32::consts::TAU; }
+            if da < -std::f32::consts::PI { da += std::f32::consts::TAU; }
+            (
+                px + (p.x - px) * alpha,
+                py + (p.y - py) * alpha,
+                pa + da * alpha,
+                v.x, v.y,
+            )
         };
 
         // Local-to-world helpers (position and direction)
@@ -1349,6 +1380,9 @@ async fn main() {
             rb.set_linvel(vector![0.0, 0.0], true);
             rb.set_angvel(0.0, true);
             rb.set_rotation(Rotation::new(0.0), true);
+            // Snap the interpolation state too, or the camera lerps across the
+            // teleport for one frame.
+            prev_ship = (RESET_X, cave_center(RESET_X), 0.0);
         }
 
         // --- Minimap (ship always centred; pans in BOTH axes) ---
