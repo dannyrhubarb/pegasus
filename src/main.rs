@@ -1,7 +1,7 @@
 use macroquad::prelude::*;
 use macroquad::rand::gen_range;
 use rapier2d::prelude::*;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 struct Particle {
@@ -300,14 +300,110 @@ fn seg_points(idx: i64) -> (Point<f32>, Point<f32>, Point<f32>, Point<f32>) {
     )
 }
 
-fn insert_seg(
-    idx: i64,
-    collider_set: &mut ColliderSet,
-) -> (ColliderHandle, ColliderHandle) {
+fn insert_seg(idx: i64, layer: i64, collider_set: &mut ColliderSet) -> Vec<ColliderHandle> {
+    // Shaft openings: no ceiling/floor collider where a vertical shaft punches
+    // through — the shaft's own walls take over exactly at the opening edges.
+    if seg_in_opening(idx) {
+        return Vec::new();
+    }
+    let ly = layer as f32 * V_PERIOD;
     let (ta, tb, ba, bb) = seg_points(idx);
-    let top = collider_set.insert(ColliderBuilder::segment(ta, tb).friction(0.0).build());
-    let bot = collider_set.insert(ColliderBuilder::segment(ba, bb).friction(0.0).build());
-    (top, bot)
+    let off = |p: Point<f32>| point![p.x, p.y + ly];
+    vec![
+        collider_set.insert(ColliderBuilder::segment(off(ta), off(tb)).friction(0.0).build()),
+        collider_set.insert(ColliderBuilder::segment(off(ba), off(bb)).friction(0.0).build()),
+    ]
+}
+
+// ---- Vertical shafts ------------------------------------------------------
+//
+// The world also repeats every V_PERIOD metres in y: identical copies of the
+// horizontal cave are stacked vertically, and vertical shafts punch through
+// ceiling + floor at deterministic x positions, connecting each cave layer to
+// the (identical) one above/below. Climbing a shaft therefore "wraps around"
+// back into the same cave, exactly like flying PERIOD metres wraps in x.
+
+const V_PERIOD: f32 = 90.0;         // vertical repeat distance (m)
+const SHAFT_SPACING_SEGS: i64 = 50; // one shaft slot every 150 m (4 per PERIOD)
+const SHAFT_BASE_SEG: i64 = 35;     // slot anchor; keeps openings clear of x = 0 / 64
+const SHAFT_OPEN_SEGS: i64 = 3;     // opening width: 3 segments = 9 m
+const SHAFT_STEP: f32 = 3.0;        // shaft wall segment length (m)
+
+// Start segment of the ceiling/floor opening for shaft slot `s`. Jitter is
+// keyed on s mod 4 (= slots per PERIOD) so the pattern repeats exactly every
+// period in x — the wrap stays seamless in both axes.
+fn shaft_open_seg(s: i64) -> i64 {
+    let j = (hash_u32(s.rem_euclid(4) as u32 ^ 0x51ed_270b) % 13) as i64 - 6; // ±6 segs
+    s * SHAFT_SPACING_SEGS + SHAFT_BASE_SEG + j
+}
+
+// Does cave segment `idx` fall inside a shaft opening (→ walls removed there)?
+fn seg_in_opening(idx: i64) -> bool {
+    let s0 = (idx - SHAFT_BASE_SEG).div_euclid(SHAFT_SPACING_SEGS);
+    [s0, s0 + 1].iter().any(|&s| {
+        let o = shaft_open_seg(s);
+        idx >= o && idx < o + SHAFT_OPEN_SEGS
+    })
+}
+
+// Wall x for shaft `s` at normalized height t ∈ [0,1]; side 0 = left, 1 = right.
+// The envelope pins both ends exactly to the opening edges so the wall meets
+// the clipped ceiling/floor colliders with no gap; in between it wiggles up to
+// ±1.25 m (opening is 9 m wide → the shaft always stays ≥ 6.5 m flyable).
+fn shaft_wall_x(s: i64, side: u8, t: f32) -> f32 {
+    let o = shaft_open_seg(s);
+    let edge = (if side == 0 { o } else { o + SHAFT_OPEN_SEGS }) as f32 * SEG_LEN;
+    let h = hash_u32(s.rem_euclid(4) as u32 ^ ((side as u32) << 8) ^ 0xabc0_ffee);
+    let tau = std::f32::consts::TAU;
+    let p1 = (h & 0xffff) as f32 / 65535.0 * tau;
+    let p2 = ((h >> 16) & 0xffff) as f32 / 65535.0 * tau;
+    let env = (t.min(1.0 - t) / 0.18).clamp(0.0, 1.0);
+    edge + env * ((t * tau * 2.0 + p1).sin() * 0.9 + (t * tau * 5.0 + p2).sin() * 0.35)
+}
+
+// Wall polyline for the shaft connecting layer `gap`'s ceiling to layer
+// `gap + 1`'s floor. Endpoints lie exactly on the two cave wall curves at the
+// opening edges, so colliders and row-0 facets chain seamlessly through both
+// junctions. The shape is identical for every gap (mod V_PERIOD) — the wrap.
+fn shaft_wall_pts(s: i64, gap: i64, side: u8) -> Vec<Vec2> {
+    let o = shaft_open_seg(s);
+    let xe = (if side == 0 { o } else { o + SHAFT_OPEN_SEGS }) as f32 * SEG_LEN;
+    let y_bot = gap as f32 * V_PERIOD + cave_center(xe) + cave_half_width(xe);
+    let y_top = (gap + 1) as f32 * V_PERIOD + cave_center(xe) - cave_half_width(xe);
+    let n = ((y_top - y_bot) / SHAFT_STEP).ceil().max(1.0) as usize;
+    (0..=n)
+        .map(|i| {
+            let t = i as f32 / n as f32;
+            vec2(shaft_wall_x(s, side, t), y_bot + (y_top - y_bot) * t)
+        })
+        .collect()
+}
+
+// Facet lattice point for shaft walls (vertical analogue of lattice_point):
+// depth col 0 sits exactly on the wall polyline (collider-aligned); deeper
+// cols recede horizontally into the rock with deterministic jitter. Near the
+// two ends the deep cols are additionally pulled along the shaft toward the
+// junction rock, so corner facets turn diagonally into the corner wedge
+// instead of poking past the cave wall line into the cave interior.
+fn shaft_lattice(pts: &[Vec2], s: i64, i: usize, d: usize, side: u8) -> Vec2 {
+    let p = pts[i];
+    if d == 0 {
+        return p;
+    }
+    let depth = ROW_DEPTHS[d];
+    let dir = if side == 0 { -1.0 } else { 1.0 };
+    let h = hash_u32(
+        (s as u32).wrapping_mul(0x9e37_79b9)
+            ^ (i as u32).wrapping_mul(73856093)
+            ^ (d as u32).wrapping_mul(19349663)
+            ^ (side as u32 + 7).wrapping_mul(83492791),
+    );
+    let jy = ((h & 0xffff) as f32 / 65535.0 - 0.5) * (SHAFT_STEP * 0.5);
+    let jx = (((h >> 16) & 0xffff) as f32 / 65535.0 - 0.5) * (depth * 0.35);
+    let e = i.min(pts.len() - 1 - i) as f32;
+    let end_pull = (1.0 - e / 3.0).max(0.0) * depth;
+    let end_dir = if i * 2 < pts.len() { 1.0 } else { -1.0 }; // up at bottom end, down at top
+    vec2(p.x + dir * (depth + jx), p.y + jy + end_dir * end_pull)
 }
 
 // ---- Random polygon obstacles -------------------------------------------
@@ -441,6 +537,18 @@ fn obstacle_spec(k: i64) -> Option<ObstacleSpec> {
         return None;
     }
 
+    // Skip slots near a vertical shaft opening so the junction crossings
+    // (where the player has to maneuver vertically) stay flyable.
+    let seg = (cx / SEG_LEN).floor() as i64;
+    let s0 = (seg - SHAFT_BASE_SEG).div_euclid(SHAFT_SPACING_SEGS);
+    for s in [s0, s0 + 1] {
+        let o = shaft_open_seg(s);
+        let (ox0, ox1) = (o as f32 * SEG_LEN, (o + SHAFT_OPEN_SEGS) as f32 * SEG_LEN);
+        if cx > ox0 - 8.0 && cx < ox1 + 8.0 {
+            return None;
+        }
+    }
+
     // Roughly 1 in 6 slots is empty, for uneven, natural-feeling spacing.
     if rng.range_int(0, 5) == 0 {
         return None;
@@ -479,16 +587,36 @@ async fn main() {
     let mut rigid_body_set = RigidBodySet::new();
     let mut collider_set = ColliderSet::new();
 
-    // Sliding window: deque of (segment_index, top_handle, bot_handle)
-    let mut cave: VecDeque<(i64, ColliderHandle, ColliderHandle)> = VecDeque::new();
+    // Sliding 2D window of cave wall colliders, keyed by (layer, segment idx).
+    // Value holds that segment's colliders (empty where a shaft opening removes
+    // both walls). Filled by the window-sync code on the first frame.
+    let mut cave: HashMap<(i64, i64), Vec<ColliderHandle>> = HashMap::new();
 
-    // Seed the initial window around x=0
-    for idx in -HALF_WINDOW..=HALF_WINDOW {
-        let (top, bot) = insert_seg(idx, &mut collider_set);
-        cave.push_back((idx, top, bot));
+    // Loaded vertical shafts, keyed by (slot, gap): the shaft for slot `s`
+    // connecting layer `gap`'s ceiling to layer `gap + 1`'s floor.
+    struct Shaft {
+        handles: Vec<ColliderHandle>,
+        walls: [Vec<Vec2>; 2], // left / right wall polylines, world space
     }
+    let mut shafts: HashMap<(i64, i64), Shaft> = HashMap::new();
 
-    // Loaded obstacles, keyed by their slot index. Each carries its collider
+    let spawn_shaft = |s: i64, gap: i64, collider_set: &mut ColliderSet,
+                           shafts: &mut HashMap<(i64, i64), Shaft>| {
+        let walls = [shaft_wall_pts(s, gap, 0), shaft_wall_pts(s, gap, 1)];
+        let mut handles = Vec::new();
+        for pts in &walls {
+            for w in pts.windows(2) {
+                handles.push(collider_set.insert(
+                    ColliderBuilder::segment(point![w[0].x, w[0].y], point![w[1].x, w[1].y])
+                        .friction(0.0)
+                        .build(),
+                ));
+            }
+        }
+        shafts.insert((s, gap), Shaft { handles, walls });
+    };
+
+    // Loaded obstacles, keyed by (slot index, layer). Each carries its collider
     // handle plus the hull vertices (local space) used for rendering.
     struct Obstacle {
         handle: ColliderHandle,
@@ -497,16 +625,17 @@ async fn main() {
         rot: f32,
         verts: Vec<Vec2>,
     }
-    let mut obstacles: HashMap<i64, Obstacle> = HashMap::new();
+    let mut obstacles: HashMap<(i64, i64), Obstacle> = HashMap::new();
 
-    // Insert the obstacle for slot `k` (if any) into the world + render map.
-    let spawn_obstacle = |k: i64, collider_set: &mut ColliderSet,
-                              obstacles: &mut HashMap<i64, Obstacle>| {
+    // Insert the obstacle for slot `k` in cave layer `layer` (if any).
+    let spawn_obstacle = |k: i64, layer: i64, collider_set: &mut ColliderSet,
+                              obstacles: &mut HashMap<(i64, i64), Obstacle>| {
         let Some(spec) = obstacle_spec(k) else { return };
         let Some(builder) = ColliderBuilder::convex_hull(&spec.pts) else { return };
+        let cy = spec.cy + layer as f32 * V_PERIOD;
         let handle = collider_set.insert(
             builder
-                .translation(vector![spec.cx, spec.cy])
+                .translation(vector![spec.cx, cy])
                 .rotation(spec.rot)
                 .friction(0.6)
                 .restitution(0.2)
@@ -518,10 +647,10 @@ async fn main() {
             .as_convex_polygon()
             .map(|cp| cp.points().iter().map(|p| vec2(p.x, p.y)).collect())
             .unwrap_or_else(|| spec.pts.iter().map(|p| vec2(p.x, p.y)).collect());
-        obstacles.insert(k, Obstacle {
+        obstacles.insert((k, layer), Obstacle {
             handle,
             cx: spec.cx,
-            cy: spec.cy,
+            cy,
             rot: spec.rot,
             verts,
         });
@@ -692,36 +821,51 @@ async fn main() {
             || PAD_THRUST.load(Ordering::Relaxed) != 0;
         glow += (if thrusting_now { 1.0 } else { 0.0 } - glow) * 0.12;
 
-        // --- Slide the cave window ---
+        // --- Slide the cave window (2D: segments in x, layers in y) ---
         let ship_seg = (cam_x / SEG_LEN).floor() as i64;
         let want_left  = ship_seg - HALF_WINDOW;
         let want_right = ship_seg + HALF_WINDOW;
+        let ship_layer = (cam_y / V_PERIOD).round() as i64;
+        let (lay_lo, lay_hi) = (ship_layer - 1, ship_layer + 1);
 
-        // Evict segments that are too far left
-        while cave.front().map_or(false, |&(idx, ..)| idx < want_left) {
-            if let Some((_, top, bot)) = cave.pop_front() {
-                collider_set.remove(top, &mut island_manager, &mut rigid_body_set, false);
-                collider_set.remove(bot, &mut island_manager, &mut rigid_body_set, false);
+        cave.retain(|&(layer, idx), handles| {
+            if layer < lay_lo || layer > lay_hi || idx < want_left || idx > want_right {
+                for h in handles.drain(..) {
+                    collider_set.remove(h, &mut island_manager, &mut rigid_body_set, false);
+                }
+                false
+            } else {
+                true
+            }
+        });
+        for layer in lay_lo..=lay_hi {
+            for idx in want_left..=want_right {
+                cave.entry((layer, idx))
+                    .or_insert_with(|| insert_seg(idx, layer, &mut collider_set));
             }
         }
-        // Evict segments that are too far right
-        while cave.back().map_or(false, |&(idx, ..)| idx > want_right) {
-            if let Some((_, top, bot)) = cave.pop_back() {
-                collider_set.remove(top, &mut island_manager, &mut rigid_body_set, false);
-                collider_set.remove(bot, &mut island_manager, &mut rigid_body_set, false);
+
+        // --- Slide the shaft window ---
+        // Shafts for the gap below and above the ship's layer cover everything
+        // reachable within half a vertical period.
+        let s_lo = want_left.div_euclid(SHAFT_SPACING_SEGS) - 1;
+        let s_hi = want_right.div_euclid(SHAFT_SPACING_SEGS) + 1;
+        shafts.retain(|&(s, gap), sh| {
+            if s < s_lo || s > s_hi || gap < ship_layer - 1 || gap > ship_layer {
+                for h in sh.handles.drain(..) {
+                    collider_set.remove(h, &mut island_manager, &mut rigid_body_set, false);
+                }
+                false
+            } else {
+                true
             }
-        }
-        // Extend left
-        while cave.front().map_or(want_left, |&(idx, ..)| idx) > want_left {
-            let new_idx = cave.front().map_or(want_left, |&(idx, ..)| idx) - 1;
-            let (top, bot) = insert_seg(new_idx, &mut collider_set);
-            cave.push_front((new_idx, top, bot));
-        }
-        // Extend right
-        while cave.back().map_or(want_right - 1, |&(idx, ..)| idx) < want_right {
-            let new_idx = cave.back().map_or(want_right, |&(idx, ..)| idx) + 1;
-            let (top, bot) = insert_seg(new_idx, &mut collider_set);
-            cave.push_back((new_idx, top, bot));
+        });
+        for s in s_lo..=s_hi {
+            for gap in [ship_layer - 1, ship_layer] {
+                if !shafts.contains_key(&(s, gap)) {
+                    spawn_shaft(s, gap, &mut collider_set, &mut shafts);
+                }
+            }
         }
 
         // --- Slide the obstacle window (mirrors the wall window) ---
@@ -731,9 +875,9 @@ async fn main() {
         let k_left  = ((win_left_x  - 3.0) / OBSTACLE_SPACING).floor() as i64;
         let k_right = ((win_right_x + 3.0) / OBSTACLE_SPACING).ceil()  as i64;
 
-        // Evict obstacles whose slot fell outside the window.
-        obstacles.retain(|&k, ob| {
-            if k < k_left || k > k_right {
+        // Evict obstacles whose slot or layer fell outside the window.
+        obstacles.retain(|&(k, layer), ob| {
+            if k < k_left || k > k_right || layer < lay_lo || layer > lay_hi {
                 collider_set.remove(ob.handle, &mut island_manager, &mut rigid_body_set, false);
                 false
             } else {
@@ -741,9 +885,11 @@ async fn main() {
             }
         });
         // Load any newly-in-range obstacles.
-        for k in k_left..=k_right {
-            if !obstacles.contains_key(&k) {
-                spawn_obstacle(k, &mut collider_set, &mut obstacles);
+        for layer in lay_lo..=lay_hi {
+            for k in k_left..=k_right {
+                if !obstacles.contains_key(&(k, layer)) {
+                    spawn_obstacle(k, layer, &mut collider_set, &mut obstacles);
+                }
             }
         }
 
@@ -758,8 +904,6 @@ async fn main() {
         }
 
         // Cave walls
-        let far_up   = -sh * 2.0;
-        let far_down =  sh * 3.0;
         let margin = sw + view_scale * 4.0;
         let ship_screen = vec2(sw / 2.0, sh / 2.0);
         let base_dim = sw.min(sh);
@@ -775,63 +919,171 @@ async fn main() {
         light_material.set_uniform("light_radius", light_radius);
         light_material.set_uniform("glow",         glow);
 
-        // Faceted cave walls. Each wall (ceiling = side 0, floor = side 1) is one
-        // continuous mesh of flat-shaded triangles spanning all visible columns.
-        // Lattice positions are pure functions of the GLOBAL column index, so
-        // adjacent segments share exact boundary vertices (no cracks); row 0 sits
-        // on the wall line (= the collider) so the lit surface stays aligned.
-        let col_lo = cave.front().map_or(0, |&(idx, ..)| idx) * SUBCOLS;
-        let col_hi = (cave.back().map_or(0, |&(idx, ..)| idx) + 1) * SUBCOLS;
+        // Faceted cave walls, one layer per V_PERIOD. Each wall (ceiling = side 0,
+        // floor = side 1) is one continuous mesh of flat-shaded triangles spanning
+        // all visible columns. Lattice positions are pure functions of the GLOBAL
+        // column index, so adjacent segments share exact boundary vertices (no
+        // cracks); row 0 sits on the wall line (= the collider) so the lit surface
+        // stays aligned. Columns inside shaft openings are skipped — the shaft
+        // rendering below covers that rock. The rock between two stacked layers
+        // is closed by a world-bounded fill emitted with each layer's ceiling
+        // (deepest ceiling row up to the NEXT layer's deepest floor row).
+        let col_lo = want_left * SUBCOLS;
+        let col_hi = (want_right + 1) * SUBCOLS;
 
-        for (side, far_y) in [(0u8, far_up), (1u8, far_down)] {
-            let mut verts: Vec<Vertex> = Vec::new();
-            for col in col_lo..col_hi {
-                // Cull columns fully off-screen in x.
-                let sx0 = w2s(col_x(col),     0.0, sh, cam_x, cam_y).x;
-                let sx1 = w2s(col_x(col + 1), 0.0, sh, cam_x, cam_y).x;
-                if sx0.min(sx1) > sw + margin || sx0.max(sx1) < -margin {
+        for layer in lay_lo..=lay_hi {
+            let ly = layer as f32 * V_PERIOD;
+            // Vertical culling: facet bands live within ±45 m of the layer line;
+            // the inter-layer fill spans [ly, ly + V_PERIOD].
+            let facets_visible = {
+                let top = w2s(0.0, ly + 45.0, sh, cam_x, cam_y).y;
+                let bot = w2s(0.0, ly - 45.0, sh, cam_x, cam_y).y;
+                bot > -100.0 && top < sh + 100.0
+            };
+            // The fill quad can reach ~13 m past the layer lines where the
+            // ceiling/floor curves dip, so the band is padded by 15 m.
+            let fill_visible = {
+                let top = w2s(0.0, ly + V_PERIOD + 15.0, sh, cam_x, cam_y).y;
+                let bot = w2s(0.0, ly - 15.0, sh, cam_x, cam_y).y;
+                bot > -100.0 && top < sh + 100.0
+            };
+            if !facets_visible && !fill_visible {
+                continue;
+            }
+            for side in [0u8, 1u8] {
+                if side == 1 && !facets_visible {
                     continue;
                 }
+                let mut verts: Vec<Vertex> = Vec::new();
+                for col in col_lo..col_hi {
+                    // Shaft opening: no wall here (the shaft's rock covers it).
+                    if seg_in_opening(col.div_euclid(SUBCOLS)) {
+                        continue;
+                    }
+                    // Cull columns fully off-screen in x.
+                    let sx0 = w2s(col_x(col),     0.0, sh, cam_x, cam_y).x;
+                    let sx1 = w2s(col_x(col + 1), 0.0, sh, cam_x, cam_y).x;
+                    if sx0.min(sx1) > sw + margin || sx0.max(sx1) < -margin {
+                        continue;
+                    }
 
-                // Facet rows: each cell is two flat-shaded triangles.
-                for row in 0..N_ROWS - 1 {
-                    let w00 = lattice_point(col,     row,     side);
-                    let w10 = lattice_point(col + 1, row,     side);
-                    let w11 = lattice_point(col + 1, row + 1, side);
-                    let w01 = lattice_point(col,     row + 1, side);
-                    let s00 = w2s(w00.x, w00.y, sh, cam_x, cam_y);
-                    let s10 = w2s(w10.x, w10.y, sh, cam_x, cam_y);
-                    let s11 = w2s(w11.x, w11.y, sh, cam_x, cam_y);
-                    let s01 = w2s(w01.x, w01.y, sh, cam_x, cam_y);
+                    // Facet rows: each cell is two flat-shaded triangles.
+                    if facets_visible {
+                        for row in 0..N_ROWS - 1 {
+                            let w00 = lattice_point(col,     row,     side);
+                            let w10 = lattice_point(col + 1, row,     side);
+                            let w11 = lattice_point(col + 1, row + 1, side);
+                            let w01 = lattice_point(col,     row + 1, side);
+                            let s00 = w2s(w00.x, w00.y + ly, sh, cam_x, cam_y);
+                            let s10 = w2s(w10.x, w10.y + ly, sh, cam_x, cam_y);
+                            let s11 = w2s(w11.x, w11.y + ly, sh, cam_x, cam_y);
+                            let s01 = w2s(w01.x, w01.y + ly, sh, cam_x, cam_y);
 
-                    let base = match row { 0 => rock_edge, 1 => rock_mid, _ => rock_dark };
-                    let ca = facet_shade(base, col, row, side, 0);
-                    let cb = facet_shade(base, col, row, side, 0x5bd1_e995);
+                            let base = match row { 0 => rock_edge, 1 => rock_mid, _ => rock_dark };
+                            let ca = facet_shade(base, col, row, side, 0);
+                            let cb = facet_shade(base, col, row, side, 0x5bd1_e995);
 
-                    // Hashed diagonal so the lattice doesn't read as a regular grid.
-                    if hash_u32(col as u32 ^ (row as u32).wrapping_mul(2654435761)) & 1 == 0 {
-                        verts.push(v(s00, ca)); verts.push(v(s10, ca)); verts.push(v(s11, ca));
-                        verts.push(v(s00, cb)); verts.push(v(s11, cb)); verts.push(v(s01, cb));
-                    } else {
-                        verts.push(v(s00, ca)); verts.push(v(s10, ca)); verts.push(v(s01, ca));
-                        verts.push(v(s10, cb)); verts.push(v(s11, cb)); verts.push(v(s01, cb));
+                            // Hashed diagonal so the lattice doesn't read as a regular grid.
+                            if hash_u32(col as u32 ^ (row as u32).wrapping_mul(2654435761)) & 1 == 0 {
+                                verts.push(v(s00, ca)); verts.push(v(s10, ca)); verts.push(v(s11, ca));
+                                verts.push(v(s00, cb)); verts.push(v(s11, cb)); verts.push(v(s01, cb));
+                            } else {
+                                verts.push(v(s00, ca)); verts.push(v(s10, ca)); verts.push(v(s01, ca));
+                                verts.push(v(s10, cb)); verts.push(v(s11, cb)); verts.push(v(s01, cb));
+                            }
+                        }
+                    }
+
+                    // Solid dark fill closing the rock between this layer's
+                    // ceiling and the next layer's floor (shared lattice points
+                    // with both facet bands → no cracks).
+                    if side == 0 && fill_visible {
+                        let wd0 = lattice_point(col,     N_ROWS - 1, 0);
+                        let wd1 = lattice_point(col + 1, N_ROWS - 1, 0);
+                        let wu0 = lattice_point(col,     N_ROWS - 1, 1);
+                        let wu1 = lattice_point(col + 1, N_ROWS - 1, 1);
+                        let sd0 = w2s(wd0.x, wd0.y + ly, sh, cam_x, cam_y);
+                        let sd1 = w2s(wd1.x, wd1.y + ly, sh, cam_x, cam_y);
+                        let su0 = w2s(wu0.x, wu0.y + ly + V_PERIOD, sh, cam_x, cam_y);
+                        let su1 = w2s(wu1.x, wu1.y + ly + V_PERIOD, sh, cam_x, cam_y);
+                        verts.push(v(sd0, rock_dark)); verts.push(v(sd1, rock_dark)); verts.push(v(su1, rock_dark));
+                        verts.push(v(sd0, rock_dark)); verts.push(v(su1, rock_dark)); verts.push(v(su0, rock_dark));
                     }
                 }
 
-                // Solid dark fill from the deepest facet row out to far_y.
-                let wd0 = lattice_point(col,     N_ROWS - 1, side);
-                let wd1 = lattice_point(col + 1, N_ROWS - 1, side);
-                let sd0 = w2s(wd0.x, wd0.y, sh, cam_x, cam_y);
-                let sd1 = w2s(wd1.x, wd1.y, sh, cam_x, cam_y);
-                let f0 = vec2(sd0.x, far_y);
-                let f1 = vec2(sd1.x, far_y);
-                verts.push(v(sd0, rock_dark)); verts.push(v(sd1, rock_dark)); verts.push(v(f1, rock_dark));
-                verts.push(v(sd0, rock_dark)); verts.push(v(f1, rock_dark)); verts.push(v(f0, rock_dark));
+                if !verts.is_empty() {
+                    let indices: Vec<u16> = (0..verts.len() as u16).collect();
+                    draw_mesh(&Mesh { vertices: verts, indices, texture: None });
+                }
             }
+        }
 
-            if !verts.is_empty() {
-                let indices: Vec<u16> = (0..verts.len() as u16).collect();
-                draw_mesh(&Mesh { vertices: verts, indices, texture: None });
+        // Vertical shaft walls — same faceted treatment rotated 90°: depth cols
+        // recede horizontally into the rock, rows run along y. Col 0 sits exactly
+        // on the wall polyline (= the colliders), and a solid fill extends past
+        // the deepest col to blend into the inter-layer rock fill.
+        for (&(s, _gap), shaft) in shafts.iter() {
+            for side in [0u8, 1u8] {
+                let pts = &shaft.walls[side as usize];
+                let dir = if side == 0 { -1.0f32 } else { 1.0 };
+                let edge_x = pts[0].x;
+                // Cull walls fully off-screen in x (facets + fill span ~16 m).
+                let sx0 = w2s(edge_x - 16.0, 0.0, sh, cam_x, cam_y).x;
+                let sx1 = w2s(edge_x + 16.0, 0.0, sh, cam_x, cam_y).x;
+                if sx0.min(sx1) > sw + margin || sx0.max(sx1) < -margin {
+                    continue;
+                }
+                let fill_x = edge_x + dir * 15.0;
+                let mut verts: Vec<Vertex> = Vec::new();
+                for i in 0..pts.len() - 1 {
+                    // Cull rows fully off-screen in y. Corner facets near the
+                    // shaft ends are pulled up to ROW_DEPTHS along the shaft,
+                    // so pad by ~8 m worth of pixels.
+                    let pad = 8.0 * view_scale;
+                    let sy0 = w2s(0.0, pts[i].y,     sh, cam_x, cam_y).y;
+                    let sy1 = w2s(0.0, pts[i + 1].y, sh, cam_x, cam_y).y;
+                    if sy0.max(sy1) < -pad || sy0.min(sy1) > sh + pad {
+                        continue;
+                    }
+                    let key = s.wrapping_mul(4096) ^ i as i64;
+                    for d in 0..N_ROWS - 1 {
+                        let w00 = shaft_lattice(pts, s, i,     d,     side);
+                        let w10 = shaft_lattice(pts, s, i + 1, d,     side);
+                        let w11 = shaft_lattice(pts, s, i + 1, d + 1, side);
+                        let w01 = shaft_lattice(pts, s, i,     d + 1, side);
+                        let s00 = w2s(w00.x, w00.y, sh, cam_x, cam_y);
+                        let s10 = w2s(w10.x, w10.y, sh, cam_x, cam_y);
+                        let s11 = w2s(w11.x, w11.y, sh, cam_x, cam_y);
+                        let s01 = w2s(w01.x, w01.y, sh, cam_x, cam_y);
+
+                        let base = match d { 0 => rock_edge, 1 => rock_mid, _ => rock_dark };
+                        let ca = facet_shade(base, key, d, 2 + side, 0);
+                        let cb = facet_shade(base, key, d, 2 + side, 0x5bd1_e995);
+
+                        if hash_u32(key as u32 ^ (d as u32).wrapping_mul(2654435761)) & 1 == 0 {
+                            verts.push(v(s00, ca)); verts.push(v(s10, ca)); verts.push(v(s11, ca));
+                            verts.push(v(s00, cb)); verts.push(v(s11, cb)); verts.push(v(s01, cb));
+                        } else {
+                            verts.push(v(s00, ca)); verts.push(v(s10, ca)); verts.push(v(s01, ca));
+                            verts.push(v(s10, cb)); verts.push(v(s11, cb)); verts.push(v(s01, cb));
+                        }
+                    }
+
+                    // Solid fill from the deepest col out into the rock.
+                    let wd0 = shaft_lattice(pts, s, i,     N_ROWS - 1, side);
+                    let wd1 = shaft_lattice(pts, s, i + 1, N_ROWS - 1, side);
+                    let sd0 = w2s(wd0.x, wd0.y, sh, cam_x, cam_y);
+                    let sd1 = w2s(wd1.x, wd1.y, sh, cam_x, cam_y);
+                    let f0 = w2s(fill_x, wd0.y, sh, cam_x, cam_y);
+                    let f1 = w2s(fill_x, wd1.y, sh, cam_x, cam_y);
+                    verts.push(v(sd0, rock_dark)); verts.push(v(sd1, rock_dark)); verts.push(v(f1, rock_dark));
+                    verts.push(v(sd0, rock_dark)); verts.push(v(f1, rock_dark)); verts.push(v(f0, rock_dark));
+                }
+
+                if !verts.is_empty() {
+                    let indices: Vec<u16> = (0..verts.len() as u16).collect();
+                    draw_mesh(&Mesh { vertices: verts, indices, texture: None });
+                }
             }
         }
 
@@ -841,7 +1093,7 @@ async fn main() {
         // deterministic per-facet brightness plus a fake top-light gradient, so
         // boulders read as low-poly rocks with brighter tops.
         const BEVEL: f32 = 16.0;
-        for (&k, ob) in obstacles.iter() {
+        for (&(k, _layer), ob) in obstacles.iter() {
             let (c, s) = (ob.rot.cos(), ob.rot.sin());
             let poly: Vec<Vec2> = ob.verts.iter().map(|p| {
                 let wx = ob.cx + p.x * c - p.y * s;
@@ -850,10 +1102,15 @@ async fn main() {
             }).collect();
             let center = w2s(ob.cx, ob.cy, sh, cam_x, cam_y);
 
-            // Cull obstacles fully off-screen.
+            // Cull obstacles fully off-screen (other layers' copies are ~V_PERIOD
+            // away in y, so the y check drops nearly all of them).
             let (mut minx, mut maxx) = (f32::INFINITY, f32::NEG_INFINITY);
-            for p in &poly { minx = minx.min(p.x); maxx = maxx.max(p.x); }
-            if maxx < -margin || minx > sw + margin {
+            let (mut miny, mut maxy) = (f32::INFINITY, f32::NEG_INFINITY);
+            for p in &poly {
+                minx = minx.min(p.x); maxx = maxx.max(p.x);
+                miny = miny.min(p.y); maxy = maxy.max(p.y);
+            }
+            if maxx < -margin || minx > sw + margin || maxy < -margin || miny > sh + margin {
                 continue;
             }
 
@@ -978,7 +1235,7 @@ async fn main() {
         smooth_fps += (get_fps() as f32 - smooth_fps) * 0.05;
         let cave_x = cam_x.rem_euclid(PERIOD);
         draw_text(
-            &format!("x={:.0}  {:.0}m/{}m   [R] reset   FPS: {:.0}", cam_x, cave_x, PERIOD as i32, smooth_fps),
+            &format!("x={:.0}  lvl={}  {:.0}m/{}m   [R] reset   FPS: {:.0}", cam_x, ship_layer, cave_x, PERIOD as i32, smooth_fps),
             safe_left + 10.0 * ui, safe_top + 206.0 * ui, 36.0 * ui, WHITE,
         );
 
@@ -1098,14 +1355,23 @@ async fn main() {
             mm_oy + mm_h - (wy - mm_world_y_min) / mm_y_range * mm_h
         };
 
-        // Fill with rock, carve cave interior columns sampled around ship
+        // The minimap shows the ship's CURRENT cave layer; positions are mapped
+        // into layer-0 space (all layers are identical copies anyway).
+        let rel_y = cam_y - ship_layer as f32 * V_PERIOD;
+
+        // Fill with rock, carve cave interior columns sampled around ship.
+        // Shaft openings carve the full column height (they run both up and down).
         draw_rectangle(mm_ox, mm_oy, mm_w, mm_h, rock_mid);
         let col_w = mm_w / MM_SAMPLES as f32 + 0.5;
         for i in 0..MM_SAMPLES {
             let x     = cam_x - MM_HALF_X + (i as f32 + 0.5) * (2.0 * MM_HALF_X) / MM_SAMPLES as f32;
+            let col_x = mm_ox + i as f32 / MM_SAMPLES as f32 * mm_w;
+            if seg_in_opening((x / SEG_LEN).floor() as i64) {
+                draw_rectangle(col_x, mm_oy, col_w, mm_h, Color::from_rgba(8, 8, 18, 220));
+                continue;
+            }
             let top   = cave_center(x) + cave_half_width(x);
             let bot   = cave_center(x) - cave_half_width(x);
-            let col_x = mm_ox + i as f32 / MM_SAMPLES as f32 * mm_w;
             let top_s = to_mm_y(top).clamp(mm_oy, mm_oy + mm_h);
             let bot_s = to_mm_y(bot).clamp(mm_oy, mm_oy + mm_h);
             draw_rectangle(col_x, top_s, col_w, bot_s - top_s, Color::from_rgba(8, 8, 18, 220));
@@ -1115,20 +1381,21 @@ async fn main() {
         let to_mm_x = |wx: f32| -> f32 {
             mm_ox + (wx - cam_x + MM_HALF_X) / (2.0 * MM_HALF_X) * mm_w
         };
-        for ob in obstacles.values() {
-            if (ob.cx - cam_x).abs() > MM_HALF_X + 6.0 {
+        for (&(_k, layer), ob) in obstacles.iter() {
+            if layer != ship_layer || (ob.cx - cam_x).abs() > MM_HALF_X + 6.0 {
                 continue;
             }
+            let ly = layer as f32 * V_PERIOD;
             let (c, s) = (ob.rot.cos(), ob.rot.sin());
             let mm_poly: Vec<Vec2> = ob.verts.iter().map(|p| {
                 let wx = ob.cx + p.x * c - p.y * s;
-                let wy = ob.cy + p.x * s + p.y * c;
+                let wy = ob.cy + p.x * s + p.y * c - ly;
                 vec2(
                     to_mm_x(wx).clamp(mm_ox, mm_ox + mm_w),
                     to_mm_y(wy).clamp(mm_oy, mm_oy + mm_h),
                 )
             }).collect();
-            let mc = vec2(to_mm_x(ob.cx), to_mm_y(ob.cy).clamp(mm_oy, mm_oy + mm_h));
+            let mc = vec2(to_mm_x(ob.cx), to_mm_y(ob.cy - ly).clamp(mm_oy, mm_oy + mm_h));
             let n = mm_poly.len();
             for i in 0..n {
                 draw_triangle(mc, mm_poly[i], mm_poly[(i + 1) % n], obs_fill);
@@ -1145,13 +1412,13 @@ async fn main() {
         let vp_hh   = sh / (2.0 * view_scale);
         let vp_mm_hw = vp_hw / MM_HALF_X * (mm_w / 2.0);
         let vp_cx   = mm_ox + mm_w / 2.0;
-        let vp_t    = to_mm_y(cam_y + vp_hh).clamp(mm_oy, mm_oy + mm_h);
-        let vp_b    = to_mm_y(cam_y - vp_hh).clamp(mm_oy, mm_oy + mm_h);
+        let vp_t    = to_mm_y(rel_y + vp_hh).clamp(mm_oy, mm_oy + mm_h);
+        let vp_b    = to_mm_y(rel_y - vp_hh).clamp(mm_oy, mm_oy + mm_h);
         draw_rectangle_lines(vp_cx - vp_mm_hw, vp_t, 2.0 * vp_mm_hw, vp_b - vp_t, 1.0,
             Color::from_rgba(255, 255, 255, 180));
 
-        // Ship dot — always at horizontal centre
-        draw_circle(vp_cx, to_mm_y(cam_y), 3.0, YELLOW);
+        // Ship dot — always at horizontal centre (clamped while up/down a shaft)
+        draw_circle(vp_cx, to_mm_y(rel_y).clamp(mm_oy, mm_oy + mm_h), 3.0, YELLOW);
 
         // Border
         draw_rectangle_lines(mm_ox, mm_oy, mm_w, mm_h, 1.0, Color::from_rgba(255, 255, 255, 120));

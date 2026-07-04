@@ -52,13 +52,16 @@ click doesn't bleed through to the canvas and fire the thruster.
 | `SCALE` | 80.0 | World-to-pixel ratio (physics/world units only — do **not** use for rendering) |
 | `SEG_LEN` | 3.0 | Cave segment length in world units |
 | `HALF_WINDOW` | 80 | Segments loaded each side of ship |
-| `PERIOD` | 600.0 | Cave repeat period in world units |
+| `PERIOD` | 600.0 | Cave repeat period in world units (x) |
+| `V_PERIOD` | 90.0 | Vertical repeat period (y): identical cave layers stack every 90 m |
+| `SHAFT_SPACING_SEGS` | 50 | Vertical shaft slot every 50 segments = 150 m (4 per `PERIOD`) |
+| `SHAFT_OPEN_SEGS` | 3 | Shaft opening width: 3 segments = 9 m |
 | `SHIP_SCALE` | 1.5 | Render scale multiplier applied inside the `rot` closure — makes the ship visually 1.5× larger than the raw SWF coordinates without touching `SHIP_TRIS`/`SHIP_DETAILS` |
 
 ## Rendering architecture
 - **World-to-screen**: a per-frame closure `w2s` (defined inside the `loop {}`, shadows the removed module-level function) converts world coords to screen pixels using `view_scale`.
 - **`view_scale`**: `SCALE * 0.38` on small screens (`sw.min(sh) < 600px`, i.e. mobile in either orientation), `SCALE` on desktop. Controls zoom; HUD/minimap are unaffected. Keyed on the *smaller* dimension (not `sw`) so a phone keeps the same zoom across portrait/landscape — using `sw` alone made landscape flip to desktop zoom and appear zoomed-in.
-- **Cave walls**: drawn as **low-poly faceted** triangle meshes — two `draw_mesh` calls per frame (one ceiling, one floor), each a continuous lattice of flat-shaded triangles. See "Faceted wall rendering" below. Per-facet base colors carry deterministic brightness jitter; radial lighting is added on top by the fragment shader.
+- **Cave walls**: drawn as **low-poly faceted** triangle meshes — one `draw_mesh` per (layer, side) for the up-to-3 loaded cave layers (y-culled), plus one per loaded shaft wall. Each mesh is a continuous lattice of flat-shaded triangles. See "Faceted wall rendering" and "Vertical shafts" below. Per-facet base colors carry deterministic brightness jitter; radial lighting is added on top by the fragment shader.
 - **Radial light shader** (`LIGHT_VERTEX` / `LIGHT_FRAGMENT` constants): a custom macroquad `Material` active only during the cave-wall and obstacle draws (`gl_use_material` / `gl_use_default_material`). Computes per-pixel radial falloff from the ship's screen position. Uniforms set each frame: `ship_pos` (vec2), `light_radius` (float), `glow` (float).
 - **Shader math**: `ambient = 0.45`, quadratic falloff `t*t`, *subtle* warm orange tint `glow * falloff * 0.12` added to red (×1.0) and green (×0.4) — kept low so the cool slate rock stays blue with only a faint thruster flush. `light_radius = min(sw,sh) * 0.55 + glow * min(sw,sh) * 0.30`.
 - Stars, particles, ship, HUD text, and minimap all use the default macroquad material — the radial shader does not affect them.
@@ -116,31 +119,86 @@ otherwise interpolate); triangles therefore use duplicated, non-shared vertices
 with trivial sequential indices `(0..len)`.
 
 ### The lattice (module-level, near `hash_u32`)
-- `SUBCOLS = 3` sub-columns per 3 m segment → ~1 m facets; `COL_DX = SEG_LEN/SUBCOLS`.
+- `SUBCOLS = 2` sub-columns per 3 m segment → 1.5 m facets; `COL_DX = SEG_LEN/SUBCOLS`.
 - `col_x(col)` — world x of a **global** facet column. *Pure* function of the
   global column index, so adjacent segments compute their shared boundary vertex
-  identically → **no seams/cracks**. The visible column range comes from the
-  `cave` deque (`col_lo = front.idx*SUBCOLS`, `col_hi = (back.idx+1)*SUBCOLS`).
-- `ROW_DEPTHS = [0.0, 0.45, 1.1, 2.2]` m into the rock; `N_ROWS = 4`.
-- `lattice_point(col, row, side)` → world `Vec2`. **Row 0 is exactly on the wall
-  edge with ZERO jitter** (collider-aligned — the hard rule below); deeper rows
-  recede into the rock (ceiling = +y, floor = −y) with small deterministic jitter
-  (`hash_u32` of col/row/side; ±0.25 m in x, depth-scaled in y).
+  identically → **no seams/cracks**. The visible column range is
+  `col_lo = want_left*SUBCOLS`, `col_hi = (want_right+1)*SUBCOLS`.
+- `ROW_DEPTHS = [0.0, 1.0, 3.0, 6.5]` m into the rock; `N_ROWS = 4`.
+- `lattice_point(col, row, side)` → world `Vec2` (layer-0 space; the draw loop
+  adds `layer * V_PERIOD` to y). **Row 0 is exactly on the wall edge with ZERO
+  jitter** (collider-aligned — the hard rule below); deeper rows recede into the
+  rock (ceiling = +y, floor = −y) with small deterministic jitter (`hash_u32` of
+  col/row/side; ±0.25 m in x, depth-scaled in y).
 - `facet_shade(base, col, row, side, salt)` → band base color (`row 0→rock_edge`,
   `1→rock_mid`, else `rock_dark`) × deterministic brightness in ~[0.82, 1.12].
+  Shaft walls reuse it with `side` 2 (left) / 3 (right).
 
 ### Per-column emission (in the draw loop)
-For each visible column (x-culled vs `margin`): for each of the `N_ROWS-1` cells,
+Runs once per loaded layer (`lay_lo..=lay_hi`, y-culled). For each visible
+column (x-culled vs `margin`; **skipped entirely inside shaft openings** —
+`seg_in_opening(col.div_euclid(SUBCOLS))`): for each of the `N_ROWS-1` cells,
 take the 4 corner `lattice_point`s → `w2s` → **2 flat-shaded triangles**, each its
 own shade (two `salt`s per cell). The cell diagonal is chosen by
 `hash_u32(col ^ row*…) & 1` so the lattice doesn't read as a regular grid. After
-the rows, a solid `rock_dark` quad (2 tris) fills from the deepest row out to
-`far_up`/`far_down`.
+the rows, a solid `rock_dark` quad (2 tris) — emitted with the **ceiling** side
+only — closes the inter-layer rock from this layer's deepest ceiling row up to
+the **next layer's** deepest floor row (world-bounded; the old screen-space
+`far_up`/`far_down` fill is gone). Its cull band is padded ±15 m past the layer
+lines because the wall curves reach ~13 m past them.
 
 **Collider-alignment rule (unchanged):** the lit row-0 surface must coincide with
 the Rapier segment collider. Only rows > 0 (inside the rock) may be jittered.
 `w2s` inverts Y, so "into the rock" is screen-Y − for the ceiling and screen-Y +
 for the floor; jitter always pushes *away* from the cave interior.
+
+## Vertical shafts (y-wrap)
+
+The world repeats every `V_PERIOD = 90 m` in y: identical copies of the cave
+stack vertically, connected by **vertical shafts** that punch through ceiling +
+floor at deterministic x positions. A shaft is a continuous vertical tunnel
+crossing every layer, so climbing (or falling) one always brings you back to
+"the same" cave — the vertical analogue of the `PERIOD` x-wrap. The ship's y
+just grows; nothing teleports. HUD shows the current layer as `lvl=N`
+(`ship_layer = round(cam_y / V_PERIOD)`).
+
+### Placement (all pure functions, near `insert_seg`)
+- `shaft_open_seg(s)` — opening start segment for slot `s`: every
+  `SHAFT_SPACING_SEGS = 50` segments, anchored at `SHAFT_BASE_SEG = 35`, ±6 segs
+  jitter hashed on `s mod 4` so the pattern repeats **exactly** each `PERIOD`
+  (both wraps stay seamless). Openings land at x ≈ 123, 264, 387, 555 (mod 600)
+  — verified clear of spawn x=0 and reset x=64.
+- `seg_in_opening(idx)` — true for the 3 opening segments; there `insert_seg`
+  emits **no** ceiling/floor colliders and the wall renderer skips the columns.
+- `shaft_wall_x(s, side, t)` — wall x at normalized height t: two sine harmonics
+  (±1.25 m, phases hashed on `s mod 4`) under an envelope that is **zero at both
+  ends**, pinning the wall exactly to the opening edges. Min width ≥ 6.5 m.
+- `shaft_wall_pts(s, gap, side)` — polyline (3 m steps) from layer `gap`'s
+  ceiling curve to layer `gap+1`'s floor curve **at the opening-edge x**, so the
+  wall's endpoints coincide with the clipped cave colliders' endpoints — the
+  collider chain through a junction is gap-free by construction.
+- `shaft_lattice(pts, s, i, d, side)` — facet lattice: depth col 0 = the
+  polyline (collider-aligned), deeper cols recede horizontally into the rock.
+  Near the ends deep cols are additionally pulled *along* the shaft (`end_pull`)
+  so corner facets turn into the junction wedge instead of poking into the cave.
+
+### Loading (main loop)
+- Cave segments: `HashMap<(layer, idx), Vec<ColliderHandle>>` — 2D sliding
+  window, layers `ship_layer ± 1` × segments `want_left..=want_right`
+  (`retain` + `entry().or_insert_with()` each frame; empty Vec = opening).
+- Shafts: `HashMap<(slot, gap), Shaft>` for gaps `{ship_layer-1, ship_layer}` —
+  covers everything reachable within half a period. `Shaft` stores collider
+  handles + both wall polylines for rendering.
+- There is no startup seeding — the first frame's physics tick runs with no
+  colliders (harmless) and the window sync fills everything before drawing.
+
+### Rendering
+Same faceted treatment as the cave walls rotated 90° (rows along y, depth cols
+into rock ±x), one mesh per wall, same light shader. A solid fill extends from
+the deepest col to ~15 m past the opening edge, overlapping the inter-layer fill
+(same `rock_dark`, invisible seam). Row y-cull is padded by 8 m (`end_pull`
+reach). Obstacles are **skipped within 8 m of an opening** so junctions stay
+flyable, and the minimap carves shaft columns full-height.
 
 ## Polygon obstacle system
 
@@ -149,7 +207,7 @@ Random convex-polygon boulders are placed deterministically along the cave so th
 ### Generation
 - `OBSTACLE_SPACING = 16.0 m` between slots. Each slot `k` maps to a fixed world-x position plus ±3 m jitter.
 - A tiny integer-hash PRNG (`Rng` struct, seeded by slot index) drives all randomness: position jitter, size, rotation, vertex count, vertex radii.
-- Slot is skipped if: `cx.abs() < 9.0` (spawn-clear zone), `hw < 4.5` (pinch point), or 1-in-6 random empty.
+- Slot is skipped if: `cx.abs() < 9.0` (spawn-clear zone), `hw < 4.5` (pinch point), within 8 m of a shaft opening (junctions stay flyable), or 1-in-6 random empty.
 - Size: `max_r = (hw * 0.65).min(5.5)`, `r = rng.range(0.3, 1.0) * max_r`. Wide sections get genuine boulders (up to 5.5 m radius).
 - Centre offset: `max_off = (hw - r - 1.3).max(0.0)` — guarantees ≥ 1.3 m gap to the nearer wall.
 
@@ -176,10 +234,16 @@ across a facet), emitted with sequential indices. The per-facet color =
   screen-y grows downward), giving the lit-top "faceted ball" appearance.
 
 ### Minimap
-Obstacles are drawn on the minimap as their actual polygon shape (triangle fan + outline) projected into minimap space, not as dots.
+The minimap always shows the ship's **current layer** mapped into layer-0 space
+(`rel_y = cam_y - ship_layer * V_PERIOD`; ship dot clamped while in a shaft).
+Obstacles are drawn as their actual polygon shape (triangle fan + outline)
+projected into minimap space, not as dots — filtered to the current layer.
 
 ### Storage
-`HashMap<i64, Obstacle>` keyed by slot index. Load/evict each frame in sync with the wall window (`k_left` / `k_right` derived from `want_left` / `want_right`).
+`HashMap<(i64, i64), Obstacle>` keyed by (slot index, layer) — every layer gets
+an identical copy of each obstacle at `cy + layer * V_PERIOD` (the y-wrap).
+Load/evict each frame in sync with the wall window (`k_left` / `k_right` derived
+from `want_left` / `want_right`, layers `ship_layer ± 1`).
 
 ## Color / rendering alignment rule
 
@@ -197,12 +261,12 @@ The ship uses a **compound collider** of three **capsules** (stadium shapes) par
 - **Left leg pod**: `capsule((−0.26, −0.30), (−0.33, −0.64), r=0.09)` — angled out to the foot.
 - **Right leg pod**: `capsule((+0.26, −0.30), (+0.33, −0.64), r=0.09)` — mirror.
 
-Each is built `ColliderBuilder::new(SharedShape::capsule(a, b, r)).restitution(0.2)` (`SharedShape`, `point!` from `rapier2d::prelude::*`). Rapier 2D has **no ellipse primitive** — capsule is the smooth-rounded alternative; for an even tighter (but faceted) fit you could use `convex_hull` of the `SHIP_TRIS` vertices, at the cost of filling the concave notch between the feet. Cave walls are `segment` colliders (zero thickness). The ship (max ~17 m/s under normal thrust) never tunnels through walls — CCD is not necessary.
+Each is built `ColliderBuilder::new(SharedShape::capsule(a, b, r)).restitution(0.2)` (`SharedShape`, `point!` from `rapier2d::prelude::*`). Rapier 2D has **no ellipse primitive** — capsule is the smooth-rounded alternative; for an even tighter (but faceted) fit you could use `convex_hull` of the `SHIP_TRIS` vertices, at the cost of filling the concave notch between the feet. Cave walls are `segment` colliders (zero thickness). The body has `ccd_enabled(true)`, which matters more now: a long free-fall down a vertical shaft can pass 50 m/s, far above the ~17 m/s of normal cave flight.
 
 **RCS / attitude thrusters** (cosmetic particles, `kind 1/2`): bottom nozzles flanking the main booster vent **downward** (like a mini main thruster). Turning **left** → left nozzle at scaled-local `(−0.30, −0.71)`; turning **right** → right nozzle at `(0.30, −0.71)`. Gas exits `−Y` (downward) from both. The x positions sit in the leg nozzle (gold accent: unscaled x ≈ ±0.152–0.249 → midpoint ±0.30 scaled). Emission coords are in **scaled world units** — `lp()`/`ld()` do **not** apply `SHIP_SCALE` (only the render-time `rot` closure does), so don't multiply these by `SHIP_SCALE` (an earlier bug double-scaled them to ±0.60 and spawned the puffs outside the hull).
 
 ## Git workflow
-- Development branch: `claude/vector-spaceship-extraction-njnuoq` (current); previous: `claude/walls-obstacles-appearance-qj1rpp`
+- Development branch: `claude/vertical-wrapping-caves-csv79r` (current); previous: `claude/vector-spaceship-extraction-njnuoq`
 - Merges to `main` via rebase PRs using the GitHub MCP tools (`mcp__github__create_pull_request`, `mcp__github__merge_pull_request`).
 - Branch consistently diverges from main after merges — always `git fetch origin main && git rebase origin/main && git push --force-with-lease` before creating a PR to avoid merge conflicts.
 - The wasm binary (`rapier-test.wasm`) conflicts on every rebase — always resolve by rebuilding from source: `cargo build --release --target wasm32-unknown-unknown && cp target/wasm32-unknown-unknown/release/rapier-test.wasm rapier-test.wasm`, then `git add rapier-test.wasm` before `git rebase --continue`.
