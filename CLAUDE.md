@@ -198,7 +198,7 @@ into rock ±x), one mesh per wall, same light shader. A solid fill extends from
 the deepest col to ~15 m past the opening edge, overlapping the inter-layer fill
 (same `rock_dark`, invisible seam). Row y-cull is padded by 8 m (`end_pull`
 reach). Obstacles are **skipped within 8 m of an opening** so junctions stay
-flyable, and the minimap carves shaft columns full-height.
+flyable, and the minimap carves shafts with their true wall shape.
 
 ## Polygon obstacle system
 
@@ -234,10 +234,14 @@ across a facet), emitted with sequential indices. The per-facet color =
   screen-y grows downward), giving the lit-top "faceted ball" appearance.
 
 ### Minimap
-The minimap always shows the ship's **current layer** mapped into layer-0 space
-(`rel_y = cam_y - ship_layer * V_PERIOD`; ship dot clamped while in a shaft).
-Obstacles are drawn as their actual polygon shape (triangle fan + outline)
-projected into minimap space, not as dots — filtered to the current layer.
+The minimap is a ship-centred window that pans in **both axes** (`MM_HALF_X =
+150 m`, `MM_HALF_Y = 50 m` — chosen so x and y share the same world-per-pixel
+scale on the 480×160 map; ship dot and viewport rect always sit at the centre).
+Cave interiors are carved per x-sample column for every layer in view; shafts
+are carved with their **true wall shape** by evaluating `shaft_wall_x` /
+junction curves directly (16 trapezoid steps) — the map is a genuinely
+zoomed-out view of the real geometry, not a schematic. Obstacles are drawn as
+their actual polygon shape (triangle fan + outline), filtered by the y window.
 
 ### Storage
 `HashMap<(i64, i64), Obstacle>` keyed by (slot index, layer) — every layer gets
