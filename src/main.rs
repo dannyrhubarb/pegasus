@@ -716,18 +716,11 @@ async fn main() {
     let mut particles: Vec<Particle> = Vec::with_capacity(512);
     let mut smooth_fps = 60.0f32;
 
-    // Pre-compute Y extents over one full period for minimap scaling
+    // Minimap window: world metres shown around the ship. MM_HALF_Y keeps the
+    // same world-per-pixel scale as x (map is 480×160 px → 3:1, 300×100 m).
     const MM_SAMPLES: usize = 300;
-    let (mm_world_y_min, mm_world_y_max) = (0..MM_SAMPLES).fold(
-        (f32::INFINITY, f32::NEG_INFINITY),
-        |(lo, hi), i| {
-            let x  = i as f32 * PERIOD / MM_SAMPLES as f32;
-            let cy = cave_center(x);
-            let hw = cave_half_width(x);
-            (lo.min(cy - hw - 3.0), hi.max(cy + hw + 3.0))
-        },
-    );
-    const MM_HALF_X: f32 = 150.0; // world metres shown each side of ship
+    const MM_HALF_X: f32 = 150.0;
+    const MM_HALF_Y: f32 = 50.0;
 
     let rock_dark = Color::from_rgba(28,  38,  58,  255); // deep navy-slate
     let rock_mid  = Color::from_rgba(52,  68,  96,  255); // mid slate-blue
@@ -1343,59 +1336,98 @@ async fn main() {
             rb.set_rotation(Rotation::new(0.0), true);
         }
 
-        // --- Minimap (ship always centred) ---
+        // --- Minimap (ship always centred; pans in BOTH axes) ---
         let mm_w = 480.0f32 * ui;
         let mm_h = 160.0f32 * ui;
         let mm_ox = safe_left + 10.0f32 * ui;
         let mm_oy = safe_top + 10.0f32 * ui;
-        let mm_y_range = mm_world_y_max - mm_world_y_min;
+        let mm_dark = Color::from_rgba(8, 8, 18, 220);
 
-        // World → minimap: X is relative to ship, Y uses global extents
+        // World → minimap, both axes relative to the ship.
+        let to_mm_x = |wx: f32| -> f32 {
+            mm_ox + (wx - cam_x + MM_HALF_X) / (2.0 * MM_HALF_X) * mm_w
+        };
         let to_mm_y = |wy: f32| -> f32 {
-            mm_oy + mm_h - (wy - mm_world_y_min) / mm_y_range * mm_h
+            mm_oy + mm_h - (wy - cam_y + MM_HALF_Y) / (2.0 * MM_HALF_Y) * mm_h
         };
 
-        // The minimap shows the ship's CURRENT cave layer; positions are mapped
-        // into layer-0 space (all layers are identical copies anyway).
-        let rel_y = cam_y - ship_layer as f32 * V_PERIOD;
-
-        // Fill with rock, carve cave interior columns sampled around ship.
-        // Shaft openings carve the full column height (they run both up and down).
+        // Fill with rock, then carve the cave interior of every layer in view,
+        // sampled in columns around the ship.
         draw_rectangle(mm_ox, mm_oy, mm_w, mm_h, rock_mid);
         let col_w = mm_w / MM_SAMPLES as f32 + 0.5;
         for i in 0..MM_SAMPLES {
             let x     = cam_x - MM_HALF_X + (i as f32 + 0.5) * (2.0 * MM_HALF_X) / MM_SAMPLES as f32;
             let col_x = mm_ox + i as f32 / MM_SAMPLES as f32 * mm_w;
-            if seg_in_opening((x / SEG_LEN).floor() as i64) {
-                draw_rectangle(col_x, mm_oy, col_w, mm_h, Color::from_rgba(8, 8, 18, 220));
+            let c  = cave_center(x);
+            let hw = cave_half_width(x);
+            for layer in (ship_layer - 1)..=(ship_layer + 1) {
+                let ly = layer as f32 * V_PERIOD;
+                let top_s = to_mm_y(ly + c + hw).clamp(mm_oy, mm_oy + mm_h);
+                let bot_s = to_mm_y(ly + c - hw).clamp(mm_oy, mm_oy + mm_h);
+                if bot_s > top_s {
+                    draw_rectangle(col_x, top_s, col_w, bot_s - top_s, mm_dark);
+                }
+            }
+        }
+
+        // Carve the vertical shafts with their true wall shape — evaluated from
+        // the same pure functions as the world geometry, so the minimap is a
+        // genuinely zoomed-out view (wiggles, junction heights and all).
+        const MM_SHAFT_STEPS: usize = 16;
+        let slot_w = SHAFT_SPACING_SEGS as f32 * SEG_LEN;
+        let s_mm_lo = ((cam_x - MM_HALF_X) / slot_w).floor() as i64 - 1;
+        let s_mm_hi = ((cam_x + MM_HALF_X) / slot_w).ceil()  as i64 + 1;
+        let gap_lo = ((cam_y - MM_HALF_Y - 10.0) / V_PERIOD).floor() as i64;
+        let gap_hi = ((cam_y + MM_HALF_Y + 10.0) / V_PERIOD).floor() as i64;
+        for s in s_mm_lo..=s_mm_hi {
+            let o = shaft_open_seg(s);
+            let (xl, xr) = (o as f32 * SEG_LEN, (o + SHAFT_OPEN_SEGS) as f32 * SEG_LEN);
+            if xr < cam_x - MM_HALF_X - 2.0 || xl > cam_x + MM_HALF_X + 2.0 {
                 continue;
             }
-            let top   = cave_center(x) + cave_half_width(x);
-            let bot   = cave_center(x) - cave_half_width(x);
-            let top_s = to_mm_y(top).clamp(mm_oy, mm_oy + mm_h);
-            let bot_s = to_mm_y(bot).clamp(mm_oy, mm_oy + mm_h);
-            draw_rectangle(col_x, top_s, col_w, bot_s - top_s, Color::from_rgba(8, 8, 18, 220));
+            // Per-side junction offsets within a layer (same as shaft_wall_pts).
+            let (jbl, jtl) = (cave_center(xl) + cave_half_width(xl), cave_center(xl) - cave_half_width(xl));
+            let (jbr, jtr) = (cave_center(xr) + cave_half_width(xr), cave_center(xr) - cave_half_width(xr));
+            for gap in gap_lo..=gap_hi {
+                let (gy0, gy1) = (gap as f32 * V_PERIOD, (gap + 1) as f32 * V_PERIOD);
+                let mm_pt = |side: u8, t: f32| -> Vec2 {
+                    let (y0, y1) = if side == 0 { (gy0 + jbl, gy1 + jtl) } else { (gy0 + jbr, gy1 + jtr) };
+                    vec2(
+                        to_mm_x(shaft_wall_x(s, side, t)).clamp(mm_ox, mm_ox + mm_w),
+                        to_mm_y(y0 + (y1 - y0) * t).clamp(mm_oy, mm_oy + mm_h),
+                    )
+                };
+                for k in 0..MM_SHAFT_STEPS {
+                    let t0 = k as f32 / MM_SHAFT_STEPS as f32;
+                    let t1 = (k + 1) as f32 / MM_SHAFT_STEPS as f32;
+                    let a = mm_pt(0, t0);
+                    let b = mm_pt(1, t0);
+                    let c = mm_pt(1, t1);
+                    let d = mm_pt(0, t1);
+                    // Cells fully clamped to the top/bottom edge are degenerate
+                    // (zero height) and draw nothing — no need to cull.
+                    draw_triangle(a, b, c, mm_dark);
+                    draw_triangle(a, c, d, mm_dark);
+                }
+            }
         }
 
         // Obstacle shapes on the minimap — actual polygon, not just a dot.
-        let to_mm_x = |wx: f32| -> f32 {
-            mm_ox + (wx - cam_x + MM_HALF_X) / (2.0 * MM_HALF_X) * mm_w
-        };
-        for (&(_k, layer), ob) in obstacles.iter() {
-            if layer != ship_layer || (ob.cx - cam_x).abs() > MM_HALF_X + 6.0 {
+        // All loaded layers; the y window filters to what's actually in view.
+        for ob in obstacles.values() {
+            if (ob.cx - cam_x).abs() > MM_HALF_X + 6.0 || (ob.cy - cam_y).abs() > MM_HALF_Y + 6.0 {
                 continue;
             }
-            let ly = layer as f32 * V_PERIOD;
             let (c, s) = (ob.rot.cos(), ob.rot.sin());
             let mm_poly: Vec<Vec2> = ob.verts.iter().map(|p| {
                 let wx = ob.cx + p.x * c - p.y * s;
-                let wy = ob.cy + p.x * s + p.y * c - ly;
+                let wy = ob.cy + p.x * s + p.y * c;
                 vec2(
                     to_mm_x(wx).clamp(mm_ox, mm_ox + mm_w),
                     to_mm_y(wy).clamp(mm_oy, mm_oy + mm_h),
                 )
             }).collect();
-            let mc = vec2(to_mm_x(ob.cx), to_mm_y(ob.cy - ly).clamp(mm_oy, mm_oy + mm_h));
+            let mc = vec2(to_mm_x(ob.cx), to_mm_y(ob.cy).clamp(mm_oy, mm_oy + mm_h));
             let n = mm_poly.len();
             for i in 0..n {
                 draw_triangle(mc, mm_poly[i], mm_poly[(i + 1) % n], obs_fill);
@@ -1407,18 +1439,18 @@ async fn main() {
             }
         }
 
-        // Viewport rectangle — always centred horizontally, Y follows ship
+        // Viewport rectangle — ship-centred in both axes, like the map itself
         let vp_hw   = sw / (2.0 * view_scale);
         let vp_hh   = sh / (2.0 * view_scale);
         let vp_mm_hw = vp_hw / MM_HALF_X * (mm_w / 2.0);
-        let vp_cx   = mm_ox + mm_w / 2.0;
-        let vp_t    = to_mm_y(rel_y + vp_hh).clamp(mm_oy, mm_oy + mm_h);
-        let vp_b    = to_mm_y(rel_y - vp_hh).clamp(mm_oy, mm_oy + mm_h);
-        draw_rectangle_lines(vp_cx - vp_mm_hw, vp_t, 2.0 * vp_mm_hw, vp_b - vp_t, 1.0,
+        let vp_mm_hh = vp_hh / MM_HALF_Y * (mm_h / 2.0);
+        let (mm_cx, mm_cy) = (mm_ox + mm_w / 2.0, mm_oy + mm_h / 2.0);
+        draw_rectangle_lines(mm_cx - vp_mm_hw, mm_cy - vp_mm_hh,
+            2.0 * vp_mm_hw, 2.0 * vp_mm_hh, 1.0,
             Color::from_rgba(255, 255, 255, 180));
 
-        // Ship dot — always at horizontal centre (clamped while up/down a shaft)
-        draw_circle(vp_cx, to_mm_y(rel_y).clamp(mm_oy, mm_oy + mm_h), 3.0, YELLOW);
+        // Ship dot — map centre
+        draw_circle(mm_cx, mm_cy, 3.0, YELLOW);
 
         // Border
         draw_rectangle_lines(mm_ox, mm_oy, mm_w, mm_h, 1.0, Color::from_rgba(255, 255, 255, 120));
