@@ -788,8 +788,11 @@ async fn main() {
     );
 
     let gravity = vector![0.0, -1.62];
-    let mut integration_params = IntegrationParameters::default();
-    integration_params.num_solver_iterations = std::num::NonZeroUsize::new(8).unwrap();
+    let integration_params = IntegrationParameters {
+        dt: PHYSICS_DT,
+        num_solver_iterations: std::num::NonZeroUsize::new(8).unwrap(),
+        ..Default::default()
+    };
     let mut physics_pipeline = PhysicsPipeline::new();
     let mut island_manager = IslandManager::new();
     let mut broad_phase = DefaultBroadPhase::new();
@@ -849,7 +852,6 @@ async fn main() {
         play_sound(s, PlaySoundParams { looped: true, volume: 0.0 });
     }
 
-    integration_params.dt = PHYSICS_DT;
     let mut phys_accum = 0.0f32;
     // Ship state at the previous physics step, for render interpolation.
     let mut prev_ship = (0.0f32, cave_center(0.0), 0.0f32); // x, y, angle
@@ -1425,7 +1427,7 @@ async fn main() {
         smooth_fps += (get_fps() as f32 - smooth_fps) * 0.05;
         let cave_x = cam_x.rem_euclid(PERIOD);
         draw_text(
-            &format!("x={:.0}  lvl={}  {:.0}m/{}m   [R] reset   FPS: {:.0}", cam_x, ship_layer, cave_x, PERIOD as i32, smooth_fps),
+            format!("x={:.0}  lvl={}  {:.0}m/{}m   [R] reset   FPS: {:.0}", cam_x, ship_layer, cave_x, PERIOD as i32, smooth_fps),
             safe_left + 10.0 * ui, safe_top + 232.0 * ui, 36.0 * ui, WHITE,
         );
 
