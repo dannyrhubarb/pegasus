@@ -1702,3 +1702,162 @@ async fn main() {
         next_frame().await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The whole world is pure functions of position/slot index. These tests
+    // pin the invariants the rendering and collision code rely on.
+
+    #[test]
+    fn cave_repeats_every_period() {
+        for i in 0..200 {
+            let x = i as f32 * 3.7 - 300.0;
+            assert!((cave_center(x + PERIOD) - cave_center(x)).abs() < 1e-3);
+            assert!((cave_half_width(x + PERIOD) - cave_half_width(x)).abs() < 1e-3);
+        }
+    }
+
+    #[test]
+    fn cave_never_pinches_shut() {
+        for i in 0..6000 {
+            let x = i as f32 * 0.1;
+            assert!(cave_half_width(x) > 1.0, "cave too narrow at x={x}");
+        }
+    }
+
+    #[test]
+    fn lattice_row0_is_exactly_on_the_collider_line() {
+        // The hard rendering rule: row 0 must coincide with the wall edge that
+        // the segment colliders are built from — bit-exact, no jitter.
+        for col in -500..500 {
+            let x = col_x(col);
+            let top = lattice_point(col, 0, 0);
+            let bot = lattice_point(col, 0, 1);
+            assert_eq!(top, vec2(x, cave_center(x) + cave_half_width(x)));
+            assert_eq!(bot, vec2(x, cave_center(x) - cave_half_width(x)));
+        }
+    }
+
+    #[test]
+    fn lattice_jitter_only_goes_into_the_rock() {
+        for col in -200..200 {
+            for row in 1..N_ROWS {
+                let top = lattice_point(col, row, 0);
+                let bot = lattice_point(col, row, 1);
+                let edge_top = lattice_point(col, 0, 0).y;
+                let edge_bot = lattice_point(col, 0, 1).y;
+                assert!(top.y > edge_top, "ceiling row {row} pokes into the cave");
+                assert!(bot.y < edge_bot, "floor row {row} pokes into the cave");
+            }
+        }
+    }
+
+    #[test]
+    fn obstacles_are_deterministic() {
+        for k in -50..50 {
+            let (a, b) = (obstacle_spec(k), obstacle_spec(k));
+            match (a, b) {
+                (None, None) => {}
+                (Some(a), Some(b)) => {
+                    assert_eq!(a.cx, b.cx);
+                    assert_eq!(a.cy, b.cy);
+                    assert_eq!(a.rot, b.rot);
+                    assert_eq!(a.pts, b.pts);
+                }
+                _ => panic!("slot {k} not deterministic"),
+            }
+        }
+    }
+
+    #[test]
+    fn obstacles_keep_clear_of_spawn_reset_and_walls() {
+        for k in -200..200 {
+            let Some(spec) = obstacle_spec(k) else { continue };
+            assert!(spec.cx.abs() >= 9.0, "slot {k} too close to spawn");
+            assert!((spec.cx - RESET_X).abs() >= 9.0, "slot {k} too close to reset");
+            // Documented invariant: >= 1.3 m gap to the nearer wall.
+            let max_r = spec
+                .pts
+                .iter()
+                .map(|p| (p.x * p.x + p.y * p.y).sqrt())
+                .fold(0.0f32, f32::max);
+            let off = (spec.cy - cave_center(spec.cx)).abs();
+            let hw = cave_half_width(spec.cx);
+            assert!(
+                off + max_r <= hw - 1.3 + 1e-3,
+                "slot {k}: gap {} < 1.3 m",
+                hw - off - max_r
+            );
+        }
+    }
+
+    #[test]
+    fn shaft_pattern_repeats_every_period() {
+        // 4 slots per PERIOD (50 segs * 3 m * 4 = 600 m): slot s+4 must be the
+        // exact translate of slot s so the x-wrap stays seamless.
+        for s in -8..8 {
+            assert_eq!(
+                shaft_open_seg(s + 4),
+                shaft_open_seg(s) + 4 * SHAFT_SPACING_SEGS
+            );
+            for side in [0u8, 1] {
+                for i in 0..=10 {
+                    let t = i as f32 / 10.0;
+                    let dx = shaft_wall_x(s + 4, side, t) - shaft_wall_x(s, side, t);
+                    assert!((dx - PERIOD).abs() < 1e-3);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shaft_openings_match_wall_gaps() {
+        for s in -8..8 {
+            let o = shaft_open_seg(s);
+            assert!(!seg_in_opening(o - 1));
+            for idx in o..o + SHAFT_OPEN_SEGS {
+                assert!(seg_in_opening(idx), "segment {idx} of shaft {s} has a wall");
+            }
+            assert!(!seg_in_opening(o + SHAFT_OPEN_SEGS));
+        }
+    }
+
+    #[test]
+    fn shafts_stay_flyable() {
+        // Opening is 9 m; the wiggle envelope must leave >= 6.5 m of width.
+        for s in 0..4 {
+            for i in 0..=100 {
+                let t = i as f32 / 100.0;
+                let width = shaft_wall_x(s, 1, t) - shaft_wall_x(s, 0, t);
+                assert!(width >= 6.5 - 1e-3, "shaft {s} narrows to {width} at t={t}");
+            }
+        }
+    }
+
+    #[test]
+    fn rng_is_deterministic_and_in_range() {
+        let (mut a, mut b) = (Rng::new(42), Rng::new(42));
+        for _ in 0..1000 {
+            let u = a.unit();
+            assert_eq!(u, b.unit());
+            assert!((0.0..1.0).contains(&u));
+        }
+        let mut r = Rng::new(7);
+        for _ in 0..1000 {
+            let v = r.range_int(3, 9);
+            assert!((3..=9).contains(&v));
+        }
+    }
+
+    #[test]
+    fn wav_header_is_well_formed() {
+        let wav = wav_from_samples(&[0i16; 100], AUDIO_RATE);
+        assert_eq!(wav.len(), 44 + 200);
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..16], b"WAVEfmt ");
+        assert_eq!(&wav[36..40], b"data");
+        assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 200);
+    }
+}
