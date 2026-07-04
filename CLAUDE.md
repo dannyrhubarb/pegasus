@@ -6,7 +6,8 @@ Rust + macroquad 0.4.15 + Rapier 2D game compiled to WebAssembly and served via 
 
 ## Build & deploy
 ```bash
-cargo build          # native dev build (quick sanity check)
+cargo build          # native dev build (quick sanity check; silent — audio is wasm-only)
+cargo test           # unit tests for the deterministic world functions
 ```
 Deploy is automatic: any push to `main` triggers the GitHub Actions workflow `.github/workflows/deploy.yml` which builds the WASM target and publishes to GitHub Pages. Build takes ~5–10 minutes.
 
@@ -257,6 +258,18 @@ on the wall edge; only deeper rows (inside the rock) are displaced. For obstacle
 the outer `poly` ring stays the exact hull. All facet displacement goes *into the
 rock* (away from the cave interior), never into the cave — otherwise the visible
 surface pokes past the collider and the ship appears to sink into the rock.
+
+## Audio (web only)
+
+Two sounds, both **synthesised in memory at startup** (`wav_from_samples` +
+`thruster_wav`/`boom_wav`, driven by the deterministic `Rng`) — no asset files:
+a 1 s low-passed noise loop for the engine (started muted+looped; volume set to
+`glow * 0.6` each frame) and a 0.9 s darkening noise burst played on crash.
+The macroquad `audio` feature is **wasm-only** (`[target.'cfg(target_arch =
+"wasm32")'.dependencies]` in Cargo.toml) because quad-snd needs ALSA to link on
+native Linux; native builds get macroquad's dummy backend (same API, silent),
+so `cargo build`/`cargo test` need no system packages. Browsers unmute the
+AudioContext on the first user gesture (handled by the miniquad JS bundle).
 
 ## Fuel
 
