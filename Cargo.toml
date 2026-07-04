@@ -13,3 +13,11 @@ macroquad = "0.4"
 # `cargo test` work without system deps.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 macroquad = { version = "0.4", features = ["audio"] }
+
+# Tuned for wasm size (the deploy artifact). Native release builds are rare
+# here; if you need a fast native build use the dev profile.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
