@@ -258,6 +258,16 @@ the outer `poly` ring stays the exact hull. All facet displacement goes *into th
 rock* (away from the cave interior), never into the cave — otherwise the visible
 surface pokes past the collider and the ship appears to sink into the rock.
 
+## Fuel
+
+`FUEL_MAX = 100`; the main engine burns `FUEL_BURN_MAIN = 3.5/s` (~28 s of
+continuous thrust), RCS burns `FUEL_BURN_RCS = 1.2/s`. `thrusting_now` and the
+RCS gates (`rcs_ok`) require `fuel > 0` — an empty tank kills engine, RCS,
+particles and glow, and shows "OUT OF FUEL — [R] RESET" (reset and respawn
+refill). HUD: slim gauge bar directly under the minimap (green > 50%, amber
+> 25%, red below); the HUD text line moved down to `232*ui` baseline to clear
+it.
+
 ## Crash & respawn
 
 Impacts are detected from the **frame-to-frame velocity change**: after the
