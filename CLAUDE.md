@@ -14,6 +14,7 @@ Deploy is automatic: any push to `main` triggers the GitHub Actions workflow `.g
 ## Project structure
 - `src/main.rs` — entire game (single file): physics, rendering, cave generation, HUD, minimap, touch controls
 - `index.html` — web wrapper, touch event forwarding, safe-area insets, **info overlay**, **gamepad polling**
+- `mq_js_bundle.js` — **vendored** miniquad/quad-snd JS loader (from not-fl3/miniquad-samples). Pinned in-repo so deploys don't depend on a third-party host; includes the audio backend. Update it deliberately if macroquad is upgraded.
 
 ## Input sources
 Four input paths feed the same physics, combined in the main loop:
