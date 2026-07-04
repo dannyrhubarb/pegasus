@@ -89,6 +89,11 @@ const PHYSICS_DT: f32 = 1.0 / 120.0;
 const CRASH_DV: f32 = 5.0;
 // Seconds from crash to respawn at RESET_X.
 const CRASH_RESPAWN: f32 = 1.5;
+// Fuel: the main engine burns a full tank in ~28 s of continuous thrust; the
+// RCS sips. An empty tank kills engine and RCS until reset/respawn refills it.
+const FUEL_MAX: f32 = 100.0;
+const FUEL_BURN_MAIN: f32 = 3.5; // units/s while the main engine fires
+const FUEL_BURN_RCS: f32 = 1.2;  // units/s while an RCS nozzle fires
 
 // Ship hull mesh: 41 triangles extracted from the original Flash SWF
 // (mcSpaceship, character id 41 in completeHS8replay.swf), ear-clip triangulated
@@ -777,6 +782,7 @@ async fn main() {
     // (> 0 → crashed: input dead, ship hidden, respawn when it hits 0).
     let mut prev_vel = (0.0f32, 0.0f32);
     let mut crash_timer = 0.0f32;
+    let mut fuel = FUEL_MAX;
 
     loop {
         // Fixed-timestep accumulator: the cap bounds catch-up work after a
@@ -851,6 +857,7 @@ async fn main() {
                 rb.set_rotation(Rotation::new(0.0), true);
                 prev_ship = (RESET_X, cave_center(RESET_X), 0.0);
                 prev_vel = (0.0, 0.0);
+                fuel = FUEL_MAX;
             }
         }
         let crashed = crash_timer > 0.0;
@@ -913,8 +920,9 @@ async fn main() {
              lx * angle.sin() + ly * angle.cos())
         };
 
-        // Read thrust state early so lighting can use it (dead while crashed)
-        let thrusting_now = !crashed
+        // Read thrust state early so lighting can use it (dead while crashed
+        // or with an empty tank)
+        let thrusting_now = !crashed && fuel > 0.0
             && (is_mouse_button_down(MouseButton::Left)
                 || is_key_down(KeyCode::Down)
                 || TOUCH_THRUST.load(Ordering::Relaxed) != 0
@@ -1337,7 +1345,7 @@ async fn main() {
         let cave_x = cam_x.rem_euclid(PERIOD);
         draw_text(
             &format!("x={:.0}  lvl={}  {:.0}m/{}m   [R] reset   FPS: {:.0}", cam_x, ship_layer, cave_x, PERIOD as i32, smooth_fps),
-            safe_left + 10.0 * ui, safe_top + 206.0 * ui, 36.0 * ui, WHITE,
+            safe_left + 10.0 * ui, safe_top + 232.0 * ui, 36.0 * ui, WHITE,
         );
 
         if crashed {
@@ -1346,6 +1354,12 @@ async fn main() {
             let dims = measure_text(msg, None, fs as u16, 1.0);
             draw_text(msg, (sw - dims.width) / 2.0, sh * 0.42, fs,
                 Color::from_rgba(255, 90, 60, 255));
+        } else if fuel <= 0.0 {
+            let msg = "OUT OF FUEL — [R] RESET";
+            let fs = 48.0 * ui;
+            let dims = measure_text(msg, None, fs as u16, 1.0);
+            draw_text(msg, (sw - dims.width) / 2.0, sh * 0.42, fs,
+                Color::from_rgba(255, 180, 60, 255));
         }
 
         // Controls
@@ -1362,8 +1376,9 @@ async fn main() {
         let touch_torque = (f32::from_bits(TOUCH_TORQUE.load(Ordering::Relaxed))
             + f32::from_bits(PAD_TORQUE.load(Ordering::Relaxed)))
             .clamp(-1.0, 1.0);
-        let rotating_left  = !crashed && (is_key_down(KeyCode::Left)  || touch_torque < -0.1);
-        let rotating_right = !crashed && (is_key_down(KeyCode::Right) || touch_torque >  0.1);
+        let rcs_ok = !crashed && fuel > 0.0;
+        let rotating_left  = rcs_ok && (is_key_down(KeyCode::Left)  || touch_torque < -0.1);
+        let rotating_right = rcs_ok && (is_key_down(KeyCode::Right) || touch_torque >  0.1);
         // Rotate by firing a side RCS booster: apply the force *at the nozzle*
         // (off-center) instead of a pure couple, so the ship pivots about where
         // the boosters actually push. Nozzles exhaust downward (-Y local) → the
@@ -1380,12 +1395,21 @@ async fn main() {
             fire_rcs(rb, -1.0, RCS_FORCE);
         } else if rotating_right {
             fire_rcs(rb, 1.0, RCS_FORCE);
-        } else if !crashed && touch_torque != 0.0 {
+        } else if rcs_ok && touch_torque != 0.0 {
             fire_rcs(rb, touch_torque.signum(), RCS_FORCE * touch_torque.abs());
         }
 
         // --- Particle emission ---
         let dt = get_frame_time();
+
+        // Burn fuel for whatever fired this frame.
+        if thrusting_now {
+            fuel -= FUEL_BURN_MAIN * dt;
+        }
+        if rotating_left || rotating_right || (rcs_ok && touch_torque != 0.0) {
+            fuel -= FUEL_BURN_RCS * dt;
+        }
+        fuel = fuel.max(0.0);
 
         // Main thruster: exhaust exits local -Y (out the bottom), 8 particles/frame
         if thrusting_now {
@@ -1457,6 +1481,7 @@ async fn main() {
             prev_ship = (RESET_X, cave_center(RESET_X), 0.0);
             prev_vel = (0.0, 0.0);
             crash_timer = 0.0;
+            fuel = FUEL_MAX;
         }
 
         // --- Minimap (ship always centred; pans in BOTH axes) ---
@@ -1577,6 +1602,21 @@ async fn main() {
 
         // Border
         draw_rectangle_lines(mm_ox, mm_oy, mm_w, mm_h, 1.0, Color::from_rgba(255, 255, 255, 120));
+
+        // Fuel gauge — slim bar directly under the minimap.
+        let fg_y = mm_oy + mm_h + 8.0 * ui;
+        let fg_h = 14.0 * ui;
+        let frac = fuel / FUEL_MAX;
+        let fg_col = if frac > 0.5 {
+            Color::from_rgba(90, 200, 120, 255)
+        } else if frac > 0.25 {
+            Color::from_rgba(230, 180, 60, 255)
+        } else {
+            Color::from_rgba(220, 70, 50, 255)
+        };
+        draw_rectangle(mm_ox, fg_y, mm_w, fg_h, mm_dark);
+        draw_rectangle(mm_ox, fg_y, mm_w * frac, fg_h, fg_col);
+        draw_rectangle_lines(mm_ox, fg_y, mm_w, fg_h, 1.0, Color::from_rgba(255, 255, 255, 120));
 
         next_frame().await;
     }
