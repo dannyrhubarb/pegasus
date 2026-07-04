@@ -493,6 +493,18 @@ fn lattice_point(col: i64, row: usize, side: u8) -> Vec2 {
     vec2(x + jx, edge_y + dir * (depth + jy))
 }
 
+// Draw a flat-shaded triangle soup (sequential indices, no shared vertices).
+// Indices are u16, so a single mesh must stay under 65 536 vertices — the
+// debug_assert catches it loudly if facet density ever grows past that.
+fn draw_flat_mesh(vertices: Vec<Vertex>) {
+    if vertices.is_empty() {
+        return;
+    }
+    debug_assert!(vertices.len() <= u16::MAX as usize, "mesh exceeds u16 index range");
+    let indices: Vec<u16> = (0..vertices.len() as u16).collect();
+    draw_mesh(&Mesh { vertices, indices, texture: None });
+}
+
 // Flat-shade color for a wall facet: a band base color (by row) modulated by a
 // deterministic per-facet brightness so each triangle reads as a distinct facet.
 fn facet_shade(base: Color, col: i64, row: usize, side: u8, salt: u32) -> Color {
@@ -899,8 +911,9 @@ async fn main() {
             draw_circle(px, py, 1.0, Color::from_rgba(200, 200, 255, 150));
         }
 
-        // Cave walls
-        let margin = sw + view_scale * 4.0;
+        // Cave walls. Cull pad: 4 m of world keeps jittered deep-row facets from
+        // popping at the screen edge without tessellating a whole extra screen.
+        let margin = view_scale * 4.0;
         let ship_screen = vec2(sw / 2.0, sh / 2.0);
         let base_dim = sw.min(sh);
         let light_radius = base_dim * 0.55 + glow * base_dim * 0.30;
@@ -1007,10 +1020,7 @@ async fn main() {
                     }
                 }
 
-                if !verts.is_empty() {
-                    let indices: Vec<u16> = (0..verts.len() as u16).collect();
-                    draw_mesh(&Mesh { vertices: verts, indices, texture: None });
-                }
+                draw_flat_mesh(verts);
             }
         }
 
@@ -1076,10 +1086,7 @@ async fn main() {
                     verts.push(v(sd0, rock_dark)); verts.push(v(f1, rock_dark)); verts.push(v(f0, rock_dark));
                 }
 
-                if !verts.is_empty() {
-                    let indices: Vec<u16> = (0..verts.len() as u16).collect();
-                    draw_mesh(&Mesh { vertices: verts, indices, texture: None });
-                }
+                draw_flat_mesh(verts);
             }
         }
 
@@ -1089,7 +1096,13 @@ async fn main() {
         // deterministic per-facet brightness plus a fake top-light gradient, so
         // boulders read as low-poly rocks with brighter tops.
         const BEVEL: f32 = 16.0;
-        for (&(k, _layer), ob) in obstacles.iter() {
+        // Sorted keys, not HashMap order: adjacent boulders can overlap, and
+        // map iteration order changes as the window slides, which would flip
+        // their z-order mid-flight.
+        let mut obstacle_keys: Vec<(i64, i64)> = obstacles.keys().copied().collect();
+        obstacle_keys.sort_unstable();
+        for &(k, layer) in &obstacle_keys {
+            let ob = &obstacles[&(k, layer)];
             let (c, s) = (ob.rot.cos(), ob.rot.sin());
             let poly: Vec<Vec2> = ob.verts.iter().map(|p| {
                 let wx = ob.cx + p.x * c - p.y * s;
@@ -1149,8 +1162,7 @@ async fn main() {
                 let c_fan = facet(rock_mid, i, 0x85eb_ca6b, fan_cy);
                 verts.push(v(center, c_fan)); verts.push(v(inset[i], c_fan)); verts.push(v(inset[j], c_fan));
             }
-            let indices: Vec<u16> = (0..verts.len() as u16).collect();
-            draw_mesh(&Mesh { vertices: verts, indices, texture: None });
+            draw_flat_mesh(verts);
         }
 
         gl_use_default_material();
