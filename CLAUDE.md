@@ -207,7 +207,7 @@ Random convex-polygon boulders are placed deterministically along the cave so th
 ### Generation
 - `OBSTACLE_SPACING = 16.0 m` between slots. Each slot `k` maps to a fixed world-x position plus ±3 m jitter.
 - A tiny integer-hash PRNG (`Rng` struct, seeded by slot index) drives all randomness: position jitter, size, rotation, vertex count, vertex radii.
-- Slot is skipped if: `cx.abs() < 9.0` (spawn-clear zone), `hw < 4.5` (pinch point), within 8 m of a shaft opening (junctions stay flyable), or 1-in-6 random empty.
+- Slot is skipped if: within 9 m of the spawn (x = 0) or the reset point (`RESET_X` = 64), `hw < 4.5` (pinch point), within 8 m of a shaft opening (junctions stay flyable), or 1-in-6 random empty.
 - Size: `max_r = (hw * 0.65).min(5.5)`, `r = rng.range(0.3, 1.0) * max_r`. Wide sections get genuine boulders (up to 5.5 m radius).
 - Centre offset: `max_off = (hw - r - 1.3).max(0.0)` — guarantees ≥ 1.3 m gap to the nearer wall.
 
