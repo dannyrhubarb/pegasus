@@ -76,6 +76,9 @@ const SEG_LEN: f32 = 3.0;
 const HALF_WINDOW: i64 = 80;
 // Render scale for the ship mesh relative to the raw SWF coordinates
 const SHIP_SCALE: f32 = 1.5;
+// Where [R] / gamepad reset drops the ship. Obstacles keep clear of this point
+// (like the x = 0 spawn) so a reset never lands on a rock.
+const RESET_X: f32 = 64.0;
 
 // Ship hull mesh: 41 triangles extracted from the original Flash SWF
 // (mcSpaceship, character id 41 in completeHS8replay.swf), ear-clip triangulated
@@ -524,8 +527,8 @@ fn obstacle_spec(k: i64) -> Option<ObstacleSpec> {
 
     let cx = k as f32 * OBSTACLE_SPACING + rng.range(-3.0, 3.0);
 
-    // Keep the spawn area clear so a reset never drops the ship onto a rock.
-    if cx.abs() < 9.0 {
+    // Keep the spawn and reset areas clear so neither drops the ship onto a rock.
+    if cx.abs() < 9.0 || (cx - RESET_X).abs() < 9.0 {
         return None;
     }
 
@@ -1330,7 +1333,7 @@ async fn main() {
 
         if is_key_pressed(KeyCode::R) || PAD_RESET.swap(0, Ordering::Relaxed) != 0 {
             let rb = rigid_body_set.get_mut(box_handle).unwrap();
-            rb.set_translation(vector![64.0, cave_center(64.0)], true);
+            rb.set_translation(vector![RESET_X, cave_center(RESET_X)], true);
             rb.set_linvel(vector![0.0, 0.0], true);
             rb.set_angvel(0.0, true);
             rb.set_rotation(Rotation::new(0.0), true);
