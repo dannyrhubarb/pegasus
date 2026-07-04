@@ -258,6 +258,19 @@ the outer `poly` ring stays the exact hull. All facet displacement goes *into th
 rock* (away from the cave interior), never into the cave — otherwise the visible
 surface pokes past the collider and the ship appears to sink into the rock.
 
+## Crash & respawn
+
+Impacts are detected from the **frame-to-frame velocity change**: after the
+physics substeps, `|v − prev_vel| > CRASH_DV (5 m/s)` means a collision impulse
+(thrust/gravity change v by < 0.3 m/s per frame) — no Rapier contact-event
+plumbing needed. On crash: 70 explosion particles (`kind 3`, ~1.1 s life), the
+wreck is parked (`set_gravity_scale(0)`, velocities zeroed) so the camera holds
+still, input is dead (`crashed` gates thrust/RCS and ship rendering), and a
+"CRASHED" banner shows. After `CRASH_RESPAWN = 1.5 s` the ship respawns at
+`RESET_X` (gravity restored). Anything that teleports or zeroes velocity
+(reset, respawn) must also snap `prev_vel` — otherwise the velocity jump reads
+as an impact — and `prev_ship` (render interpolation).
+
 ## Physics notes
 
 **Fixed timestep**: physics steps at `PHYSICS_DT = 1/120 s` through an
