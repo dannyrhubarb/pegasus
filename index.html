@@ -227,25 +227,28 @@
 
     torqueTrack.addEventListener("touchmove", e => {
       e.preventDefault();
+      // targetTouches, not touches: e.touches[0] is the FIRST touch on the
+      // whole page — usually the thrust finger — which slammed torque hard
+      // left whenever thrust was held while steering.
+      const touch = e.targetTouches[0];
+      if (!touch) return;
       const rect = torqueTrack.getBoundingClientRect();
       const cx = rect.left + rect.width / 2;
-      const dx = e.touches[0].clientX - cx;
+      const dx = touch.clientX - cx;
       const clamped = Math.max(-MAX_DRAG, Math.min(MAX_DRAG, dx));
       const normalized = clamped / MAX_DRAG;
       torqueKnob.style.transform = `translateX(${clamped}px)`;
       call("set_touch_torque", normalized);
     }, { passive: false });
 
-    torqueTrack.addEventListener("touchend", () => {
+    function releaseTorque(e) {
+      if (e.targetTouches.length > 0) return; // another finger still on the track
       torqueTrack.classList.remove("active");
       torqueKnob.style.transform = "translateX(0)";
       call("set_touch_torque", 0);
-    });
-    torqueTrack.addEventListener("touchcancel", () => {
-      torqueTrack.classList.remove("active");
-      torqueKnob.style.transform = "translateX(0)";
-      call("set_touch_torque", 0);
-    });
+    }
+    torqueTrack.addEventListener("touchend", releaseTorque);
+    torqueTrack.addEventListener("touchcancel", releaseTorque);
 
     // --- Bluetooth / USB game controller (Web Gamepad API) ---
     // A controller paired with the device shows up in navigator.getGamepads().
