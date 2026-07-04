@@ -37,9 +37,6 @@ jobs:
       - name: Build WASM
         run: cargo build --release --target wasm32-unknown-unknown
 
-      - name: Fetch miniquad JS bundle
-        run: curl -fsSL https://not-fl3.github.io/miniquad-samples/mq_js_bundle.js -o mq_js_bundle.js
-
       - name: Generate app icons
         run: |
           sudo apt-get install -y librsvg2-bin binaryen
