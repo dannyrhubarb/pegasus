@@ -273,4 +273,4 @@ Each is built `ColliderBuilder::new(SharedShape::capsule(a, b, r)).restitution(0
 - Development branch: `claude/vertical-wrapping-caves-csv79r` (current); previous: `claude/vector-spaceship-extraction-njnuoq`
 - Merges to `main` via rebase PRs using the GitHub MCP tools (`mcp__github__create_pull_request`, `mcp__github__merge_pull_request`).
 - Branch consistently diverges from main after merges — always `git fetch origin main && git rebase origin/main && git push --force-with-lease` before creating a PR to avoid merge conflicts.
-- The wasm binary (`rapier-test.wasm`) conflicts on every rebase — always resolve by rebuilding from source: `cargo build --release --target wasm32-unknown-unknown && cp target/wasm32-unknown-unknown/release/rapier-test.wasm rapier-test.wasm`, then `git add rapier-test.wasm` before `git rebase --continue`.
+- The wasm binary (`rapier-test.wasm`) is **not tracked** (gitignored) — deploy builds it from source, and for local play you build it into the repo root per the README. It previously lived in git and conflicted on every rebase; don't re-add it.
