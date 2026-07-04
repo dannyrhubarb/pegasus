@@ -373,7 +373,11 @@
     infoOverlay.addEventListener("touchstart", closeInfo, { passive: false });
     infoClose.addEventListener("click", closeInfo);
 
-    load("./rapier-test.wasm");
+    // Cache-bust the wasm with the deploy revision so a fresh deploy never
+    // serves a stale binary from the browser/CDN cache. Locally the
+    // placeholder is untouched (sed only runs at deploy) → plain URL.
+    const wasmRev = "__GIT_REVISION__";
+    load("./rapier-test.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
   </script>
 </body>
 </html>
