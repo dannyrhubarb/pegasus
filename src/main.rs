@@ -83,6 +83,12 @@ const RESET_X: f32 = 64.0;
 // is identical on every display refresh rate; rendering interpolates the ship
 // between the last two steps.
 const PHYSICS_DT: f32 = 1.0 / 120.0;
+// Crash when the ship's velocity changes by more than this within one frame
+// (collision impulse). Gravity/thrust change v by < 0.3 m/s per frame, so any
+// dv above this is a hard impact — roughly hitting rock at ≥ 4 m/s.
+const CRASH_DV: f32 = 5.0;
+// Seconds from crash to respawn at RESET_X.
+const CRASH_RESPAWN: f32 = 1.5;
 
 // Ship hull mesh: 41 triangles extracted from the original Flash SWF
 // (mcSpaceship, character id 41 in completeHS8replay.swf), ear-clip triangulated
@@ -767,6 +773,10 @@ async fn main() {
     let mut phys_accum = 0.0f32;
     // Ship state at the previous physics step, for render interpolation.
     let mut prev_ship = (0.0f32, cave_center(0.0), 0.0f32); // x, y, angle
+    // Crash state: velocity last frame (impact = big dv) and the wreck timer
+    // (> 0 → crashed: input dead, ship hidden, respawn when it hits 0).
+    let mut prev_vel = (0.0f32, 0.0f32);
+    let mut crash_timer = 0.0f32;
 
     loop {
         // Fixed-timestep accumulator: the cap bounds catch-up work after a
@@ -794,6 +804,56 @@ async fn main() {
             );
             phys_accum -= PHYSICS_DT;
         }
+
+        // --- Crash detection ---
+        // A collision shows up as a large velocity change across the frame's
+        // physics steps; thrust and gravity stay well under CRASH_DV.
+        {
+            let (wx, wy, vx, vy) = {
+                let b = &rigid_body_set[box_handle];
+                (b.translation().x, b.translation().y, b.linvel().x, b.linvel().y)
+            };
+            if crash_timer <= 0.0 {
+                let (dvx, dvy) = (vx - prev_vel.0, vy - prev_vel.1);
+                if (dvx * dvx + dvy * dvy).sqrt() > CRASH_DV {
+                    crash_timer = CRASH_RESPAWN;
+                    // Debris burst at the crash site.
+                    for _ in 0..70 {
+                        let ang = gen_range(0.0f32, std::f32::consts::TAU);
+                        let spd = gen_range(1.0f32, 9.0);
+                        particles.push(Particle {
+                            x: wx + gen_range(-0.3f32, 0.3),
+                            y: wy + gen_range(-0.3f32, 0.3),
+                            vx: ang.cos() * spd,
+                            vy: ang.sin() * spd + 1.5,
+                            life: gen_range(0.5f32, 1.0),
+                            kind: 3,
+                        });
+                    }
+                    // Park the wreck where it died so the camera holds still.
+                    let rb = rigid_body_set.get_mut(box_handle).unwrap();
+                    rb.set_linvel(vector![0.0, 0.0], true);
+                    rb.set_angvel(0.0, true);
+                    rb.set_gravity_scale(0.0, true);
+                }
+            }
+            prev_vel = (vx, vy);
+        }
+        // Wreck timer → respawn at the reset point with a fresh ship.
+        if crash_timer > 0.0 {
+            crash_timer -= get_frame_time();
+            if crash_timer <= 0.0 {
+                let rb = rigid_body_set.get_mut(box_handle).unwrap();
+                rb.set_gravity_scale(1.0, true);
+                rb.set_translation(vector![RESET_X, cave_center(RESET_X)], true);
+                rb.set_linvel(vector![0.0, 0.0], true);
+                rb.set_angvel(0.0, true);
+                rb.set_rotation(Rotation::new(0.0), true);
+                prev_ship = (RESET_X, cave_center(RESET_X), 0.0);
+                prev_vel = (0.0, 0.0);
+            }
+        }
+        let crashed = crash_timer > 0.0;
 
         let sh = screen_height();
         let sw = screen_width();
@@ -853,11 +913,12 @@ async fn main() {
              lx * angle.sin() + ly * angle.cos())
         };
 
-        // Read thrust state early so lighting can use it
-        let thrusting_now = is_mouse_button_down(MouseButton::Left)
-            || is_key_down(KeyCode::Down)
-            || TOUCH_THRUST.load(Ordering::Relaxed) != 0
-            || PAD_THRUST.load(Ordering::Relaxed) != 0;
+        // Read thrust state early so lighting can use it (dead while crashed)
+        let thrusting_now = !crashed
+            && (is_mouse_button_down(MouseButton::Left)
+                || is_key_down(KeyCode::Down)
+                || TOUCH_THRUST.load(Ordering::Relaxed) != 0
+                || PAD_THRUST.load(Ordering::Relaxed) != 0);
         glow += (if thrusting_now { 1.0 } else { 0.0 } - glow) * 0.12;
 
         // --- Slide the cave window (2D: segments in x, layers in y) ---
@@ -1202,9 +1263,10 @@ async fn main() {
         for p in &particles {
             let s = w2s(p.x, p.y, sh, cam_x, cam_y);
             let a = (p.life * 255.0) as u8;
-            let radius = p.life * if p.kind == 0 { 5.0 } else { 3.0 };
+            let radius = p.life * match p.kind { 0 => 5.0, 3 => 9.0, _ => 3.0 };
             let color = match p.kind {
                 0 => Color::from_rgba(255, (120.0 + p.life * 100.0) as u8, 20, a), // orange flame
+                3 => Color::from_rgba(255, (60.0 + p.life * 180.0) as u8, (p.life * 80.0) as u8, a), // explosion
                 _ => Color::from_rgba(100, 180, 255, a),                             // blue RCS
             };
             draw_circle(s.x, s.y, radius, color);
@@ -1223,7 +1285,7 @@ async fn main() {
 
         // Thruster flame drawn first (behind the hull), out of the engine base
         // at local -Y. Scales with `glow`.
-        if glow > 0.02 {
+        if !crashed && glow > 0.02 {
             let base = -0.475;
             let fw = 0.10 + glow * 0.05;
             let ft = glow * 0.36;
@@ -1244,7 +1306,7 @@ async fn main() {
         let hull_base = (168.0_f32, 174.0_f32, 188.0_f32); // silver (#CCCCCC family)
         let tip_base  = (210.0_f32, 50.0_f32,  45.0_f32);  // red nose cone
         const TIP_Y: f32 = 0.30;
-        for t in SHIP_TRIS.iter() {
+        for t in SHIP_TRIS.iter().filter(|_| !crashed) {
             let cy = (t[1] + t[3] + t[5]) / 3.0;
             let s = (0.84 + (cy + 0.475) / 0.95 * 0.34).min(1.25);
             let base = if cy > TIP_Y { tip_base } else { hull_base };
@@ -1259,7 +1321,7 @@ async fn main() {
         // Detail overlays (window, leg-pods, engine cup, gold accent) — exact
         // sub-shapes from the original ship, drawn on top of the hull. The two
         // leg-pods (extracted dark-silver 0.518/0.537/0.588) are recoloured red.
-        for d in SHIP_DETAILS.iter() {
+        for d in SHIP_DETAILS.iter().filter(|_| !crashed) {
             let is_leg = (d[6] - 0.518).abs() < 0.001
                 && (d[7] - 0.537).abs() < 0.001
                 && (d[8] - 0.588).abs() < 0.001;
@@ -1278,6 +1340,14 @@ async fn main() {
             safe_left + 10.0 * ui, safe_top + 206.0 * ui, 36.0 * ui, WHITE,
         );
 
+        if crashed {
+            let msg = "CRASHED";
+            let fs = 96.0 * ui;
+            let dims = measure_text(msg, None, fs as u16, 1.0);
+            draw_text(msg, (sw - dims.width) / 2.0, sh * 0.42, fs,
+                Color::from_rgba(255, 90, 60, 255));
+        }
+
         // Controls
         let rb = rigid_body_set.get_mut(box_handle).unwrap();
         rb.reset_forces(true);
@@ -1292,8 +1362,8 @@ async fn main() {
         let touch_torque = (f32::from_bits(TOUCH_TORQUE.load(Ordering::Relaxed))
             + f32::from_bits(PAD_TORQUE.load(Ordering::Relaxed)))
             .clamp(-1.0, 1.0);
-        let rotating_left  = is_key_down(KeyCode::Left)  || touch_torque < -0.1;
-        let rotating_right = is_key_down(KeyCode::Right) || touch_torque >  0.1;
+        let rotating_left  = !crashed && (is_key_down(KeyCode::Left)  || touch_torque < -0.1);
+        let rotating_right = !crashed && (is_key_down(KeyCode::Right) || touch_torque >  0.1);
         // Rotate by firing a side RCS booster: apply the force *at the nozzle*
         // (off-center) instead of a pure couple, so the ship pivots about where
         // the boosters actually push. Nozzles exhaust downward (-Y local) → the
@@ -1310,7 +1380,7 @@ async fn main() {
             fire_rcs(rb, -1.0, RCS_FORCE);
         } else if rotating_right {
             fire_rcs(rb, 1.0, RCS_FORCE);
-        } else if touch_torque != 0.0 {
+        } else if !crashed && touch_torque != 0.0 {
             fire_rcs(rb, touch_torque.signum(), RCS_FORCE * touch_torque.abs());
         }
 
@@ -1366,8 +1436,9 @@ async fn main() {
         // Update particles
         let decay_main = dt / 0.5;  // main thruster lives ~0.5s
         let decay_rcs  = dt / 0.3;  // RCS lives ~0.3s
+        let decay_boom = dt / 1.1;  // explosion debris lives ~1.1s
         for p in &mut particles {
-            let decay = if p.kind == 0 { decay_main } else { decay_rcs };
+            let decay = match p.kind { 0 => decay_main, 3 => decay_boom, _ => decay_rcs };
             p.life -= decay;
             p.x += p.vx * dt;
             p.y += p.vy * dt;
@@ -1376,13 +1447,16 @@ async fn main() {
 
         if is_key_pressed(KeyCode::R) || PAD_RESET.swap(0, Ordering::Relaxed) != 0 {
             let rb = rigid_body_set.get_mut(box_handle).unwrap();
+            rb.set_gravity_scale(1.0, true); // in case we reset out of a crash
             rb.set_translation(vector![RESET_X, cave_center(RESET_X)], true);
             rb.set_linvel(vector![0.0, 0.0], true);
             rb.set_angvel(0.0, true);
             rb.set_rotation(Rotation::new(0.0), true);
-            // Snap the interpolation state too, or the camera lerps across the
-            // teleport for one frame.
+            // Snap the interpolation + crash state too, or the camera lerps
+            // across the teleport and the velocity jump reads as an impact.
             prev_ship = (RESET_X, cave_center(RESET_X), 0.0);
+            prev_vel = (0.0, 0.0);
+            crash_timer = 0.0;
         }
 
         // --- Minimap (ship always centred; pans in BOTH axes) ---
