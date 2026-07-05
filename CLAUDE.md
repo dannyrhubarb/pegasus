@@ -335,6 +335,27 @@ refill). HUD: slim gauge bar directly under the minimap (green > 50%, amber
 > 25%, red below); the HUD text line moved down to `232*ui` baseline to clear
 it.
 
+## Landing pads & scoring
+
+Flat metal pads on the cave floor at deterministic slots (`pad_spec(p)`, pure):
+`PAD_SPACING = 130 m` ± 20 m jitter, deck `PAD_HALF_W = 3 m`, deck top =
+max floor over the span + 0.1 (the segment collider, friction 0.9, never dips
+into rock). A slot is skipped if `hw < 5`, within 8 m of a shaft opening, or a
+boulder (checked via `obstacle_spec`) would overlap the deck — roughly every
+other slot survives. Pads replicate per layer like obstacles
+(`HashMap<(slot, layer), Pad>`, same sliding window).
+
+**Landing** = settled on a deck (|angle| < 0.3, |v| < 1 m/s, |ω| < 0.5, feet —
+0.73 below origin — within 0.3 of deck top) for `PAD_LAND_TIME = 0.8 s`. First
+visit per (slot, layer) scores `PAD_POINTS = 100` (green "+100" flash); parked
+ships refuel at `PAD_REFUEL_PER_S = 25/s` ("REFUELING" shown while below max).
+`score` is in the HUD text line. Beacons blink green until visited, then
+steady blue; the minimap draws a deck-width line (green → blue-grey).
+`stand_y` prefers a pad deck over the floor, so the spawn parks on pad 0
+(cx ≈ 0.4) — pad friction also stops the frictionless-floor drift at spawn.
+Pads are drawn with the **default material** (readable in the dark), deck top
+exactly on the collider line (alignment rule).
+
 ## Crash & respawn
 
 Impacts are detected from the **frame-to-frame velocity change**: after the
