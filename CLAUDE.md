@@ -322,7 +322,10 @@ still, input is dead (`crashed` gates thrust/RCS and ship rendering), and a
 "CRASHED" banner shows. After `CRASH_RESPAWN = 1.5 s` the ship respawns at
 `RESET_X` (gravity restored). Anything that teleports or zeroes velocity
 (reset, respawn) must also snap `prev_vel` — otherwise the velocity jump reads
-as an impact — and `prev_ship` (render interpolation).
+as an impact — and `prev_ship` (render interpolation). Spawn/reset place the
+ship **standing on the floor** (`stand_y(x)` = floor + 0.78, feet at 0.73):
+dropping it from `cave_center` reached ~5.5 m/s at touchdown, which itself
+tripped `CRASH_DV` and looped spawn → crash → respawn forever.
 
 ## Physics notes
 
