@@ -1091,7 +1091,7 @@ async fn main() {
         draw_text(&hud, safe_left + 10.0 * ui, hud_y, hud_fs, WHITE);
         // Speed readout in the same danger color as the velocity arrow.
         let hud_w = measure_text(&hud, None, hud_fs as u16, 1.0).width;
-        draw_text(&format!("  v={speed:.1}"),
+        draw_text(format!("  v={speed:.1}"),
             safe_left + 10.0 * ui + hud_w, hud_y, hud_fs, speed_col);
 
         if crashed {
