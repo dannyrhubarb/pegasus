@@ -217,11 +217,11 @@
     <h1>Pegasus — Moon Lander</h1>
     <div class="info-row">
       <div class="info-label">Build revision</div>
-      <div class="info-value" id="git-rev">7a52f5c-pr-59</div>
+      <div class="info-value" id="git-rev">cc0f608-pr-59</div>
     </div>
     <div class="info-row">
       <div class="info-label">Build time</div>
-      <div class="info-value" id="build-time">2026-07-05 22:10 UTC</div>
+      <div class="info-value" id="build-time">2026-07-05 22:47 UTC</div>
     </div>
     <label id="vel-toggle-row">
       <input type="checkbox" id="vel-toggle">
@@ -241,6 +241,41 @@
     <div id="stick-knob"></div>
   </div>
 
+  <script>
+    // Boot guard — deliberately in its OWN <script> tag: script tags parse
+    // independently, so a SyntaxError in the bundle or the main inline
+    // script below cannot kill this one (that failure mode shipped once:
+    // a redeclared bundle global silently killed the whole main script and
+    // the page showed only HTML chrome with no error anywhere). Shows any
+    // script error on screen and offers a cache-bypass reload if the wasm
+    // hasn't started.
+    (function () {
+      var box = null;
+      function show(msg) {
+        if (!box) {
+          box = document.createElement("div");
+          box.style.cssText = "position:fixed;left:12px;right:12px;bottom:12px;" +
+            "z-index:99;background:rgba(130,25,25,0.93);color:#fff;" +
+            "font:13px/1.45 -apple-system,BlinkMacSystemFont,sans-serif;" +
+            "padding:10px 14px;border-radius:10px;white-space:pre-wrap;";
+          box.addEventListener("click", function () {
+            location.replace(location.pathname + "?fresh=" + Date.now());
+          });
+          document.body.appendChild(box);
+        }
+        box.textContent = msg + "\n(tap here to reload the latest build)";
+      }
+      window.addEventListener("error", function (e) {
+        show("Script error: " + (e.message || "unknown") +
+          (e.filename ? "\n" + e.filename.split("/").pop() + ":" + e.lineno : ""));
+      });
+      setTimeout(function () {
+        if (typeof wasm_exports === "undefined" || !wasm_exports) {
+          show("Game failed to start (wasm not running after 8 s).");
+        }
+      }, 8000);
+    })();
+  </script>
   <script src="./mq_js_bundle.js"></script>
   <script>
     function call(name, ...args) {
@@ -486,7 +521,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "7a52f5c-pr-59";
+    const wasmRev = "cc0f608-pr-59";
     load("./rapier-test.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // --- Stale-cache detection ---
