@@ -87,8 +87,10 @@ for when you don't want to wait for detection.
 ### Stale-cache reload toast
 GitHub Pages caches `index.html` for ~10 min, so right after a deploy the
 served page (and the `?v=` wasm cache-buster it carries) can be the previous
-build. `build-site` writes `site/version.json` (`{"revision": …}`); on load
-and whenever the tab becomes visible again (throttled to 30 s), `index.html`
+build. `build-site` writes `site/version.json` (`{"revision": …}`); on load,
+on a 60 s interval, and on `focus`/`pageshow`/`visibilitychange` (all
+throttled to one check per 30 s — the interval matters because an iOS in-app
+webview that just stays open never fires any visibility event), `index.html`
 fetches it with `cache: no-store` + a `?nocache=` timestamp and compares
 against its baked-in revision. On mismatch `#update-toast` slides in ("New
 build available — tap to reload"); tapping navigates to
