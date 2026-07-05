@@ -6,3 +6,18 @@ edition = "2024"
 [dependencies]
 rapier2d = { version = "0.23", features = ["default"] }
 macroquad = "0.4"
+
+# Real audio only on the web build: the audio feature pulls quad-snd, which
+# needs ALSA headers to link native Linux builds. Native dev builds use
+# macroquad's dummy audio backend (same API, no sound) so `cargo build` /
+# `cargo test` work without system deps.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+macroquad = { version = "0.4", features = ["audio"] }
+
+# Tuned for wasm size (the deploy artifact). Native release builds are rare
+# here; if you need a fast native build use the dev profile.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
