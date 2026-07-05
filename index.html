@@ -158,6 +158,21 @@
       color: #6c84ad;
       margin-top: 8px;
     }
+    /* Manual cache-bypass reload — same ?fresh= mechanism as the toast, for
+       when you want the newest build without waiting for detection. */
+    #force-reload {
+      margin-top: 12px;
+      padding: 12px 24px;
+      border: 1.5px solid rgba(140, 200, 255, 0.8);
+      border-radius: 24px;
+      background: rgba(24, 40, 72, 0.6);
+      color: #dde9ff;
+      font: 600 16px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    #force-reload:hover { background: rgba(60, 110, 190, 0.6); }
 
     /* "New build available" toast — GitHub Pages caches index.html for
        ~10 min, so a fresh deploy can serve a stale page; version.json is
@@ -206,6 +221,7 @@
       <div class="info-label">Build time</div>
       <div class="info-value" id="build-time">__BUILD_TIME__</div>
     </div>
+    <div id="force-reload" role="button">&#10227; Reload latest build</div>
     <div class="info-hint">Tap anywhere to close</div>
   </div>
 
@@ -418,6 +434,12 @@
     const updateToast = document.getElementById("update-toast");
     let lastVersionCheck = 0;
 
+    // Navigate to a ?fresh=<ts> URL: a unique query string bypasses the
+    // cached copy of index.html (a plain reload would re-serve it).
+    function freshReload() {
+      location.replace(location.pathname + "?fresh=" + Date.now());
+    }
+
     function checkVersion() {
       if (wasmRev.startsWith("__")) return;          // local dev: no version.json
       const now = Date.now();
@@ -436,12 +458,26 @@
     updateToast.addEventListener("mousedown", e => e.stopPropagation());
     updateToast.addEventListener("click", e => {
       e.stopPropagation();
-      location.replace(location.pathname + "?fresh=" + Date.now());
+      freshReload();
     });
     updateToast.addEventListener("touchstart", e => {
       e.preventDefault();
       e.stopPropagation();
-      location.replace(location.pathname + "?fresh=" + Date.now());
+      freshReload();
+    }, { passive: false });
+
+    // Manual reload button in the info overlay (stopPropagation so the tap
+    // doesn't just close the overlay).
+    const forceReload = document.getElementById("force-reload");
+    forceReload.addEventListener("mousedown", e => e.stopPropagation());
+    forceReload.addEventListener("click", e => {
+      e.stopPropagation();
+      freshReload();
+    });
+    forceReload.addEventListener("touchstart", e => {
+      e.preventDefault();
+      e.stopPropagation();
+      freshReload();
     }, { passive: false });
 
     checkVersion();
