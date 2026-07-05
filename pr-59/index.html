@@ -16,28 +16,27 @@
     body { overflow: hidden; background: #14141e; }
     canvas { display: block; width: 100vw; height: 100vh; }
 
-    /* Single analog stick: x = steering, pull DOWN = main engine.
-       Full travel right (0°) / left (180°) = max torque, straight down
-       (270°) = max thrust; angles in between blend both proportionally. */
-    #touch-controls {
+    /* Floating analog stick: x = steering, pull DOWN = main engine.
+       Parked bottom-right as a translucent ghost; touching the lower part
+       of the screen re-spawns it centred under the finger (input is
+       captured at the document level in JS — pointer-events stays none so
+       the element itself never eats events). */
+    #stick-base {
       position: fixed;
       bottom: calc(env(safe-area-inset-bottom) + 20px);
       right: calc(env(safe-area-inset-right) + 24px);
-      pointer-events: none;
-    }
-
-    #stick-base {
-      position: relative;
       width: 170px;
       height: 170px;
       border-radius: 50%;
       background: rgba(255, 255, 255, 0.08);
       border: 2px solid rgba(255, 255, 255, 0.35);
-      pointer-events: all;
-      touch-action: none;
+      pointer-events: none;
       user-select: none;
       -webkit-user-select: none;
+      opacity: 0.45;
+      transition: opacity 0.15s;
     }
+    #stick-base.active { opacity: 1; }
     #stick-base .stick-hint {
       position: absolute;
       color: rgba(255, 255, 255, 0.35);
@@ -218,11 +217,11 @@
     <h1>Pegasus — Moon Lander</h1>
     <div class="info-row">
       <div class="info-label">Build revision</div>
-      <div class="info-value" id="git-rev">0295212-pr-59</div>
+      <div class="info-value" id="git-rev">551ae2f-pr-59</div>
     </div>
     <div class="info-row">
       <div class="info-label">Build time</div>
-      <div class="info-value" id="build-time">2026-07-05 21:35 UTC</div>
+      <div class="info-value" id="build-time">2026-07-05 21:54 UTC</div>
     </div>
     <label id="vel-toggle-row">
       <input type="checkbox" id="vel-toggle">
@@ -235,13 +234,11 @@
   <!-- Stale-cache reload toast (hidden until a newer version.json is seen) -->
   <div id="update-toast" role="button">⟳ New build available — tap to reload</div>
 
-  <div id="touch-controls">
-    <div id="stick-base">
-      <span class="stick-hint left">&#9664;</span>
-      <span class="stick-hint right">&#9654;</span>
-      <span class="stick-hint down">&#9660;</span>
-      <div id="stick-knob"></div>
-    </div>
+  <div id="stick-base">
+    <span class="stick-hint left">&#9664;</span>
+    <span class="stick-hint right">&#9654;</span>
+    <span class="stick-hint down">&#9660;</span>
+    <div id="stick-knob"></div>
   </div>
 
   <script src="./mq_js_bundle.js"></script>
@@ -252,33 +249,40 @@
       }
     }
 
-    // --- Single analog stick (replaces the THRUST button + torque slider) ---
+    // --- Floating analog stick ---
     // x-deflection = steering torque, DOWNWARD pull = main-engine throttle
-    // (matches the Down-arrow thrust key). At full travel: 0° (right) and
-    // 180° (left) = max torque, 270° (straight down) = max thrust; angles in
-    // between blend both from the x/y components — e.g. 200° ≈ 94% left +
-    // 34% thrust. Shorter travel scales everything down linearly. Pushing
-    // up does nothing (no reverse thrust). set_touch_thrust takes an analog
-    // 0..1 throttle (the WASM export was widened from the old on/off i32).
+    // (matches the Down-arrow thrust key). Pushing up does nothing.
+    // set_touch_thrust takes an analog 0..1 throttle.
+    //
+    // FLOATING: any touch on the canvas in the lower STICK_ZONE of the
+    // screen spawns the stick centred under the finger; on release it parks
+    // back bottom-right as a translucent ghost. Handlers live on the
+    // DOCUMENT in the capture phase so the touch is swallowed before the
+    // canvas sees it (miniquad synthesizes mouse events from canvas touches,
+    // and mouse-down = thrust). Mouse events are left alone — desktop
+    // click-to-thrust still works everywhere.
+    //
+    // SQUARE travel zone: each axis is clamped independently (not the
+    // vector length), so the corners are reachable — dragging to the
+    // bottom-left corner commands FULL left steering AND FULL thrust at
+    // once. The per-axis dead-zone is rescaled so ±1 stays reachable.
+    const canvas = document.getElementById("glcanvas");
     const stickBase = document.getElementById("stick-base");
     const stickKnob = document.getElementById("stick-knob");
-    const STICK_TRAVEL = 60;  // px from center = full deflection
-    const STICK_DZ = 0.12;    // per-axis dead-zone, rescaled so ±1 is reachable
+    const STICK_TRAVEL = 60;   // px from center = full deflection per axis
+    const STICK_DZ = 0.12;     // per-axis dead-zone, rescaled so ±1 is reachable
+    const STICK_ZONE = 0.55;   // touches below 55% of viewport height grab the stick
+    let stickId = null;        // active touch identifier (null = parked)
+    let stickCX = 0, stickCY = 0; // stick centre = where the touch landed
 
     function deadzone(v) {
       if (Math.abs(v) < STICK_DZ) return 0;
       return (v - Math.sign(v) * STICK_DZ) / (1 - STICK_DZ);
     }
 
-    function stickUpdate(touch) {
-      const rect = stickBase.getBoundingClientRect();
-      let dx = touch.clientX - (rect.left + rect.width / 2);
-      let dy = touch.clientY - (rect.top + rect.height / 2);
-      const len = Math.hypot(dx, dy);
-      if (len > STICK_TRAVEL) {        // clamp to the travel circle
-        dx *= STICK_TRAVEL / len;
-        dy *= STICK_TRAVEL / len;
-      }
+    function stickApply(dx, dy) {
+      dx = Math.max(-STICK_TRAVEL, Math.min(STICK_TRAVEL, dx));
+      dy = Math.max(-STICK_TRAVEL, Math.min(STICK_TRAVEL, dy));
       stickKnob.style.transform = `translate(${dx}px, ${dy}px)`;
       const torque = deadzone(dx / STICK_TRAVEL);
       // Screen y grows downward, so a downward pull is positive dy = thrust.
@@ -288,32 +292,70 @@
       call("set_touch_thrust", throttle);
     }
 
-    stickBase.addEventListener("touchstart", e => {
-      e.preventDefault();
-      stickBase.classList.add("active");
-      stickUpdate(e.targetTouches[0]);
-    }, { passive: false });
-
-    stickBase.addEventListener("touchmove", e => {
-      e.preventDefault();
-      // targetTouches, not touches: e.touches[0] is the FIRST touch on the
-      // whole page, which may be a different finger elsewhere on the screen.
-      const touch = e.targetTouches[0];
-      if (touch) stickUpdate(touch);
-    }, { passive: false });
-
-    function stickRelease(e) {
-      if (e.targetTouches.length > 0) {          // another finger still on it
-        stickUpdate(e.targetTouches[0]);
-        return;
-      }
+    function stickRelease() {
+      stickId = null;
       stickBase.classList.remove("active", "thrusting");
+      // Clear the inline spawn position → the CSS right/bottom parking
+      // spot takes over again (left/top win over right/bottom while set).
+      stickBase.style.left = "";
+      stickBase.style.top = "";
       stickKnob.style.transform = "translate(0, 0)";
       call("set_touch_torque", 0);
       call("set_touch_thrust", 0);
     }
-    stickBase.addEventListener("touchend", stickRelease);
-    stickBase.addEventListener("touchcancel", stickRelease);
+
+    document.addEventListener("touchstart", e => {
+      if (e.target !== canvas) return;   // buttons/overlays handle their own
+      let zoneTouch = false;
+      for (const t of Array.from(e.changedTouches)) {
+        if (t.clientY < window.innerHeight * STICK_ZONE) continue;
+        zoneTouch = true;
+        if (stickId === null) {
+          stickId = t.identifier;
+          stickCX = t.clientX;
+          stickCY = t.clientY;
+          const r = stickBase.offsetWidth / 2;
+          stickBase.style.left = (stickCX - r) + "px";
+          stickBase.style.top = (stickCY - r) + "px";
+          stickBase.classList.add("active");
+          stickApply(0, 0);
+        }
+      }
+      // Swallow every canvas touch in the zone (extra fingers included) so
+      // miniquad can't turn any of them into a mouse-down (= full thrust).
+      if (zoneTouch) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, { capture: true, passive: false });
+
+    document.addEventListener("touchmove", e => {
+      if (stickId === null) return;
+      let ours = false;
+      for (const t of Array.from(e.changedTouches)) {
+        if (t.identifier === stickId) {
+          stickApply(t.clientX - stickCX, t.clientY - stickCY);
+          ours = true;
+        }
+      }
+      if (ours) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, { capture: true, passive: false });
+
+    function stickTouchEnd(e) {
+      if (stickId === null) return;
+      for (const t of Array.from(e.changedTouches)) {
+        if (t.identifier === stickId) {
+          e.preventDefault();
+          e.stopPropagation();
+          stickRelease();
+        }
+      }
+    }
+    document.addEventListener("touchend", stickTouchEnd, { capture: true, passive: false });
+    document.addEventListener("touchcancel", stickTouchEnd, { capture: true, passive: false });
 
     // --- Bluetooth / USB game controller (Web Gamepad API) ---
     // A controller paired with the device shows up in navigator.getGamepads().
@@ -441,7 +483,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "0295212-pr-59";
+    const wasmRev = "551ae2f-pr-59";
     load("./rapier-test.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // --- Stale-cache detection ---
