@@ -80,6 +80,10 @@ respectively. Opened locally without that substitution, the JS falls back to
 "dev (local build)" for each (detected via `startsWith("__")`). Button/overlay handlers `stopPropagation` on `mousedown` so a desktop
 click doesn't bleed through to the canvas and fire the thruster.
 
+The overlay also has a **⟳ Reload latest build** button (`#force-reload`) —
+the manual cache-bypass: same `?fresh=<ts>` navigation as the toast below,
+for when you don't want to wait for detection.
+
 ### Stale-cache reload toast
 GitHub Pages caches `index.html` for ~10 min, so right after a deploy the
 served page (and the `?v=` wasm cache-buster it carries) can be the previous
