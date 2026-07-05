@@ -1,0 +1,84 @@
+name: Sync gh-pages branch
+description: >
+  Commit a change into the gh-pages publish branch (the single source of truth
+  for the deployed site: root = main build, pr-<n>/ = PR previews). Handles
+  branch creation on first use and retries pushes with backoff so concurrent
+  preview/main deploys can't clobber each other. Publishing to Pages itself
+  happens afterwards in publish-pages.yml (workflow_run).
+inputs:
+  subdir:
+    description: >
+      Directory inside the branch to replace, e.g. "pr-12". Empty = the site
+      root (everything except pr-*/ is replaced).
+    default: ""
+  source-dir:
+    description: >
+      Path to the built site to copy in. Empty + a subdir = delete that subdir
+      (preview teardown).
+    default: ""
+  message:
+    description: Commit message.
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        SUBDIR: ${{ inputs.subdir }}
+        SRC: ${{ inputs.source-dir }}
+        MSG: ${{ inputs.message }}
+      run: |
+        set -euo pipefail
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        WT=.gh-pages-wt
+
+        for attempt in 1 2 3 4 5; do
+          git worktree remove --force "$WT" 2>/dev/null || true
+          rm -rf "$WT"
+
+          if git fetch origin gh-pages 2>/dev/null; then
+            git worktree add --detach "$WT" FETCH_HEAD
+          elif [[ -n "$SUBDIR" && -z "$SRC" ]]; then
+            echo "gh-pages branch doesn't exist — nothing to tear down."
+            exit 0
+          else
+            # First ever publish: start gh-pages as an orphan branch. Drop any
+            # local ref left by a previous failed attempt first.
+            git branch -D gh-pages 2>/dev/null || true
+            git worktree add --detach "$WT"
+            git -C "$WT" checkout --orphan gh-pages
+            git -C "$WT" rm -rfq . 2>/dev/null || true
+          fi
+
+          if [[ -z "$SUBDIR" ]]; then
+            # Main-site publish: replace the root but keep live previews.
+            find "$WT" -mindepth 1 -maxdepth 1 \
+              ! -name 'pr-*' ! -name '.git' -exec rm -rf {} +
+            cp -a "$SRC"/. "$WT"/
+          elif [[ -n "$SRC" ]]; then
+            rm -rf "$WT/${SUBDIR:?}"
+            mkdir -p "$WT/$SUBDIR"
+            cp -a "$SRC"/. "$WT/$SUBDIR"/
+          else
+            rm -rf "$WT/${SUBDIR:?}"
+          fi
+          touch "$WT/.nojekyll"
+
+          git -C "$WT" add -A
+          if git -C "$WT" diff --cached --quiet; then
+            echo "gh-pages already up to date — nothing to publish."
+            exit 0
+          fi
+          git -C "$WT" commit -m "$MSG"
+          if git -C "$WT" push origin HEAD:refs/heads/gh-pages; then
+            echo "Pushed gh-pages update."
+            exit 0
+          fi
+          if [[ "$attempt" == 5 ]]; then
+            echo "Push kept failing after 5 attempts." >&2
+            exit 1
+          fi
+          echo "Push rejected (concurrent update?) — retrying in $((2 ** attempt))s."
+          sleep $((2 ** attempt))
+        done

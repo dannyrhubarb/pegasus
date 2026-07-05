@@ -37,14 +37,31 @@ Open the `https://` URL ngrok prints on your iPhone.
 
 ## Deployment
 
-The project deploys to GitHub Pages automatically via
-[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml). On every push to
-`main`, CI builds the WASM from source and publishes `index.html` plus the
-freshly-built `rapier-test.wasm`.
+The project deploys to GitHub Pages automatically. On every push to `main`,
+[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) builds the WASM
+from source and syncs the site into the root of the `gh-pages` state branch;
+[`.github/workflows/publish-pages.yml`](.github/workflows/publish-pages.yml)
+then snapshots that branch and deploys it to Pages.
 
 To enable it, go to **Settings → Pages** in the repository and set
-**Source** to **GitHub Actions** (one-time setup). The workflow can also be run
-manually from the **Actions** tab via *Run workflow*.
+**Source** to **GitHub Actions** (one-time setup). The deploy workflow can also
+be run manually from the **Actions** tab via *Run workflow*.
+
+### PR previews
+
+Every pull request gets its own preview deployment — no merge to `main`
+required. [`preview-deploy.yml`](.github/workflows/preview-deploy.yml) builds
+each PR push and publishes it at
+
+```
+https://<owner>.github.io/rapier-test/pr-<n>/
+```
+
+posting a sticky comment with the link on the PR.
+[`preview-teardown.yml`](.github/workflows/preview-teardown.yml) removes the
+preview when the PR closes. Previews live in `pr-<n>/` directories on the
+`gh-pages` branch alongside the `main` build at the root, so the production
+site is never affected.
 
 ## First-time setup
 
