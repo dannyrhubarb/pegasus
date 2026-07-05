@@ -51,7 +51,7 @@ push-retry loop for concurrent deploys):
 - `src/ship_mesh.rs` — `SHIP_TRIS` / `SHIP_DETAILS` data tables extracted from the Flash SWF
 - `src/audio.rs` — in-memory WAV synthesis (`wav_from_samples`, `thruster_wav`, `boom_wav`)
 - `index.html` — web wrapper, touch event forwarding, safe-area insets, **info overlay**, **gamepad polling**
-- `mq_js_bundle.js` — **vendored** miniquad/quad-snd JS loader (from not-fl3/miniquad-samples). Pinned in-repo so deploys don't depend on a third-party host; includes the audio backend. Update it deliberately if macroquad is upgraded.
+- `mq_js_bundle.js` — **vendored** miniquad/quad-snd JS loader (from not-fl3/miniquad-samples). Pinned in-repo so deploys don't depend on a third-party host; includes the audio backend. Update it deliberately if macroquad is upgraded. **Gotcha**: it declares globals at top level (`const canvas`, `var gl`, `wasm_exports`, `function load`, …) that share the page's global scope — redeclaring any of them in `index.html`'s inline script is a SyntaxError that silently kills the *whole* inline script (no `load()` → no wasm, page shows only the HTML chrome). Pick distinct names and check the bundle before adding top-level identifiers.
 
 ## Input sources
 Four input paths feed the same physics, combined in the main loop:
