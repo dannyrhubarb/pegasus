@@ -34,6 +34,9 @@ static PAD_TORQUE: AtomicU32 = AtomicU32::new(0);
 static PAD_RESET: AtomicU32 = AtomicU32::new(0);
 static SAFE_AREA_TOP: AtomicU32 = AtomicU32::new(0);
 static SAFE_AREA_LEFT: AtomicU32 = AtomicU32::new(0);
+// Velocity-vector arrow (off by default) — toggled from the info overlay's
+// checkbox, persisted in localStorage on the web side.
+static SHOW_VEL: AtomicU32 = AtomicU32::new(0);
 
 #[unsafe(no_mangle)]
 pub extern "C" fn set_touch_thrust(value: f32) {
@@ -61,6 +64,11 @@ pub extern "C" fn set_pad_torque(value: f32) {
 #[unsafe(no_mangle)]
 pub extern "C" fn set_pad_reset() {
     PAD_RESET.store(1, Ordering::Relaxed);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_show_velocity(on: i32) {
+    SHOW_VEL.store(on as u32, Ordering::Relaxed);
 }
 
 #[unsafe(no_mangle)]
@@ -1059,10 +1067,9 @@ async fn main() {
             draw_triangle(rot(d[0], d[1]), rot(d[2], d[3]), rot(d[4], d[5]), col);
         }
 
-        // Velocity vector: an arrow from the ship showing where momentum is
-        // carrying it, colored by how survivable that speed is (green =
-        // landable, amber = damage-free touch, red = damaging). The length
-        // grows with speed; near-hover shows nothing.
+        // Speed danger color, shared by the HUD readout and the (optional)
+        // velocity arrow: green = landable, amber = damage-free touch, red =
+        // damaging.
         let speed = (ship_vx * ship_vx + ship_vy * ship_vy).sqrt();
         let speed_col = if speed <= 1.0 {
             Color::from_rgba(110, 225, 130, 235)
@@ -1071,7 +1078,10 @@ async fn main() {
         } else {
             Color::from_rgba(240, 85, 60, 235)
         };
-        if !crashed && speed > 0.25 {
+        // Velocity vector (opt-in via the info overlay): an arrow from the
+        // ship showing where momentum is carrying it, length grows with
+        // speed; near-hover shows nothing.
+        if SHOW_VEL.load(Ordering::Relaxed) != 0 && !crashed && speed > 0.25 {
             let dir = vec2(ship_vx, -ship_vy) / speed; // w2s inverts y
             let ship_scr = vec2(sw / 2.0, sh / 2.0);   // camera is ship-centred
             let p0 = ship_scr + dir * (0.85 * view_scale); // start clear of the hull
