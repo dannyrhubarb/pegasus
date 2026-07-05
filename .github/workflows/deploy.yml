@@ -37,12 +37,9 @@ jobs:
       - name: Build WASM
         run: cargo build --release --target wasm32-unknown-unknown
 
-      - name: Fetch miniquad JS bundle
-        run: curl -fsSL https://not-fl3.github.io/miniquad-samples/mq_js_bundle.js -o mq_js_bundle.js
-
       - name: Generate app icons
         run: |
-          sudo apt-get install -y librsvg2-bin
+          sudo apt-get install -y librsvg2-bin binaryen
           rsvg-convert -w 512 -h 512 icon.svg -o icon-512.png
           rsvg-convert -w 192 -h 192 icon.svg -o icon-192.png
           rsvg-convert -w 180 -h 180 icon.svg -o icon-180.png
@@ -54,7 +51,8 @@ jobs:
           cp manifest.json site/
           cp icon-512.png icon-192.png icon-180.png site/
           cp mq_js_bundle.js site/
-          cp target/wasm32-unknown-unknown/release/rapier-test.wasm site/
+          # Shrink the wasm (~30% on top of the size-tuned release profile).
+          wasm-opt -Oz -o site/rapier-test.wasm target/wasm32-unknown-unknown/release/rapier-test.wasm
           # Inject the build's git revision and timestamp into the info overlay.
           GIT_REV=$(git rev-parse --short HEAD)
           BUILD_TIME=$(date -u +"%Y-%m-%d %H:%M UTC")

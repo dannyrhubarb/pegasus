@@ -1,3 +1,4 @@
+use macroquad::audio::{load_sound_from_bytes, play_sound, set_sound_volume, PlaySoundParams};
 use macroquad::prelude::*;
 use macroquad::rand::gen_range;
 use rapier2d::prelude::*;
@@ -76,6 +77,24 @@ const SEG_LEN: f32 = 3.0;
 const HALF_WINDOW: i64 = 80;
 // Render scale for the ship mesh relative to the raw SWF coordinates
 const SHIP_SCALE: f32 = 1.5;
+// Where [R] / gamepad reset drops the ship. Obstacles keep clear of this point
+// (like the x = 0 spawn) so a reset never lands on a rock.
+const RESET_X: f32 = 64.0;
+// Physics runs on a fixed timestep (accumulator in the main loop) so handling
+// is identical on every display refresh rate; rendering interpolates the ship
+// between the last two steps.
+const PHYSICS_DT: f32 = 1.0 / 120.0;
+// Crash when the ship's velocity changes by more than this within one frame
+// (collision impulse). Gravity/thrust change v by < 0.3 m/s per frame, so any
+// dv above this is a hard impact — roughly hitting rock at ≥ 4 m/s.
+const CRASH_DV: f32 = 5.0;
+// Seconds from crash to respawn at RESET_X.
+const CRASH_RESPAWN: f32 = 1.5;
+// Fuel: the main engine burns a full tank in ~28 s of continuous thrust; the
+// RCS sips. An empty tank kills engine and RCS until reset/respawn refills it.
+const FUEL_MAX: f32 = 100.0;
+const FUEL_BURN_MAIN: f32 = 3.5; // units/s while the main engine fires
+const FUEL_BURN_RCS: f32 = 1.2;  // units/s while an RCS nozzle fires
 
 // Ship hull mesh: 41 triangles extracted from the original Flash SWF
 // (mcSpaceship, character id 41 in completeHS8replay.swf), ear-clip triangulated
@@ -448,6 +467,72 @@ impl Rng {
     }
 }
 
+// ---- Procedural audio -----------------------------------------------------
+// Tiny WAVs are synthesised in memory at startup (no asset files): a looping
+// low-passed noise rumble for the engine (volume follows `glow`) and a
+// decaying noise burst for crashes. Native builds link macroquad's dummy audio
+// backend (the "audio" feature is wasm-only, see Cargo.toml) and stay silent.
+
+const AUDIO_RATE: u32 = 22050;
+
+// 16-bit mono PCM → WAV bytes.
+fn wav_from_samples(samples: &[i16], rate: u32) -> Vec<u8> {
+    let data_len = (samples.len() * 2) as u32;
+    let mut w = Vec::with_capacity(44 + data_len as usize);
+    w.extend_from_slice(b"RIFF");
+    w.extend_from_slice(&(36 + data_len).to_le_bytes());
+    w.extend_from_slice(b"WAVEfmt ");
+    w.extend_from_slice(&16u32.to_le_bytes());      // fmt chunk size
+    w.extend_from_slice(&1u16.to_le_bytes());       // PCM
+    w.extend_from_slice(&1u16.to_le_bytes());       // mono
+    w.extend_from_slice(&rate.to_le_bytes());
+    w.extend_from_slice(&(rate * 2).to_le_bytes()); // byte rate
+    w.extend_from_slice(&2u16.to_le_bytes());       // block align
+    w.extend_from_slice(&16u16.to_le_bytes());      // bits per sample
+    w.extend_from_slice(b"data");
+    w.extend_from_slice(&data_len.to_le_bytes());
+    for s in samples {
+        w.extend_from_slice(&s.to_le_bytes());
+    }
+    w
+}
+
+// 1 s of low-passed noise, cross-faded into itself for a click-free loop.
+fn thruster_wav() -> Vec<u8> {
+    let n = AUDIO_RATE as usize;
+    let mut rng = Rng::new(0x7448_5254);
+    let mut lp = 0.0f32;
+    let mut s = Vec::with_capacity(n);
+    for _ in 0..n {
+        let white = rng.unit() * 2.0 - 1.0;
+        lp += (white - lp) * 0.12; // one-pole low-pass → deep rumble
+        s.push(lp * 2.4);
+    }
+    let fade = 2048;
+    for k in 0..fade {
+        let t = k as f32 / fade as f32;
+        s[n - fade + k] = s[n - fade + k] * (1.0 - t) + s[k] * t;
+    }
+    let pcm: Vec<i16> = s.iter().map(|v| (v.clamp(-1.0, 1.0) * 22000.0) as i16).collect();
+    wav_from_samples(&pcm, AUDIO_RATE)
+}
+
+// 0.9 s noise burst that darkens as it decays — the crash boom.
+fn boom_wav() -> Vec<u8> {
+    let n = (AUDIO_RATE as f32 * 0.9) as usize;
+    let mut rng = Rng::new(0x424f_4f4d);
+    let mut lp = 0.0f32;
+    let mut pcm = Vec::with_capacity(n);
+    for i in 0..n {
+        let t = i as f32 / n as f32;
+        let white = rng.unit() * 2.0 - 1.0;
+        lp += (white - lp) * (0.30 * (1.0 - t) + 0.04);
+        let env = (1.0 - t) * (1.0 - t);
+        pcm.push(((lp * env * 3.0).clamp(-1.0, 1.0) * 26000.0) as i16);
+    }
+    wav_from_samples(&pcm, AUDIO_RATE)
+}
+
 // --- Low-poly faceted wall lattice ---------------------------------------
 // The cave walls are rendered as a grid of flat-shaded triangles ("facets").
 // Geometry is a pure function of a GLOBAL column index so the shared boundary
@@ -490,6 +575,18 @@ fn lattice_point(col: i64, row: usize, side: u8) -> Vec2 {
     vec2(x + jx, edge_y + dir * (depth + jy))
 }
 
+// Draw a flat-shaded triangle soup (sequential indices, no shared vertices).
+// Indices are u16, so a single mesh must stay under 65 536 vertices — the
+// debug_assert catches it loudly if facet density ever grows past that.
+fn draw_flat_mesh(vertices: Vec<Vertex>) {
+    if vertices.is_empty() {
+        return;
+    }
+    debug_assert!(vertices.len() <= u16::MAX as usize, "mesh exceeds u16 index range");
+    let indices: Vec<u16> = (0..vertices.len() as u16).collect();
+    draw_mesh(&Mesh { vertices, indices, texture: None });
+}
+
 // Flat-shade color for a wall facet: a band base color (by row) modulated by a
 // deterministic per-facet brightness so each triangle reads as a distinct facet.
 fn facet_shade(base: Color, col: i64, row: usize, side: u8, salt: u32) -> Color {
@@ -524,8 +621,8 @@ fn obstacle_spec(k: i64) -> Option<ObstacleSpec> {
 
     let cx = k as f32 * OBSTACLE_SPACING + rng.range(-3.0, 3.0);
 
-    // Keep the spawn area clear so a reset never drops the ship onto a rock.
-    if cx.abs() < 9.0 {
+    // Keep the spawn and reset areas clear so neither drops the ship onto a rock.
+    if cx.abs() < 9.0 || (cx - RESET_X).abs() < 9.0 {
         return None;
     }
 
@@ -691,8 +788,11 @@ async fn main() {
     );
 
     let gravity = vector![0.0, -1.62];
-    let mut integration_params = IntegrationParameters::default();
-    integration_params.num_solver_iterations = std::num::NonZeroUsize::new(8).unwrap();
+    let integration_params = IntegrationParameters {
+        dt: PHYSICS_DT,
+        num_solver_iterations: std::num::NonZeroUsize::new(8).unwrap(),
+        ..Default::default()
+    };
     let mut physics_pipeline = PhysicsPipeline::new();
     let mut island_manager = IslandManager::new();
     let mut broad_phase = DefaultBroadPhase::new();
@@ -744,23 +844,103 @@ async fn main() {
         },
     ).expect("cave light shader");
 
+    // Procedural sounds, generated in memory (see thruster_wav / boom_wav).
+    // The engine rumble runs as a muted loop whose volume follows `glow`.
+    let thruster_snd = load_sound_from_bytes(&thruster_wav()).await.ok();
+    let boom_snd = load_sound_from_bytes(&boom_wav()).await.ok();
+    if let Some(s) = &thruster_snd {
+        play_sound(s, PlaySoundParams { looped: true, volume: 0.0 });
+    }
+
+    let mut phys_accum = 0.0f32;
+    // Ship state at the previous physics step, for render interpolation.
+    let mut prev_ship = (0.0f32, cave_center(0.0), 0.0f32); // x, y, angle
+    // Crash state: velocity last frame (impact = big dv) and the wreck timer
+    // (> 0 → crashed: input dead, ship hidden, respawn when it hits 0).
+    let mut prev_vel = (0.0f32, 0.0f32);
+    let mut crash_timer = 0.0f32;
+    let mut fuel = FUEL_MAX;
+
     loop {
-        integration_params.dt = get_frame_time().min(0.05);
-        physics_pipeline.step(
-            &gravity,
-            &integration_params,
-            &mut island_manager,
-            &mut broad_phase,
-            &mut narrow_phase,
-            &mut rigid_body_set,
-            &mut collider_set,
-            &mut impulse_joint_set,
-            &mut multibody_joint_set,
-            &mut ccd_solver,
-            Some(&mut query_pipeline),
-            &(),
-            &(),
-        );
+        // Fixed-timestep accumulator: the cap bounds catch-up work after a
+        // hitch (same role as the old per-frame dt cap of 0.05 s).
+        phys_accum = (phys_accum + get_frame_time()).min(0.05);
+        while phys_accum >= PHYSICS_DT {
+            {
+                let body = &rigid_body_set[box_handle];
+                prev_ship = (body.translation().x, body.translation().y, body.rotation().angle());
+            }
+            physics_pipeline.step(
+                &gravity,
+                &integration_params,
+                &mut island_manager,
+                &mut broad_phase,
+                &mut narrow_phase,
+                &mut rigid_body_set,
+                &mut collider_set,
+                &mut impulse_joint_set,
+                &mut multibody_joint_set,
+                &mut ccd_solver,
+                Some(&mut query_pipeline),
+                &(),
+                &(),
+            );
+            phys_accum -= PHYSICS_DT;
+        }
+
+        // --- Crash detection ---
+        // A collision shows up as a large velocity change across the frame's
+        // physics steps; thrust and gravity stay well under CRASH_DV.
+        {
+            let (wx, wy, vx, vy) = {
+                let b = &rigid_body_set[box_handle];
+                (b.translation().x, b.translation().y, b.linvel().x, b.linvel().y)
+            };
+            if crash_timer <= 0.0 {
+                let (dvx, dvy) = (vx - prev_vel.0, vy - prev_vel.1);
+                if (dvx * dvx + dvy * dvy).sqrt() > CRASH_DV {
+                    crash_timer = CRASH_RESPAWN;
+                    // Debris burst at the crash site.
+                    for _ in 0..70 {
+                        let ang = gen_range(0.0f32, std::f32::consts::TAU);
+                        let spd = gen_range(1.0f32, 9.0);
+                        particles.push(Particle {
+                            x: wx + gen_range(-0.3f32, 0.3),
+                            y: wy + gen_range(-0.3f32, 0.3),
+                            vx: ang.cos() * spd,
+                            vy: ang.sin() * spd + 1.5,
+                            life: gen_range(0.5f32, 1.0),
+                            kind: 3,
+                        });
+                    }
+                    if let Some(s) = &boom_snd {
+                        play_sound(s, PlaySoundParams { looped: false, volume: 0.9 });
+                    }
+                    // Park the wreck where it died so the camera holds still.
+                    let rb = rigid_body_set.get_mut(box_handle).unwrap();
+                    rb.set_linvel(vector![0.0, 0.0], true);
+                    rb.set_angvel(0.0, true);
+                    rb.set_gravity_scale(0.0, true);
+                }
+            }
+            prev_vel = (vx, vy);
+        }
+        // Wreck timer → respawn at the reset point with a fresh ship.
+        if crash_timer > 0.0 {
+            crash_timer -= get_frame_time();
+            if crash_timer <= 0.0 {
+                let rb = rigid_body_set.get_mut(box_handle).unwrap();
+                rb.set_gravity_scale(1.0, true);
+                rb.set_translation(vector![RESET_X, cave_center(RESET_X)], true);
+                rb.set_linvel(vector![0.0, 0.0], true);
+                rb.set_angvel(0.0, true);
+                rb.set_rotation(Rotation::new(0.0), true);
+                prev_ship = (RESET_X, cave_center(RESET_X), 0.0);
+                prev_vel = (0.0, 0.0);
+                fuel = FUEL_MAX;
+            }
+        }
+        let crashed = crash_timer > 0.0;
 
         let sh = screen_height();
         let sw = screen_width();
@@ -794,7 +974,20 @@ async fn main() {
             let body = &rigid_body_set[box_handle];
             let p = body.translation();
             let v = body.linvel();
-            (p.x, p.y, body.rotation().angle(), v.x, v.y)
+            // Interpolate between the last two physics steps so rendering
+            // stays smooth when the frame rate and PHYSICS_DT don't divide
+            // evenly (e.g. 144 Hz display over a 120 Hz simulation).
+            let alpha = (phys_accum / PHYSICS_DT).clamp(0.0, 1.0);
+            let (px, py, pa) = prev_ship;
+            let mut da = body.rotation().angle() - pa;
+            if da > std::f32::consts::PI { da -= std::f32::consts::TAU; }
+            if da < -std::f32::consts::PI { da += std::f32::consts::TAU; }
+            (
+                px + (p.x - px) * alpha,
+                py + (p.y - py) * alpha,
+                pa + da * alpha,
+                v.x, v.y,
+            )
         };
 
         // Local-to-world helpers (position and direction)
@@ -807,12 +1000,17 @@ async fn main() {
              lx * angle.sin() + ly * angle.cos())
         };
 
-        // Read thrust state early so lighting can use it
-        let thrusting_now = is_mouse_button_down(MouseButton::Left)
-            || is_key_down(KeyCode::Down)
-            || TOUCH_THRUST.load(Ordering::Relaxed) != 0
-            || PAD_THRUST.load(Ordering::Relaxed) != 0;
+        // Read thrust state early so lighting can use it (dead while crashed
+        // or with an empty tank)
+        let thrusting_now = !crashed && fuel > 0.0
+            && (is_mouse_button_down(MouseButton::Left)
+                || is_key_down(KeyCode::Down)
+                || TOUCH_THRUST.load(Ordering::Relaxed) != 0
+                || PAD_THRUST.load(Ordering::Relaxed) != 0);
         glow += (if thrusting_now { 1.0 } else { 0.0 } - glow) * 0.12;
+        if let Some(s) = &thruster_snd {
+            set_sound_volume(s, glow * 0.6);
+        }
 
         // --- Slide the cave window (2D: segments in x, layers in y) ---
         let ship_seg = (cam_x / SEG_LEN).floor() as i64;
@@ -896,8 +1094,9 @@ async fn main() {
             draw_circle(px, py, 1.0, Color::from_rgba(200, 200, 255, 150));
         }
 
-        // Cave walls
-        let margin = sw + view_scale * 4.0;
+        // Cave walls. Cull pad: 4 m of world keeps jittered deep-row facets from
+        // popping at the screen edge without tessellating a whole extra screen.
+        let margin = view_scale * 4.0;
         let ship_screen = vec2(sw / 2.0, sh / 2.0);
         let base_dim = sw.min(sh);
         let light_radius = base_dim * 0.55 + glow * base_dim * 0.30;
@@ -1004,10 +1203,7 @@ async fn main() {
                     }
                 }
 
-                if !verts.is_empty() {
-                    let indices: Vec<u16> = (0..verts.len() as u16).collect();
-                    draw_mesh(&Mesh { vertices: verts, indices, texture: None });
-                }
+                draw_flat_mesh(verts);
             }
         }
 
@@ -1073,10 +1269,7 @@ async fn main() {
                     verts.push(v(sd0, rock_dark)); verts.push(v(f1, rock_dark)); verts.push(v(f0, rock_dark));
                 }
 
-                if !verts.is_empty() {
-                    let indices: Vec<u16> = (0..verts.len() as u16).collect();
-                    draw_mesh(&Mesh { vertices: verts, indices, texture: None });
-                }
+                draw_flat_mesh(verts);
             }
         }
 
@@ -1086,7 +1279,13 @@ async fn main() {
         // deterministic per-facet brightness plus a fake top-light gradient, so
         // boulders read as low-poly rocks with brighter tops.
         const BEVEL: f32 = 16.0;
-        for (&(k, _layer), ob) in obstacles.iter() {
+        // Sorted keys, not HashMap order: adjacent boulders can overlap, and
+        // map iteration order changes as the window slides, which would flip
+        // their z-order mid-flight.
+        let mut obstacle_keys: Vec<(i64, i64)> = obstacles.keys().copied().collect();
+        obstacle_keys.sort_unstable();
+        for &(k, layer) in &obstacle_keys {
+            let ob = &obstacles[&(k, layer)];
             let (c, s) = (ob.rot.cos(), ob.rot.sin());
             let poly: Vec<Vec2> = ob.verts.iter().map(|p| {
                 let wx = ob.cx + p.x * c - p.y * s;
@@ -1146,8 +1345,7 @@ async fn main() {
                 let c_fan = facet(rock_mid, i, 0x85eb_ca6b, fan_cy);
                 verts.push(v(center, c_fan)); verts.push(v(inset[i], c_fan)); verts.push(v(inset[j], c_fan));
             }
-            let indices: Vec<u16> = (0..verts.len() as u16).collect();
-            draw_mesh(&Mesh { vertices: verts, indices, texture: None });
+            draw_flat_mesh(verts);
         }
 
         gl_use_default_material();
@@ -1156,9 +1354,10 @@ async fn main() {
         for p in &particles {
             let s = w2s(p.x, p.y, sh, cam_x, cam_y);
             let a = (p.life * 255.0) as u8;
-            let radius = p.life * if p.kind == 0 { 5.0 } else { 3.0 };
+            let radius = p.life * match p.kind { 0 => 5.0, 3 => 9.0, _ => 3.0 };
             let color = match p.kind {
                 0 => Color::from_rgba(255, (120.0 + p.life * 100.0) as u8, 20, a), // orange flame
+                3 => Color::from_rgba(255, (60.0 + p.life * 180.0) as u8, (p.life * 80.0) as u8, a), // explosion
                 _ => Color::from_rgba(100, 180, 255, a),                             // blue RCS
             };
             draw_circle(s.x, s.y, radius, color);
@@ -1177,7 +1376,7 @@ async fn main() {
 
         // Thruster flame drawn first (behind the hull), out of the engine base
         // at local -Y. Scales with `glow`.
-        if glow > 0.02 {
+        if !crashed && glow > 0.02 {
             let base = -0.475;
             let fw = 0.10 + glow * 0.05;
             let ft = glow * 0.36;
@@ -1198,7 +1397,7 @@ async fn main() {
         let hull_base = (168.0_f32, 174.0_f32, 188.0_f32); // silver (#CCCCCC family)
         let tip_base  = (210.0_f32, 50.0_f32,  45.0_f32);  // red nose cone
         const TIP_Y: f32 = 0.30;
-        for t in SHIP_TRIS.iter() {
+        for t in SHIP_TRIS.iter().filter(|_| !crashed) {
             let cy = (t[1] + t[3] + t[5]) / 3.0;
             let s = (0.84 + (cy + 0.475) / 0.95 * 0.34).min(1.25);
             let base = if cy > TIP_Y { tip_base } else { hull_base };
@@ -1213,7 +1412,7 @@ async fn main() {
         // Detail overlays (window, leg-pods, engine cup, gold accent) — exact
         // sub-shapes from the original ship, drawn on top of the hull. The two
         // leg-pods (extracted dark-silver 0.518/0.537/0.588) are recoloured red.
-        for d in SHIP_DETAILS.iter() {
+        for d in SHIP_DETAILS.iter().filter(|_| !crashed) {
             let is_leg = (d[6] - 0.518).abs() < 0.001
                 && (d[7] - 0.537).abs() < 0.001
                 && (d[8] - 0.588).abs() < 0.001;
@@ -1228,9 +1427,23 @@ async fn main() {
         smooth_fps += (get_fps() as f32 - smooth_fps) * 0.05;
         let cave_x = cam_x.rem_euclid(PERIOD);
         draw_text(
-            &format!("x={:.0}  lvl={}  {:.0}m/{}m   [R] reset   FPS: {:.0}", cam_x, ship_layer, cave_x, PERIOD as i32, smooth_fps),
-            safe_left + 10.0 * ui, safe_top + 206.0 * ui, 36.0 * ui, WHITE,
+            format!("x={:.0}  lvl={}  {:.0}m/{}m   [R] reset   FPS: {:.0}", cam_x, ship_layer, cave_x, PERIOD as i32, smooth_fps),
+            safe_left + 10.0 * ui, safe_top + 232.0 * ui, 36.0 * ui, WHITE,
         );
+
+        if crashed {
+            let msg = "CRASHED";
+            let fs = 96.0 * ui;
+            let dims = measure_text(msg, None, fs as u16, 1.0);
+            draw_text(msg, (sw - dims.width) / 2.0, sh * 0.42, fs,
+                Color::from_rgba(255, 90, 60, 255));
+        } else if fuel <= 0.0 {
+            let msg = "OUT OF FUEL — [R] RESET";
+            let fs = 48.0 * ui;
+            let dims = measure_text(msg, None, fs as u16, 1.0);
+            draw_text(msg, (sw - dims.width) / 2.0, sh * 0.42, fs,
+                Color::from_rgba(255, 180, 60, 255));
+        }
 
         // Controls
         let rb = rigid_body_set.get_mut(box_handle).unwrap();
@@ -1246,8 +1459,9 @@ async fn main() {
         let touch_torque = (f32::from_bits(TOUCH_TORQUE.load(Ordering::Relaxed))
             + f32::from_bits(PAD_TORQUE.load(Ordering::Relaxed)))
             .clamp(-1.0, 1.0);
-        let rotating_left  = is_key_down(KeyCode::Left)  || touch_torque < -0.1;
-        let rotating_right = is_key_down(KeyCode::Right) || touch_torque >  0.1;
+        let rcs_ok = !crashed && fuel > 0.0;
+        let rotating_left  = rcs_ok && (is_key_down(KeyCode::Left)  || touch_torque < -0.1);
+        let rotating_right = rcs_ok && (is_key_down(KeyCode::Right) || touch_torque >  0.1);
         // Rotate by firing a side RCS booster: apply the force *at the nozzle*
         // (off-center) instead of a pure couple, so the ship pivots about where
         // the boosters actually push. Nozzles exhaust downward (-Y local) → the
@@ -1264,12 +1478,21 @@ async fn main() {
             fire_rcs(rb, -1.0, RCS_FORCE);
         } else if rotating_right {
             fire_rcs(rb, 1.0, RCS_FORCE);
-        } else if touch_torque != 0.0 {
+        } else if rcs_ok && touch_torque != 0.0 {
             fire_rcs(rb, touch_torque.signum(), RCS_FORCE * touch_torque.abs());
         }
 
         // --- Particle emission ---
         let dt = get_frame_time();
+
+        // Burn fuel for whatever fired this frame.
+        if thrusting_now {
+            fuel -= FUEL_BURN_MAIN * dt;
+        }
+        if rotating_left || rotating_right || (rcs_ok && touch_torque != 0.0) {
+            fuel -= FUEL_BURN_RCS * dt;
+        }
+        fuel = fuel.max(0.0);
 
         // Main thruster: exhaust exits local -Y (out the bottom), 8 particles/frame
         if thrusting_now {
@@ -1320,8 +1543,9 @@ async fn main() {
         // Update particles
         let decay_main = dt / 0.5;  // main thruster lives ~0.5s
         let decay_rcs  = dt / 0.3;  // RCS lives ~0.3s
+        let decay_boom = dt / 1.1;  // explosion debris lives ~1.1s
         for p in &mut particles {
-            let decay = if p.kind == 0 { decay_main } else { decay_rcs };
+            let decay = match p.kind { 0 => decay_main, 3 => decay_boom, _ => decay_rcs };
             p.life -= decay;
             p.x += p.vx * dt;
             p.y += p.vy * dt;
@@ -1330,10 +1554,17 @@ async fn main() {
 
         if is_key_pressed(KeyCode::R) || PAD_RESET.swap(0, Ordering::Relaxed) != 0 {
             let rb = rigid_body_set.get_mut(box_handle).unwrap();
-            rb.set_translation(vector![64.0, cave_center(64.0)], true);
+            rb.set_gravity_scale(1.0, true); // in case we reset out of a crash
+            rb.set_translation(vector![RESET_X, cave_center(RESET_X)], true);
             rb.set_linvel(vector![0.0, 0.0], true);
             rb.set_angvel(0.0, true);
             rb.set_rotation(Rotation::new(0.0), true);
+            // Snap the interpolation + crash state too, or the camera lerps
+            // across the teleport and the velocity jump reads as an impact.
+            prev_ship = (RESET_X, cave_center(RESET_X), 0.0);
+            prev_vel = (0.0, 0.0);
+            crash_timer = 0.0;
+            fuel = FUEL_MAX;
         }
 
         // --- Minimap (ship always centred; pans in BOTH axes) ---
@@ -1455,6 +1686,180 @@ async fn main() {
         // Border
         draw_rectangle_lines(mm_ox, mm_oy, mm_w, mm_h, 1.0, Color::from_rgba(255, 255, 255, 120));
 
+        // Fuel gauge — slim bar directly under the minimap.
+        let fg_y = mm_oy + mm_h + 8.0 * ui;
+        let fg_h = 14.0 * ui;
+        let frac = fuel / FUEL_MAX;
+        let fg_col = if frac > 0.5 {
+            Color::from_rgba(90, 200, 120, 255)
+        } else if frac > 0.25 {
+            Color::from_rgba(230, 180, 60, 255)
+        } else {
+            Color::from_rgba(220, 70, 50, 255)
+        };
+        draw_rectangle(mm_ox, fg_y, mm_w, fg_h, mm_dark);
+        draw_rectangle(mm_ox, fg_y, mm_w * frac, fg_h, fg_col);
+        draw_rectangle_lines(mm_ox, fg_y, mm_w, fg_h, 1.0, Color::from_rgba(255, 255, 255, 120));
+
         next_frame().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The whole world is pure functions of position/slot index. These tests
+    // pin the invariants the rendering and collision code rely on.
+
+    #[test]
+    fn cave_repeats_every_period() {
+        for i in 0..200 {
+            let x = i as f32 * 3.7 - 300.0;
+            assert!((cave_center(x + PERIOD) - cave_center(x)).abs() < 1e-3);
+            assert!((cave_half_width(x + PERIOD) - cave_half_width(x)).abs() < 1e-3);
+        }
+    }
+
+    #[test]
+    fn cave_never_pinches_shut() {
+        for i in 0..6000 {
+            let x = i as f32 * 0.1;
+            assert!(cave_half_width(x) > 1.0, "cave too narrow at x={x}");
+        }
+    }
+
+    #[test]
+    fn lattice_row0_is_exactly_on_the_collider_line() {
+        // The hard rendering rule: row 0 must coincide with the wall edge that
+        // the segment colliders are built from — bit-exact, no jitter.
+        for col in -500..500 {
+            let x = col_x(col);
+            let top = lattice_point(col, 0, 0);
+            let bot = lattice_point(col, 0, 1);
+            assert_eq!(top, vec2(x, cave_center(x) + cave_half_width(x)));
+            assert_eq!(bot, vec2(x, cave_center(x) - cave_half_width(x)));
+        }
+    }
+
+    #[test]
+    fn lattice_jitter_only_goes_into_the_rock() {
+        for col in -200..200 {
+            for row in 1..N_ROWS {
+                let top = lattice_point(col, row, 0);
+                let bot = lattice_point(col, row, 1);
+                let edge_top = lattice_point(col, 0, 0).y;
+                let edge_bot = lattice_point(col, 0, 1).y;
+                assert!(top.y > edge_top, "ceiling row {row} pokes into the cave");
+                assert!(bot.y < edge_bot, "floor row {row} pokes into the cave");
+            }
+        }
+    }
+
+    #[test]
+    fn obstacles_are_deterministic() {
+        for k in -50..50 {
+            let (a, b) = (obstacle_spec(k), obstacle_spec(k));
+            match (a, b) {
+                (None, None) => {}
+                (Some(a), Some(b)) => {
+                    assert_eq!(a.cx, b.cx);
+                    assert_eq!(a.cy, b.cy);
+                    assert_eq!(a.rot, b.rot);
+                    assert_eq!(a.pts, b.pts);
+                }
+                _ => panic!("slot {k} not deterministic"),
+            }
+        }
+    }
+
+    #[test]
+    fn obstacles_keep_clear_of_spawn_reset_and_walls() {
+        for k in -200..200 {
+            let Some(spec) = obstacle_spec(k) else { continue };
+            assert!(spec.cx.abs() >= 9.0, "slot {k} too close to spawn");
+            assert!((spec.cx - RESET_X).abs() >= 9.0, "slot {k} too close to reset");
+            // Documented invariant: >= 1.3 m gap to the nearer wall.
+            let max_r = spec
+                .pts
+                .iter()
+                .map(|p| (p.x * p.x + p.y * p.y).sqrt())
+                .fold(0.0f32, f32::max);
+            let off = (spec.cy - cave_center(spec.cx)).abs();
+            let hw = cave_half_width(spec.cx);
+            assert!(
+                off + max_r <= hw - 1.3 + 1e-3,
+                "slot {k}: gap {} < 1.3 m",
+                hw - off - max_r
+            );
+        }
+    }
+
+    #[test]
+    fn shaft_pattern_repeats_every_period() {
+        // 4 slots per PERIOD (50 segs * 3 m * 4 = 600 m): slot s+4 must be the
+        // exact translate of slot s so the x-wrap stays seamless.
+        for s in -8..8 {
+            assert_eq!(
+                shaft_open_seg(s + 4),
+                shaft_open_seg(s) + 4 * SHAFT_SPACING_SEGS
+            );
+            for side in [0u8, 1] {
+                for i in 0..=10 {
+                    let t = i as f32 / 10.0;
+                    let dx = shaft_wall_x(s + 4, side, t) - shaft_wall_x(s, side, t);
+                    assert!((dx - PERIOD).abs() < 1e-3);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shaft_openings_match_wall_gaps() {
+        for s in -8..8 {
+            let o = shaft_open_seg(s);
+            assert!(!seg_in_opening(o - 1));
+            for idx in o..o + SHAFT_OPEN_SEGS {
+                assert!(seg_in_opening(idx), "segment {idx} of shaft {s} has a wall");
+            }
+            assert!(!seg_in_opening(o + SHAFT_OPEN_SEGS));
+        }
+    }
+
+    #[test]
+    fn shafts_stay_flyable() {
+        // Opening is 9 m; the wiggle envelope must leave >= 6.5 m of width.
+        for s in 0..4 {
+            for i in 0..=100 {
+                let t = i as f32 / 100.0;
+                let width = shaft_wall_x(s, 1, t) - shaft_wall_x(s, 0, t);
+                assert!(width >= 6.5 - 1e-3, "shaft {s} narrows to {width} at t={t}");
+            }
+        }
+    }
+
+    #[test]
+    fn rng_is_deterministic_and_in_range() {
+        let (mut a, mut b) = (Rng::new(42), Rng::new(42));
+        for _ in 0..1000 {
+            let u = a.unit();
+            assert_eq!(u, b.unit());
+            assert!((0.0..1.0).contains(&u));
+        }
+        let mut r = Rng::new(7);
+        for _ in 0..1000 {
+            let v = r.range_int(3, 9);
+            assert!((3..=9).contains(&v));
+        }
+    }
+
+    #[test]
+    fn wav_header_is_well_formed() {
+        let wav = wav_from_samples(&[0i16; 100], AUDIO_RATE);
+        assert_eq!(wav.len(), 44 + 200);
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..16], b"WAVEfmt ");
+        assert_eq!(&wav[36..40], b"data");
+        assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 200);
     }
 }

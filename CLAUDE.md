@@ -6,13 +6,15 @@ Rust + macroquad 0.4.15 + Rapier 2D game compiled to WebAssembly and served via 
 
 ## Build & deploy
 ```bash
-cargo build          # native dev build (quick sanity check)
+cargo build          # native dev build (quick sanity check; silent — audio is wasm-only)
+cargo test           # unit tests for the deterministic world functions
 ```
 Deploy is automatic: any push to `main` triggers the GitHub Actions workflow `.github/workflows/deploy.yml` which builds the WASM target and publishes to GitHub Pages. Build takes ~5–10 minutes.
 
 ## Project structure
 - `src/main.rs` — entire game (single file): physics, rendering, cave generation, HUD, minimap, touch controls
 - `index.html` — web wrapper, touch event forwarding, safe-area insets, **info overlay**, **gamepad polling**
+- `mq_js_bundle.js` — **vendored** miniquad/quad-snd JS loader (from not-fl3/miniquad-samples). Pinned in-repo so deploys don't depend on a third-party host; includes the audio backend. Update it deliberately if macroquad is upgraded.
 
 ## Input sources
 Four input paths feed the same physics, combined in the main loop:
@@ -207,7 +209,7 @@ Random convex-polygon boulders are placed deterministically along the cave so th
 ### Generation
 - `OBSTACLE_SPACING = 16.0 m` between slots. Each slot `k` maps to a fixed world-x position plus ±3 m jitter.
 - A tiny integer-hash PRNG (`Rng` struct, seeded by slot index) drives all randomness: position jitter, size, rotation, vertex count, vertex radii.
-- Slot is skipped if: `cx.abs() < 9.0` (spawn-clear zone), `hw < 4.5` (pinch point), within 8 m of a shaft opening (junctions stay flyable), or 1-in-6 random empty.
+- Slot is skipped if: within 9 m of the spawn (x = 0) or the reset point (`RESET_X` = 64), `hw < 4.5` (pinch point), within 8 m of a shaft opening (junctions stay flyable), or 1-in-6 random empty.
 - Size: `max_r = (hw * 0.65).min(5.5)`, `r = rng.range(0.3, 1.0) * max_r`. Wide sections get genuine boulders (up to 5.5 m radius).
 - Centre offset: `max_off = (hw - r - 1.3).max(0.0)` — guarantees ≥ 1.3 m gap to the nearer wall.
 
@@ -258,7 +260,50 @@ the outer `poly` ring stays the exact hull. All facet displacement goes *into th
 rock* (away from the cave interior), never into the cave — otherwise the visible
 surface pokes past the collider and the ship appears to sink into the rock.
 
+## Audio (web only)
+
+Two sounds, both **synthesised in memory at startup** (`wav_from_samples` +
+`thruster_wav`/`boom_wav`, driven by the deterministic `Rng`) — no asset files:
+a 1 s low-passed noise loop for the engine (started muted+looped; volume set to
+`glow * 0.6` each frame) and a 0.9 s darkening noise burst played on crash.
+The macroquad `audio` feature is **wasm-only** (`[target.'cfg(target_arch =
+"wasm32")'.dependencies]` in Cargo.toml) because quad-snd needs ALSA to link on
+native Linux; native builds get macroquad's dummy backend (same API, silent),
+so `cargo build`/`cargo test` need no system packages. Browsers unmute the
+AudioContext on the first user gesture (handled by the miniquad JS bundle).
+
+## Fuel
+
+`FUEL_MAX = 100`; the main engine burns `FUEL_BURN_MAIN = 3.5/s` (~28 s of
+continuous thrust), RCS burns `FUEL_BURN_RCS = 1.2/s`. `thrusting_now` and the
+RCS gates (`rcs_ok`) require `fuel > 0` — an empty tank kills engine, RCS,
+particles and glow, and shows "OUT OF FUEL — [R] RESET" (reset and respawn
+refill). HUD: slim gauge bar directly under the minimap (green > 50%, amber
+> 25%, red below); the HUD text line moved down to `232*ui` baseline to clear
+it.
+
+## Crash & respawn
+
+Impacts are detected from the **frame-to-frame velocity change**: after the
+physics substeps, `|v − prev_vel| > CRASH_DV (5 m/s)` means a collision impulse
+(thrust/gravity change v by < 0.3 m/s per frame) — no Rapier contact-event
+plumbing needed. On crash: 70 explosion particles (`kind 3`, ~1.1 s life), the
+wreck is parked (`set_gravity_scale(0)`, velocities zeroed) so the camera holds
+still, input is dead (`crashed` gates thrust/RCS and ship rendering), and a
+"CRASHED" banner shows. After `CRASH_RESPAWN = 1.5 s` the ship respawns at
+`RESET_X` (gravity restored). Anything that teleports or zeroes velocity
+(reset, respawn) must also snap `prev_vel` — otherwise the velocity jump reads
+as an impact — and `prev_ship` (render interpolation).
+
 ## Physics notes
+
+**Fixed timestep**: physics steps at `PHYSICS_DT = 1/120 s` through an
+accumulator in the main loop (catch-up capped at 0.05 s per frame), so handling
+is identical on 60/120/144 Hz displays. Rendering interpolates the ship between
+the last two physics states (`prev_ship` + `alpha = accum/PHYSICS_DT`); anything
+that teleports the body (reset/respawn) must also snap `prev_ship` or the camera
+lerps across the jump for a frame. Forces set in the controls section persist
+across all substeps of the following frame (reset each frame via `reset_forces`).
 
 The ship uses a **compound collider** of three **capsules** (stadium shapes) parented to the same rigid body, tracing the lander silhouette of the 1.5× scaled visual. Capsules are the closest primitive Rapier offers to an ellipse — they hug the rounded hull tighter than boxes and slide off rocks without corners catching. Endpoints are in scaled world units (ship-local frame):
 - **Fuselage**: `capsule((0, +0.42), (0, −0.08), r=0.26)` — rounded nose down to mid-hull.
@@ -273,4 +318,4 @@ Each is built `ColliderBuilder::new(SharedShape::capsule(a, b, r)).restitution(0
 - Development branch: `claude/vertical-wrapping-caves-csv79r` (current); previous: `claude/vector-spaceship-extraction-njnuoq`
 - Merges to `main` via rebase PRs using the GitHub MCP tools (`mcp__github__create_pull_request`, `mcp__github__merge_pull_request`).
 - Branch consistently diverges from main after merges — always `git fetch origin main && git rebase origin/main && git push --force-with-lease` before creating a PR to avoid merge conflicts.
-- The wasm binary (`rapier-test.wasm`) conflicts on every rebase — always resolve by rebuilding from source: `cargo build --release --target wasm32-unknown-unknown && cp target/wasm32-unknown-unknown/release/rapier-test.wasm rapier-test.wasm`, then `git add rapier-test.wasm` before `git rebase --continue`.
+- The wasm binary (`rapier-test.wasm`) is **not tracked** (gitignored) — deploy builds it from source, and for local play you build it into the repo root per the README. It previously lived in git and conflicted on every rebase; don't re-add it.
