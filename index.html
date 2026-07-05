@@ -266,7 +266,10 @@
     // vector length), so the corners are reachable — dragging to the
     // bottom-left corner commands FULL left steering AND FULL thrust at
     // once. The per-axis dead-zone is rescaled so ±1 stays reachable.
-    const canvas = document.getElementById("glcanvas");
+    // NOTE: mq_js_bundle.js declares a global `const canvas` — redeclaring
+    // any of its globals here is a SyntaxError that kills this whole script
+    // (no wasm load). Hence the distinct name.
+    const gameCanvas = document.getElementById("glcanvas");
     const stickBase = document.getElementById("stick-base");
     const stickKnob = document.getElementById("stick-knob");
     const STICK_TRAVEL = 60;   // px from center = full deflection per axis
@@ -305,7 +308,7 @@
     }
 
     document.addEventListener("touchstart", e => {
-      if (e.target !== canvas) return;   // buttons/overlays handle their own
+      if (e.target !== gameCanvas) return; // buttons/overlays handle their own
       let zoneTouch = false;
       for (const t of Array.from(e.changedTouches)) {
         if (t.clientY < window.innerHeight * STICK_ZONE) continue;
