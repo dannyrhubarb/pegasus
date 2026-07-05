@@ -9,6 +9,7 @@ A 2D physics demo using [Rapier](https://rapier.rs) and [macroquad](https://macr
 | Click / Down arrow | Thrust in the direction the box is pointing |
 | Left / Right arrow | Rotate |
 | R | Reset |
+| Touch (mobile) | Single analog stick: left/right = steer, pull down = thrust — power scales with stick travel |
 
 ## Development
 
