@@ -958,11 +958,20 @@ async fn main() {
         // sizes multiply by it. dpi = 1 on standard displays / native builds.
         let dpi = screen_dpi_scale();
 
-        // Zoom out on small (mobile) screens so more of the cave fits (HUD/minimap are
-        // unaffected). Keyed on the *smaller* screen dimension so a phone keeps the same
-        // zoom in portrait and landscape — a phone's narrow side stays small in both
-        // orientations, whereas `sw` alone would flip to desktop zoom on rotation.
-        let view_scale = if sw.min(sh) / dpi < 600.0 { SCALE * 0.38 } else { SCALE } * dpi;
+        // Mobile zoom: fit the cave's typical full height in the viewport so
+        // both walls are on screen on average in EITHER orientation. Average
+        // half-width is ~7.8 m (6.5 + 2·mean|sin| ≈ 6.5 + 1.27) → ~15.5 m of
+        // cave; MOBILE_VIEW_H adds breathing room. Deriving the scale from sh
+        // (not a fixed factor) is what keeps landscape from cropping the
+        // walls: portrait and landscape both show MOBILE_VIEW_H metres
+        // vertically. Desktop keeps the fixed SCALE zoom. Capped at the
+        // desktop scale so a short-but-wide window never zooms in past it.
+        const MOBILE_VIEW_H: f32 = 20.0; // world metres visible vertically on mobile
+        let view_scale = if sw.min(sh) / dpi < 600.0 {
+            (sh / MOBILE_VIEW_H).min(SCALE * dpi)
+        } else {
+            SCALE * dpi
+        };
         // Shadow the module-level w2s so all render calls below use view_scale automatically.
         let w2s = |x: f32, y: f32, sh: f32, cam_x: f32, cam_y: f32| -> Vec2 {
             vec2(
