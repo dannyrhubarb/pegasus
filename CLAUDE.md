@@ -45,7 +45,11 @@ push-retry loop for concurrent deploys):
   event regardless.
 
 ## Project structure
-- `src/main.rs` — entire game (single file): physics, rendering, cave generation, HUD, minimap, touch controls
+- `src/main.rs` — input exports/atomics, window conf, the whole game loop (physics, window sliding, drawing, HUD, minimap), and the unit tests
+- `src/world.rs` — deterministic world generation: cave curves, shafts, obstacles, pads, `stand_y`, `Rng`/`hash_u32`, and their constants (`SEG_LEN`, `RESET_X`, `PERIOD`, `V_PERIOD`, …)
+- `src/render.rs` — radial light shader sources, faceted wall/shaft lattice (`lattice_point`, `shaft_lattice`, `facet_shade`), `draw_flat_mesh`
+- `src/ship_mesh.rs` — `SHIP_TRIS` / `SHIP_DETAILS` data tables extracted from the Flash SWF
+- `src/audio.rs` — in-memory WAV synthesis (`wav_from_samples`, `thruster_wav`, `boom_wav`)
 - `index.html` — web wrapper, touch event forwarding, safe-area insets, **info overlay**, **gamepad polling**
 - `mq_js_bundle.js` — **vendored** miniquad/quad-snd JS loader (from not-fl3/miniquad-samples). Pinned in-repo so deploys don't depend on a third-party host; includes the audio backend. Update it deliberately if macroquad is upgraded.
 
@@ -99,7 +103,7 @@ entirely in local dev (placeholder revision) and on 404 (pre-toast deploys),
 and the toast swallows `mousedown` like the info button so it can't fire the
 thruster.
 
-## Key constants & configuration (`src/main.rs`)
+## Key constants & configuration (world/gameplay constants live in `src/world.rs` and `src/main.rs`)
 
 | Symbol | Value | Purpose |
 |--------|-------|---------|
@@ -173,7 +177,7 @@ achieved by giving all 3 vertices of a triangle the **same** color (the GPU woul
 otherwise interpolate); triangles therefore use duplicated, non-shared vertices
 with trivial sequential indices `(0..len)`.
 
-### The lattice (module-level, near `hash_u32`)
+### The lattice (`src/render.rs`)
 - `SUBCOLS = 2` sub-columns per 3 m segment → 1.5 m facets; `COL_DX = SEG_LEN/SUBCOLS`.
 - `col_x(col)` — world x of a **global** facet column. *Pure* function of the
   global column index, so adjacent segments compute their shared boundary vertex
@@ -217,7 +221,7 @@ crossing every layer, so climbing (or falling) one always brings you back to
 just grows; nothing teleports. HUD shows the current layer as `lvl=N`
 (`ship_layer = round(cam_y / V_PERIOD)`).
 
-### Placement (all pure functions, near `insert_seg`)
+### Placement (all pure functions, `src/world.rs`)
 - `shaft_open_seg(s)` — opening start segment for slot `s`: every
   `SHAFT_SPACING_SEGS = 50` segments, anchored at `SHAFT_BASE_SEG = 35`, ±6 segs
   jitter hashed on `s mod 4` so the pattern repeats **exactly** each `PERIOD`
