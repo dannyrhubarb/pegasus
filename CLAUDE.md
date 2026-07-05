@@ -9,7 +9,36 @@ Rust + macroquad 0.4.15 + Rapier 2D game compiled to WebAssembly and served via 
 cargo build          # native dev build (quick sanity check; silent — audio is wasm-only)
 cargo test           # unit tests for the deterministic world functions
 ```
-Deploy is automatic: any push to `main` triggers the GitHub Actions workflow `.github/workflows/deploy.yml` which builds the WASM target and publishes to GitHub Pages. Build takes ~5–10 minutes.
+Deploy is automatic: any push to `main` triggers `.github/workflows/deploy.yml` which builds the WASM target and publishes to GitHub Pages. Build takes ~5–10 minutes.
+
+### Deploy pipeline & PR previews
+The published site lives on the **`gh-pages` state branch**: the `main` build at
+the root, one **per-PR preview** in `pr-<n>/` (served at
+`https://<owner>.github.io/rapier-test/pr-<n>/` — works because every asset URL
+in `index.html`/`manifest.json` is relative). Four workflows, sharing two
+composite actions (`.github/actions/build-site` = wasm build + icons + overlay
+injection; `.github/actions/sync-pages-branch` = commit into `gh-pages` with a
+push-retry loop for concurrent deploys):
+- `deploy.yml` (**Main deploy**, push to `main`): build → sync branch **root**,
+  `--exclude 'pr-*'` so live previews survive a main deploy.
+- `preview-deploy.yml` (**Preview deploy**, PR opened/synchronize/reopened):
+  build (overlay revision = `<head-sha>-pr-<n>`) → sync `pr-<n>/` → sticky PR
+  comment (`<!-- preview-env -->` marker) with the preview URL. Skipped for
+  fork PRs (read-only token).
+- `preview-teardown.yml` (**Preview teardown**, PR closed): delete `pr-<n>/`,
+  comment.
+- `publish-pages.yml` (**Publish Pages**): the *only* workflow that calls
+  `deploy-pages`. Triggered by `workflow_run` on the three above (must match
+  their `name:` strings exactly) and snapshots the whole `gh-pages` branch.
+  **Gotcha**: the auto-created `github-pages` environment only allows
+  deployments from `main`, so PR-triggered workflows can't deploy directly;
+  `workflow_run` workflows execute from the default branch, which passes the
+  protection. Also: pushes made with `GITHUB_TOKEN` don't trigger `push`
+  workflows (recursion guard), so an `on: push: branches: [gh-pages]` publisher
+  would never fire — `workflow_run` is load-bearing, not a style choice.
+  Keep **Settings → Pages → Source = "GitHub Actions"** (do *not* switch it to
+  the `gh-pages` branch — that would bypass this pipeline and serve the branch
+  with Jekyll defaults).
 
 ## Project structure
 - `src/main.rs` — entire game (single file): physics, rendering, cave generation, HUD, minimap, touch controls
@@ -315,7 +344,7 @@ Each is built `ColliderBuilder::new(SharedShape::capsule(a, b, r)).restitution(0
 **RCS / attitude thrusters** (cosmetic particles, `kind 1/2`): bottom nozzles flanking the main booster vent **downward** (like a mini main thruster). Turning **left** → left nozzle at scaled-local `(−0.30, −0.71)`; turning **right** → right nozzle at `(0.30, −0.71)`. Gas exits `−Y` (downward) from both. The x positions sit in the leg nozzle (gold accent: unscaled x ≈ ±0.152–0.249 → midpoint ±0.30 scaled). Emission coords are in **scaled world units** — `lp()`/`ld()` do **not** apply `SHIP_SCALE` (only the render-time `rot` closure does), so don't multiply these by `SHIP_SCALE` (an earlier bug double-scaled them to ±0.60 and spawned the puffs outside the hull).
 
 ## Git workflow
-- Development branch: `claude/vertical-wrapping-caves-csv79r` (current); previous: `claude/vector-spaceship-extraction-njnuoq`
+- Development branch: `claude/replicate-pr-review-deployment-gjw4x0` (current); previous: `claude/vertical-wrapping-caves-csv79r`
 - Merges to `main` via rebase PRs using the GitHub MCP tools (`mcp__github__create_pull_request`, `mcp__github__merge_pull_request`).
 - Branch consistently diverges from main after merges — always `git fetch origin main && git rebase origin/main && git push --force-with-lease` before creating a PR to avoid merge conflicts.
 - The wasm binary (`rapier-test.wasm`) is **not tracked** (gitignored) — deploy builds it from source, and for local play you build it into the repo root per the README. It previously lived in git and conflicted on every rebase; don't re-add it.
