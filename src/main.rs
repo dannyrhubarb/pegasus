@@ -92,12 +92,19 @@ const SHIP_SCALE: f32 = 1.5;
 // is identical on every display refresh rate; rendering interpolates the ship
 // between the last two steps.
 const PHYSICS_DT: f32 = 1.0 / 120.0;
-// Crash when the ship's velocity changes by more than this within one frame
-// (collision impulse). Gravity/thrust change v by < 0.3 m/s per frame, so any
-// dv above this is a hard impact — roughly hitting rock at ≥ 4 m/s.
-const CRASH_DV: f32 = 5.0;
+// Impacts are read from the frame-to-frame velocity change (collision
+// impulse); gravity/thrust change v by < 0.3 m/s per frame, so anything above
+// CRASH_DV_SOFT is a real hit. Damage is graduated: below SOFT is free,
+// SOFT..HARD scrapes the hull proportionally (full bar at HARD), and HARD —
+// or a scrape that empties the hull — destroys the ship.
+const CRASH_DV_SOFT: f32 = 2.5;
+const CRASH_DV_HARD: f32 = 6.0;
 // Seconds from crash to respawn at RESET_X.
 const CRASH_RESPAWN: f32 = 1.5;
+// Hull integrity: scraped off by survivable impacts, restored while parked on
+// a pad (alongside refueling) and by reset/respawn.
+const HULL_MAX: f32 = 100.0;
+const HULL_REPAIR_PER_S: f32 = 20.0;
 // Fuel: the main engine burns a full tank in ~28 s of continuous thrust; the
 // RCS sips. An empty tank kills engine and RCS until reset/respawn refills it.
 const FUEL_MAX: f32 = 100.0;
@@ -206,6 +213,9 @@ async fn main() {
     let box_body = RigidBodyBuilder::dynamic()
         .translation(vector![0.0, stand_y(0.0)])
         .angular_damping(3.0)
+        // A whisper of drag: imperceptible at landing speeds but it caps how
+        // much momentum can pile up on a long burn or free-fall.
+        .linear_damping(0.2)
         .ccd_enabled(true)
         .build();
     let box_handle = rigid_body_set.insert(box_body);
@@ -309,6 +319,8 @@ async fn main() {
     let mut prev_vel = (0.0f32, 0.0f32);
     let mut crash_timer = 0.0f32;
     let mut fuel = FUEL_MAX;
+    let mut hull = HULL_MAX;
+    let mut shake = 0.0f32; // impact screen-shake intensity, 0..1, decays fast
     // Landing pads: score, first-visit set, and how long the ship has been
     // settled on the current pad (landing counts at PAD_LAND_TIME).
     let mut score = 0u32;
@@ -343,9 +355,11 @@ async fn main() {
             phys_accum -= PHYSICS_DT;
         }
 
-        // --- Crash detection ---
+        // --- Impact / crash detection ---
         // A collision shows up as a large velocity change across the frame's
-        // physics steps; thrust and gravity stay well under CRASH_DV.
+        // physics steps. Graduated: dv in SOFT..HARD scrapes the hull
+        // (proportionally, full bar at HARD); dv past HARD — or a scrape the
+        // hull can't absorb — destroys the ship.
         {
             let (wx, wy, vx, vy) = {
                 let b = &rigid_body_set[box_handle];
@@ -353,29 +367,55 @@ async fn main() {
             };
             if crash_timer <= 0.0 {
                 let (dvx, dvy) = (vx - prev_vel.0, vy - prev_vel.1);
-                if (dvx * dvx + dvy * dvy).sqrt() > CRASH_DV {
-                    crash_timer = CRASH_RESPAWN;
-                    // Debris burst at the crash site.
-                    for _ in 0..70 {
-                        let ang = gen_range(0.0f32, std::f32::consts::TAU);
-                        let spd = gen_range(1.0f32, 9.0);
-                        particles.push(Particle {
-                            x: wx + gen_range(-0.3f32, 0.3),
-                            y: wy + gen_range(-0.3f32, 0.3),
-                            vx: ang.cos() * spd,
-                            vy: ang.sin() * spd + 1.5,
-                            life: gen_range(0.5f32, 1.0),
-                            kind: 3,
-                        });
+                let dv = (dvx * dvx + dvy * dvy).sqrt();
+                if dv > CRASH_DV_SOFT {
+                    let damage =
+                        (dv - CRASH_DV_SOFT) / (CRASH_DV_HARD - CRASH_DV_SOFT) * HULL_MAX;
+                    hull -= damage;
+                    shake = (shake + damage / HULL_MAX + 0.25).min(1.0);
+                    if dv > CRASH_DV_HARD || hull <= 0.0 {
+                        hull = 0.0;
+                        crash_timer = CRASH_RESPAWN;
+                        // Debris burst at the crash site.
+                        for _ in 0..70 {
+                            let ang = gen_range(0.0f32, std::f32::consts::TAU);
+                            let spd = gen_range(1.0f32, 9.0);
+                            particles.push(Particle {
+                                x: wx + gen_range(-0.3f32, 0.3),
+                                y: wy + gen_range(-0.3f32, 0.3),
+                                vx: ang.cos() * spd,
+                                vy: ang.sin() * spd + 1.5,
+                                life: gen_range(0.5f32, 1.0),
+                                kind: 3,
+                            });
+                        }
+                        if let Some(s) = &boom_snd {
+                            play_sound(s, PlaySoundParams { looped: false, volume: 0.9 });
+                        }
+                        // Park the wreck where it died so the camera holds still.
+                        let rb = rigid_body_set.get_mut(box_handle).unwrap();
+                        rb.set_linvel(vector![0.0, 0.0], true);
+                        rb.set_angvel(0.0, true);
+                        rb.set_gravity_scale(0.0, true);
+                    } else {
+                        // Survivable scrape: a spray of sparks + a quiet thud,
+                        // scaled to the damage taken. The ship keeps flying.
+                        for _ in 0..(6 + (damage * 0.3) as i32) {
+                            let ang = gen_range(0.0f32, std::f32::consts::TAU);
+                            let spd = gen_range(0.8f32, 4.0);
+                            particles.push(Particle {
+                                x: wx + gen_range(-0.25f32, 0.25),
+                                y: wy + gen_range(-0.25f32, 0.25),
+                                vx: vx * 0.3 + ang.cos() * spd,
+                                vy: vy * 0.3 + ang.sin() * spd + 1.0,
+                                life: gen_range(0.25f32, 0.55),
+                                kind: 3,
+                            });
+                        }
+                        if let Some(s) = &boom_snd {
+                            play_sound(s, PlaySoundParams { looped: false, volume: 0.25 });
+                        }
                     }
-                    if let Some(s) = &boom_snd {
-                        play_sound(s, PlaySoundParams { looped: false, volume: 0.9 });
-                    }
-                    // Park the wreck where it died so the camera holds still.
-                    let rb = rigid_body_set.get_mut(box_handle).unwrap();
-                    rb.set_linvel(vector![0.0, 0.0], true);
-                    rb.set_angvel(0.0, true);
-                    rb.set_gravity_scale(0.0, true);
                 }
             }
             prev_vel = (vx, vy);
@@ -393,6 +433,7 @@ async fn main() {
                 prev_ship = (RESET_X, stand_y(RESET_X), 0.0);
                 prev_vel = (0.0, 0.0);
                 fuel = FUEL_MAX;
+                hull = HULL_MAX;
             }
         }
         let crashed = crash_timer > 0.0;
@@ -444,7 +485,7 @@ async fn main() {
         let safe_top = f32::from_bits(SAFE_AREA_TOP.load(Ordering::Relaxed)) * dpi;
         let safe_left = f32::from_bits(SAFE_AREA_LEFT.load(Ordering::Relaxed)).min(24.0) * dpi;
 
-        let (cam_x, cam_y, angle, ship_vx, ship_vy) = {
+        let (mut cam_x, mut cam_y, angle, ship_vx, ship_vy) = {
             let body = &rigid_body_set[box_handle];
             let p = body.translation();
             let v = body.linvel();
@@ -464,6 +505,15 @@ async fn main() {
             )
         };
 
+        // Impact screen shake: brief random camera jitter that decays in a
+        // few tenths of a second. ±0.12 m at full intensity — enough to feel,
+        // far too small to disturb the sliding windows keyed off cam_x.
+        if shake > 0.0 {
+            cam_x += gen_range(-1.0f32, 1.0) * shake * 0.12;
+            cam_y += gen_range(-1.0f32, 1.0) * shake * 0.12;
+            shake = (shake - 4.0 * get_frame_time()).max(0.0);
+        }
+
         // Local-to-world helpers (position and direction)
         let lp = |lx: f32, ly: f32| -> (f32, f32) {
             (cam_x + lx * angle.cos() - ly * angle.sin(),
@@ -475,9 +525,12 @@ async fn main() {
         };
 
         // Main-engine throttle (0..1), read early so lighting can use it.
-        // The touch stick is analog (pull-down depth = power); keyboard,
-        // mouse and gamepad are full power. Dead while crashed or dry.
+        // The touch stick is analog (pull-down depth = power) with a QUADRATIC
+        // response — mid-stick is a gentle hover trim, full deflection the
+        // emergency burn; keyboard, mouse and gamepad are full power (1.0, so
+        // the curve doesn't affect them). Dead while crashed or dry.
         let mut throttle = f32::from_bits(TOUCH_THRUST.load(Ordering::Relaxed)).clamp(0.0, 1.0);
+        throttle *= throttle;
         if is_mouse_button_down(MouseButton::Left)
             || is_key_down(KeyCode::Down)
             || PAD_THRUST.load(Ordering::Relaxed) != 0
@@ -614,6 +667,7 @@ async fn main() {
                     pad_msg_timer = 1.8;
                 }
                 fuel = (fuel + PAD_REFUEL_PER_S * frame_dt).min(FUEL_MAX);
+                hull = (hull + HULL_REPAIR_PER_S * frame_dt).min(HULL_MAX);
                 true
             } else {
                 false
@@ -1005,12 +1059,40 @@ async fn main() {
             draw_triangle(rot(d[0], d[1]), rot(d[2], d[3]), rot(d[4], d[5]), col);
         }
 
+        // Velocity vector: an arrow from the ship showing where momentum is
+        // carrying it, colored by how survivable that speed is (green =
+        // landable, amber = damage-free touch, red = damaging). The length
+        // grows with speed; near-hover shows nothing.
+        let speed = (ship_vx * ship_vx + ship_vy * ship_vy).sqrt();
+        let speed_col = if speed <= 1.0 {
+            Color::from_rgba(110, 225, 130, 235)
+        } else if speed <= CRASH_DV_SOFT {
+            Color::from_rgba(235, 190, 70, 235)
+        } else {
+            Color::from_rgba(240, 85, 60, 235)
+        };
+        if !crashed && speed > 0.25 {
+            let dir = vec2(ship_vx, -ship_vy) / speed; // w2s inverts y
+            let ship_scr = vec2(sw / 2.0, sh / 2.0);   // camera is ship-centred
+            let p0 = ship_scr + dir * (0.85 * view_scale); // start clear of the hull
+            let len = ((14.0 + speed * 13.0) * ui).min(120.0 * ui);
+            let p1 = p0 + dir * len;
+            let perp = vec2(-dir.y, dir.x);
+            draw_line(p0.x, p0.y, p1.x, p1.y, 3.0 * ui, speed_col);
+            draw_triangle(p1 + dir * (9.0 * ui), p1 + perp * (5.0 * ui),
+                p1 - perp * (5.0 * ui), speed_col);
+        }
+
         smooth_fps += (get_fps() as f32 - smooth_fps) * 0.05;
         let cave_x = cam_x.rem_euclid(PERIOD);
-        draw_text(
-            format!("score={}  x={:.0}  lvl={}  {:.0}m/{}m   [R] reset   FPS: {:.0}", score, cam_x, ship_layer, cave_x, PERIOD as i32, smooth_fps),
-            safe_left + 10.0 * ui, safe_top + 232.0 * ui, 36.0 * ui, WHITE,
-        );
+        let hud_fs = 36.0 * ui;
+        let hud_y = safe_top + 252.0 * ui; // below the fuel + hull gauges
+        let hud = format!("score={}  x={:.0}  lvl={}  {:.0}m/{}m   [R] reset   FPS: {:.0}", score, cam_x, ship_layer, cave_x, PERIOD as i32, smooth_fps);
+        draw_text(&hud, safe_left + 10.0 * ui, hud_y, hud_fs, WHITE);
+        // Speed readout in the same danger color as the velocity arrow.
+        let hud_w = measure_text(&hud, None, hud_fs as u16, 1.0).width;
+        draw_text(&format!("  v={speed:.1}"),
+            safe_left + 10.0 * ui + hud_w, hud_y, hud_fs, speed_col);
 
         if crashed {
             let msg = "CRASHED";
@@ -1031,8 +1113,8 @@ async fn main() {
             let alpha = (pad_msg_timer / 1.8 * 255.0) as u8;
             draw_text(&msg, (sw - dims.width) / 2.0, sh * 0.38, fs,
                 Color::from_rgba(120, 255, 160, alpha));
-        } else if landed && fuel < FUEL_MAX {
-            let msg = "REFUELING";
+        } else if landed && (fuel < FUEL_MAX || hull < HULL_MAX) {
+            let msg = if fuel < FUEL_MAX { "REFUELING" } else { "REPAIRING" };
             let fs = 36.0 * ui;
             let dims = measure_text(msg, None, fs as u16, 1.0);
             draw_text(msg, (sw - dims.width) / 2.0, sh * 0.38, fs,
@@ -1161,6 +1243,8 @@ async fn main() {
             prev_vel = (0.0, 0.0);
             crash_timer = 0.0;
             fuel = FUEL_MAX;
+            hull = HULL_MAX;
+            shake = 0.0;
         }
 
         // --- Minimap (ship always centred; pans in BOTH axes) ---
@@ -1313,6 +1397,20 @@ async fn main() {
         draw_rectangle(mm_ox, fg_y, mm_w, fg_h, mm_dark);
         draw_rectangle(mm_ox, fg_y, mm_w * frac, fg_h, fg_col);
         draw_rectangle_lines(mm_ox, fg_y, mm_w, fg_h, 1.0, Color::from_rgba(255, 255, 255, 120));
+
+        // Hull gauge — same slim bar directly under the fuel gauge.
+        let hg_y = fg_y + fg_h + 6.0 * ui;
+        let hfrac = hull / HULL_MAX;
+        let hg_col = if hfrac > 0.5 {
+            Color::from_rgba(150, 175, 215, 255)
+        } else if hfrac > 0.25 {
+            Color::from_rgba(230, 180, 60, 255)
+        } else {
+            Color::from_rgba(220, 70, 50, 255)
+        };
+        draw_rectangle(mm_ox, hg_y, mm_w, fg_h, mm_dark);
+        draw_rectangle(mm_ox, hg_y, mm_w * hfrac, fg_h, hg_col);
+        draw_rectangle_lines(mm_ox, hg_y, mm_w, fg_h, 1.0, Color::from_rgba(255, 255, 255, 120));
 
         next_frame().await;
     }
