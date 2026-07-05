@@ -217,11 +217,11 @@
     <h1>Pegasus — Moon Lander</h1>
     <div class="info-row">
       <div class="info-label">Build revision</div>
-      <div class="info-value" id="git-rev">551ae2f-pr-59</div>
+      <div class="info-value" id="git-rev">7a52f5c-pr-59</div>
     </div>
     <div class="info-row">
       <div class="info-label">Build time</div>
-      <div class="info-value" id="build-time">2026-07-05 21:54 UTC</div>
+      <div class="info-value" id="build-time">2026-07-05 22:10 UTC</div>
     </div>
     <label id="vel-toggle-row">
       <input type="checkbox" id="vel-toggle">
@@ -266,7 +266,10 @@
     // vector length), so the corners are reachable — dragging to the
     // bottom-left corner commands FULL left steering AND FULL thrust at
     // once. The per-axis dead-zone is rescaled so ±1 stays reachable.
-    const canvas = document.getElementById("glcanvas");
+    // NOTE: mq_js_bundle.js declares a global `const canvas` — redeclaring
+    // any of its globals here is a SyntaxError that kills this whole script
+    // (no wasm load). Hence the distinct name.
+    const gameCanvas = document.getElementById("glcanvas");
     const stickBase = document.getElementById("stick-base");
     const stickKnob = document.getElementById("stick-knob");
     const STICK_TRAVEL = 60;   // px from center = full deflection per axis
@@ -305,7 +308,7 @@
     }
 
     document.addEventListener("touchstart", e => {
-      if (e.target !== canvas) return;   // buttons/overlays handle their own
+      if (e.target !== gameCanvas) return; // buttons/overlays handle their own
       let zoneTouch = false;
       for (const t of Array.from(e.changedTouches)) {
         if (t.clientY < window.innerHeight * STICK_ZONE) continue;
@@ -483,7 +486,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "551ae2f-pr-59";
+    const wasmRev = "7a52f5c-pr-59";
     load("./rapier-test.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // --- Stale-cache detection ---
