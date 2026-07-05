@@ -2,7 +2,7 @@ use macroquad::audio::{load_sound_from_bytes, play_sound, set_sound_volume, Play
 use macroquad::prelude::*;
 use macroquad::rand::gen_range;
 use rapier2d::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 struct Particle {
@@ -312,7 +312,18 @@ fn cave_half_width(x: f32) -> f32 {
 // touchdown tripped CRASH_DV and put spawn → crash → respawn into an endless
 // loop.
 fn stand_y(x: f32) -> f32 {
-    cave_center(x) - cave_half_width(x) + 0.78
+    let mut ground = cave_center(x) - cave_half_width(x);
+    // If a landing pad deck covers x, stand on the deck instead (its friction
+    // also keeps the parked ship from drifting on sloped, frictionless rock).
+    let p0 = (x / PAD_SPACING).round() as i64;
+    for p in p0 - 1..=p0 + 1 {
+        if let Some(pad) = pad_spec(p)
+            && (pad.cx - x).abs() <= PAD_HALF_W
+        {
+            ground = ground.max(pad.y);
+        }
+    }
+    ground + 0.78
 }
 
 // Returns (top_a, top_b, bot_a, bot_b) for segment index i
@@ -687,6 +698,70 @@ fn obstacle_spec(k: i64) -> Option<ObstacleSpec> {
     })
 }
 
+// ---- Landing pads ---------------------------------------------------------
+//
+// Flat metal pads sit on the cave floor at deterministic x positions. Landing
+// gently (slow, upright, settled for PAD_LAND_TIME) refuels the ship and, on
+// the first visit to a pad, scores PAD_POINTS. Like obstacles, pads are pure
+// functions of their slot index and replicate on every layer (the y-wrap).
+
+const PAD_SPACING: f32 = 130.0;    // metres between pad slots (plus ±20 jitter)
+const PAD_HALF_W: f32 = 3.0;       // deck half-width
+const PAD_POINTS: u32 = 100;       // score for a first landing
+const PAD_LAND_TIME: f32 = 0.8;    // seconds settled before a landing counts
+const PAD_REFUEL_PER_S: f32 = 25.0; // fuel per second while parked on a pad
+
+struct PadSpec {
+    cx: f32,
+    y: f32, // deck top = collider line
+}
+
+fn pad_spec(p: i64) -> Option<PadSpec> {
+    let mut rng = Rng::new((p as u32) ^ 0x50AD_5EED);
+    let cx = p as f32 * PAD_SPACING + rng.range(-20.0, 20.0);
+
+    // Need headroom to come down vertically.
+    if cave_half_width(cx) < 5.0 {
+        return None;
+    }
+
+    // Keep clear of shaft openings (same 8 m rule as obstacles).
+    let seg = (cx / SEG_LEN).floor() as i64;
+    let s0 = (seg - SHAFT_BASE_SEG).div_euclid(SHAFT_SPACING_SEGS);
+    for s in [s0, s0 + 1] {
+        let o = shaft_open_seg(s);
+        let (ox0, ox1) = (o as f32 * SEG_LEN, (o + SHAFT_OPEN_SEGS) as f32 * SEG_LEN);
+        if cx > ox0 - 8.0 && cx < ox1 + 8.0 {
+            return None;
+        }
+    }
+
+    // Don't overlap a boulder: check the obstacle slots whose jitter range
+    // could reach the deck.
+    let k0 = (cx / OBSTACLE_SPACING).round() as i64;
+    for k in k0 - 1..=k0 + 1 {
+        if let Some(ob) = obstacle_spec(k) {
+            let r = ob
+                .pts
+                .iter()
+                .map(|q| (q.x * q.x + q.y * q.y).sqrt())
+                .fold(0.0f32, f32::max);
+            if (ob.cx - cx).abs() < r + PAD_HALF_W + 1.0 {
+                return None;
+            }
+        }
+    }
+
+    // Deck sits just above the highest floor point under the span, so the
+    // collider never dips into the rock.
+    let mut y = f32::NEG_INFINITY;
+    for i in 0..=12 {
+        let x = cx - PAD_HALF_W + i as f32 * (PAD_HALF_W / 6.0);
+        y = y.max(cave_center(x) - cave_half_width(x));
+    }
+    Some(PadSpec { cx, y: y + 0.1 })
+}
+
 #[macroquad::main(window_conf)]
 async fn main() {
     let mut rigid_body_set = RigidBodySet::new();
@@ -759,6 +834,30 @@ async fn main() {
             rot: spec.rot,
             verts,
         });
+    };
+
+    // Loaded landing pads, keyed by (slot index, layer) like obstacles.
+    struct Pad {
+        handle: ColliderHandle,
+        cx: f32,
+        y: f32, // deck top (collider line), layer offset applied
+    }
+    let mut pads: HashMap<(i64, i64), Pad> = HashMap::new();
+
+    let spawn_pad = |p: i64, layer: i64, collider_set: &mut ColliderSet,
+                         pads: &mut HashMap<(i64, i64), Pad>| {
+        let Some(spec) = pad_spec(p) else { return };
+        let y = spec.y + layer as f32 * V_PERIOD;
+        // High friction, no restitution: the ship should settle, not skate.
+        let handle = collider_set.insert(
+            ColliderBuilder::segment(
+                point![spec.cx - PAD_HALF_W, y],
+                point![spec.cx + PAD_HALF_W, y],
+            )
+            .friction(0.9)
+            .build(),
+        );
+        pads.insert((p, layer), Pad { handle, cx: spec.cx, y });
     };
 
     // Ship starts at cave centre
@@ -868,6 +967,12 @@ async fn main() {
     let mut prev_vel = (0.0f32, 0.0f32);
     let mut crash_timer = 0.0f32;
     let mut fuel = FUEL_MAX;
+    // Landing pads: score, first-visit set, and how long the ship has been
+    // settled on the current pad (landing counts at PAD_LAND_TIME).
+    let mut score = 0u32;
+    let mut visited_pads: HashSet<(i64, i64)> = HashSet::new();
+    let mut land_timer = 0.0f32;
+    let mut pad_msg_timer = 0.0f32; // "+100" flash after a first landing
 
     loop {
         // Fixed-timestep accumulator: the cap bounds catch-up work after a
@@ -1110,6 +1215,65 @@ async fn main() {
                 }
             }
         }
+
+        // --- Slide the pad window (same shape; ±20 m position jitter) ---
+        let p_left  = ((win_left_x  - 20.0) / PAD_SPACING).floor() as i64;
+        let p_right = ((win_right_x + 20.0) / PAD_SPACING).ceil()  as i64;
+        pads.retain(|&(p, layer), pad| {
+            if p < p_left || p > p_right || layer < lay_lo || layer > lay_hi {
+                collider_set.remove(pad.handle, &mut island_manager, &mut rigid_body_set, false);
+                false
+            } else {
+                true
+            }
+        });
+        for layer in lay_lo..=lay_hi {
+            for p in p_left..=p_right {
+                if !pads.contains_key(&(p, layer)) {
+                    spawn_pad(p, layer, &mut collider_set, &mut pads);
+                }
+            }
+        }
+
+        // --- Landing detection ---
+        // A landing = resting on a pad deck: slow, upright, feet on the deck
+        // (leg capsules bottom out 0.73 below the body origin), held for
+        // PAD_LAND_TIME. First visit scores; parked ships refuel.
+        let frame_dt = get_frame_time();
+        let mut on_pad: Option<(i64, i64)> = None;
+        if !crashed {
+            let b = &rigid_body_set[box_handle];
+            let (bx, by) = (b.translation().x, b.translation().y);
+            let v = b.linvel();
+            let settled = b.rotation().angle().abs() < 0.30
+                && v.x.abs() < 1.0
+                && v.y.abs() < 1.0
+                && b.angvel().abs() < 0.5;
+            if settled {
+                on_pad = pads.iter().find_map(|(&key, pad)| {
+                    let feet = by - 0.73;
+                    ((bx - pad.cx).abs() <= PAD_HALF_W && (feet - pad.y).abs() < 0.3)
+                        .then_some(key)
+                });
+            }
+        }
+        let landed = if let Some(key) = on_pad {
+            land_timer += frame_dt;
+            if land_timer >= PAD_LAND_TIME {
+                if visited_pads.insert(key) {
+                    score += PAD_POINTS;
+                    pad_msg_timer = 1.8;
+                }
+                fuel = (fuel + PAD_REFUEL_PER_S * frame_dt).min(FUEL_MAX);
+                true
+            } else {
+                false
+            }
+        } else {
+            land_timer = 0.0;
+            false
+        };
+        pad_msg_timer = (pad_msg_timer - frame_dt).max(0.0);
 
         // --- Draw ---
         clear_background(Color::from_rgba(8, 8, 18, 255));
@@ -1377,6 +1541,47 @@ async fn main() {
 
         gl_use_default_material();
 
+        // Landing pads — man-made metal, drawn with the default material so
+        // the deck and beacons stay readable in the dark. Deck top = the
+        // collider line (alignment rule); legs drop to the floor curve.
+        for (&pad_key, pad) in pads.iter() {
+            let pad_layer = pad_key.1;
+            let top_mid = w2s(pad.cx, pad.y, sh, cam_x, cam_y);
+            if top_mid.x < -margin || top_mid.x > sw + margin
+                || top_mid.y < -100.0 || top_mid.y > sh + 100.0 {
+                continue;
+            }
+            let a = w2s(pad.cx - PAD_HALF_W, pad.y, sh, cam_x, cam_y);
+            let b = w2s(pad.cx + PAD_HALF_W, pad.y, sh, cam_x, cam_y);
+            let deck_h = 0.22 * view_scale;
+            let deck = Color::from_rgba(96, 106, 122, 255);
+            draw_triangle(a, b, vec2(b.x, b.y + deck_h), deck);
+            draw_triangle(a, vec2(b.x, b.y + deck_h), vec2(a.x, a.y + deck_h), deck);
+            draw_line(a.x, a.y, b.x, b.y, 2.0 * dpi, Color::from_rgba(190, 200, 218, 255));
+            // Legs at ±(hw − 0.5), from under the deck down to the floor.
+            for side in [-1.0f32, 1.0] {
+                let lx = pad.cx + side * (PAD_HALF_W - 0.5);
+                let ground = pad_layer as f32 * V_PERIOD + cave_center(lx) - cave_half_width(lx);
+                let top = w2s(lx, pad.y, sh, cam_x, cam_y);
+                let bot = w2s(lx, ground.min(pad.y), sh, cam_x, cam_y);
+                draw_line(top.x, top.y + deck_h, bot.x, bot.y, 3.0 * dpi,
+                    Color::from_rgba(60, 68, 82, 255));
+            }
+            // Beacons: blinking green until first landing, then steady blue.
+            let visited = visited_pads.contains(&pad_key);
+            let bc = if visited {
+                Color::from_rgba(110, 140, 200, 200)
+            } else if (get_time() * 5.0).sin() > 0.0 {
+                Color::from_rgba(80, 240, 120, 255)
+            } else {
+                Color::from_rgba(30, 90, 50, 255)
+            };
+            for side in [-1.0f32, 1.0] {
+                let p = w2s(pad.cx + side * (PAD_HALF_W - 0.15), pad.y + 0.12, sh, cam_x, cam_y);
+                draw_circle(p.x, p.y, 2.5 * dpi, bc);
+            }
+        }
+
         // Particles
         for p in &particles {
             let s = w2s(p.x, p.y, sh, cam_x, cam_y);
@@ -1454,7 +1659,7 @@ async fn main() {
         smooth_fps += (get_fps() as f32 - smooth_fps) * 0.05;
         let cave_x = cam_x.rem_euclid(PERIOD);
         draw_text(
-            format!("x={:.0}  lvl={}  {:.0}m/{}m   [R] reset   FPS: {:.0}", cam_x, ship_layer, cave_x, PERIOD as i32, smooth_fps),
+            format!("score={}  x={:.0}  lvl={}  {:.0}m/{}m   [R] reset   FPS: {:.0}", score, cam_x, ship_layer, cave_x, PERIOD as i32, smooth_fps),
             safe_left + 10.0 * ui, safe_top + 232.0 * ui, 36.0 * ui, WHITE,
         );
 
@@ -1470,6 +1675,19 @@ async fn main() {
             let dims = measure_text(msg, None, fs as u16, 1.0);
             draw_text(msg, (sw - dims.width) / 2.0, sh * 0.42, fs,
                 Color::from_rgba(255, 180, 60, 255));
+        } else if pad_msg_timer > 0.0 {
+            let msg = format!("+{PAD_POINTS}");
+            let fs = 64.0 * ui;
+            let dims = measure_text(&msg, None, fs as u16, 1.0);
+            let alpha = (pad_msg_timer / 1.8 * 255.0) as u8;
+            draw_text(&msg, (sw - dims.width) / 2.0, sh * 0.38, fs,
+                Color::from_rgba(120, 255, 160, alpha));
+        } else if landed && fuel < FUEL_MAX {
+            let msg = "REFUELING";
+            let fs = 36.0 * ui;
+            let dims = measure_text(msg, None, fs as u16, 1.0);
+            draw_text(msg, (sw - dims.width) / 2.0, sh * 0.38, fs,
+                Color::from_rgba(120, 220, 160, 200));
         }
 
         // Controls
@@ -1668,6 +1886,23 @@ async fn main() {
                     draw_triangle(a, c, d, mm_dark);
                 }
             }
+        }
+
+        // Pad markers on the minimap: bright line at deck height, green until
+        // visited, blue-grey after.
+        for (&pad_key, pad) in pads.iter() {
+            if (pad.cx - cam_x).abs() > MM_HALF_X + 5.0 || (pad.y - cam_y).abs() > MM_HALF_Y + 5.0 {
+                continue;
+            }
+            let y = to_mm_y(pad.y).clamp(mm_oy, mm_oy + mm_h);
+            let x0 = to_mm_x(pad.cx - PAD_HALF_W).clamp(mm_ox, mm_ox + mm_w);
+            let x1 = to_mm_x(pad.cx + PAD_HALF_W).clamp(mm_ox, mm_ox + mm_w);
+            let c = if visited_pads.contains(&pad_key) {
+                Color::from_rgba(110, 140, 200, 220)
+            } else {
+                Color::from_rgba(90, 240, 130, 255)
+            };
+            draw_line(x0, y, x1, y, 2.0 * dpi, c);
         }
 
         // Obstacle shapes on the minimap — actual polygon, not just a dot.
@@ -1888,5 +2123,65 @@ mod tests {
         assert_eq!(&wav[8..16], b"WAVEfmt ");
         assert_eq!(&wav[36..40], b"data");
         assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 200);
+    }
+
+    #[test]
+    fn pads_are_deterministic_and_sit_on_the_floor() {
+        for p in -100..100 {
+            let Some(pad) = pad_spec(p) else { continue };
+            let again = pad_spec(p).unwrap();
+            assert_eq!((pad.cx, pad.y), (again.cx, again.y), "pad {p} not deterministic");
+            // Deck top must clear the floor across the whole span (collider
+            // never dips into rock) without floating absurdly high.
+            for i in 0..=20 {
+                let x = pad.cx - PAD_HALF_W + i as f32 * (PAD_HALF_W / 10.0);
+                let floor = cave_center(x) - cave_half_width(x);
+                assert!(pad.y >= floor, "pad {p} deck below floor at x={x}");
+                assert!(pad.y - floor < 4.0, "pad {p} floats {}m high", pad.y - floor);
+            }
+        }
+    }
+
+    #[test]
+    fn pads_keep_clear_of_shafts_and_boulders() {
+        for p in -100..100 {
+            let Some(pad) = pad_spec(p) else { continue };
+            // Not inside a shaft opening column (8 m rule).
+            let seg = (pad.cx / SEG_LEN).floor() as i64;
+            let s0 = (seg - SHAFT_BASE_SEG).div_euclid(SHAFT_SPACING_SEGS);
+            for s in [s0, s0 + 1] {
+                let o = shaft_open_seg(s);
+                let (ox0, ox1) = (o as f32 * SEG_LEN, (o + SHAFT_OPEN_SEGS) as f32 * SEG_LEN);
+                assert!(
+                    pad.cx <= ox0 - 8.0 || pad.cx >= ox1 + 8.0,
+                    "pad {p} inside shaft clearance"
+                );
+            }
+            // No boulder overlapping the deck.
+            let k0 = (pad.cx / OBSTACLE_SPACING).round() as i64;
+            for k in k0 - 1..=k0 + 1 {
+                if let Some(ob) = obstacle_spec(k) {
+                    let r = ob.pts.iter()
+                        .map(|q| (q.x * q.x + q.y * q.y).sqrt())
+                        .fold(0.0f32, f32::max);
+                    assert!(
+                        (ob.cx - pad.cx).abs() >= r + PAD_HALF_W + 1.0 - 1e-3,
+                        "pad {p} overlaps boulder {k}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn spawn_and_reset_stand_on_solid_ground() {
+        for x in [0.0f32, RESET_X] {
+            let y = stand_y(x);
+            let floor = cave_center(x) - cave_half_width(x);
+            // Feet (0.73 below origin) rest on or just above floor/deck level,
+            // never below the floor.
+            assert!(y - 0.73 >= floor - 1e-3);
+            assert!(y - 0.73 <= floor + 1.5, "spawn at x={x} would drop and crash");
+        }
     }
 }
