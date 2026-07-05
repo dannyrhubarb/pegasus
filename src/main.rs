@@ -62,7 +62,7 @@ fn window_conf() -> Conf {
         window_title: "Pegasus — Moon Lander".to_string(),
         window_width: 1440,
         window_height: 900,
-        high_dpi: false,
+        high_dpi: true,
         platform: macroquad::miniquad::conf::Platform {
             webgl_version: macroquad::miniquad::conf::WebGLVersion::WebGL2,
             ..Default::default()
@@ -952,12 +952,17 @@ async fn main() {
 
         let sh = screen_height();
         let sw = screen_width();
+        // With high_dpi enabled, sw/sh are PHYSICAL pixels (CSS px × device
+        // pixel ratio). All breakpoints and fixed sizes below were tuned in
+        // CSS pixels, so thresholds compare against sw/sh ÷ dpi and pixel
+        // sizes multiply by it. dpi = 1 on standard displays / native builds.
+        let dpi = screen_dpi_scale();
 
         // Zoom out on small (mobile) screens so more of the cave fits (HUD/minimap are
         // unaffected). Keyed on the *smaller* screen dimension so a phone keeps the same
         // zoom in portrait and landscape — a phone's narrow side stays small in both
         // orientations, whereas `sw` alone would flip to desktop zoom on rotation.
-        let view_scale = if sw.min(sh) < 600.0 { SCALE * 0.38 } else { SCALE };
+        let view_scale = if sw.min(sh) / dpi < 600.0 { SCALE * 0.38 } else { SCALE } * dpi;
         // Shadow the module-level w2s so all render calls below use view_scale automatically.
         let w2s = |x: f32, y: f32, sh: f32, cam_x: f32, cam_y: f32| -> Vec2 {
             vec2(
@@ -971,12 +976,13 @@ async fn main() {
         // fixed-size UI down proportionally (capped at 1.0 so desktop is unchanged).
         // Keyed on the *smaller* dimension so a phone keeps the same HUD/minimap size
         // across portrait/landscape — `sw` alone grew the minimap on rotation.
-        let ui = (sw.min(sh) / 980.0).min(1.0);
+        let ui = (sw.min(sh) / dpi / 980.0).min(1.0) * dpi;
 
-        // Safe-area insets (notch / status bar), supplied by JS via env(safe-area-inset-*).
-        // Keeps the top-left HUD clear of the notch in both portrait (top) and landscape (left).
-        let safe_top = f32::from_bits(SAFE_AREA_TOP.load(Ordering::Relaxed));
-        let safe_left = f32::from_bits(SAFE_AREA_LEFT.load(Ordering::Relaxed));
+        // Safe-area insets (notch / status bar), supplied by JS via env(safe-area-inset-*)
+        // in CSS pixels → converted to physical pixels here. Keeps the top-left
+        // HUD clear of the notch in both portrait (top) and landscape (left).
+        let safe_top = f32::from_bits(SAFE_AREA_TOP.load(Ordering::Relaxed)) * dpi;
+        let safe_left = f32::from_bits(SAFE_AREA_LEFT.load(Ordering::Relaxed)) * dpi;
 
         let (cam_x, cam_y, angle, ship_vx, ship_vy) = {
             let body = &rigid_body_set[box_handle];
@@ -1099,7 +1105,7 @@ async fn main() {
         for &(sx, sy) in &stars {
             let px = (sx * sw - cam_x * view_scale * 0.05).rem_euclid(sw);
             let py = (sy * sh + cam_y * view_scale * 0.05).rem_euclid(sh);
-            draw_circle(px, py, 1.0, Color::from_rgba(200, 200, 255, 150));
+            draw_circle(px, py, dpi, Color::from_rgba(200, 200, 255, 150));
         }
 
         // Cave walls. Cull pad: 4 m of world keeps jittered deep-row facets from
@@ -1286,7 +1292,7 @@ async fn main() {
         // exact hull = collider), but each triangle is FLAT-shaded with a
         // deterministic per-facet brightness plus a fake top-light gradient, so
         // boulders read as low-poly rocks with brighter tops.
-        const BEVEL: f32 = 16.0;
+        let bevel = 16.0 * dpi; // obstacle bevel width, tuned in CSS px
         // Sorted keys, not HashMap order: adjacent boulders can overlap, and
         // map iteration order changes as the window slides, which would flip
         // their z-order mid-flight.
@@ -1320,7 +1326,7 @@ async fn main() {
             let inset: Vec<Vec2> = poly.iter().map(|p| {
                 let d = center - *p;
                 let len = d.length();
-                *p + d * (BEVEL / len).min(0.5)
+                *p + d * (bevel / len).min(0.5)
             }).collect();
 
             // Screen radius for normalising the top-light gradient.
@@ -1689,7 +1695,7 @@ async fn main() {
             Color::from_rgba(255, 255, 255, 180));
 
         // Ship dot — map centre
-        draw_circle(mm_cx, mm_cy, 3.0, YELLOW);
+        draw_circle(mm_cx, mm_cy, 3.0 * dpi, YELLOW);
 
         // Border
         draw_rectangle_lines(mm_ox, mm_oy, mm_w, mm_h, 1.0, Color::from_rgba(255, 255, 255, 120));
