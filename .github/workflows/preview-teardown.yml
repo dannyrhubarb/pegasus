@@ -1,0 +1,45 @@
+name: Preview teardown
+
+# Event-driven teardown of a per-PR preview when the PR closes/merges:
+# removes pr-<n>/ from the gh-pages state branch so the preview URL stops
+# being served (publish-pages.yml re-deploys the pruned site).
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write # push to the gh-pages state branch
+  pull-requests: write # to comment the teardown
+
+env:
+  SCOPE: pr-${{ github.event.pull_request.number }}
+
+concurrency:
+  # Same group as the deploy: closing a PR cancels an in-flight preview build.
+  group: preview-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  teardown:
+    runs-on: ubuntu-latest
+    # Fork PRs never deployed a preview (read-only token), nothing to remove.
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Remove preview from gh-pages branch
+        uses: ./.github/actions/sync-pages-branch
+        with:
+          subdir: ${{ env.SCOPE }}
+          message: "${{ env.SCOPE }}: teardown"
+
+      - name: Comment teardown
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: context.issue.number,
+              body: `🧹 Tore down preview \`pr-${context.issue.number}\`.`,
+            });

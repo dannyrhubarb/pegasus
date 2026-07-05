@@ -1,0 +1,87 @@
+name: Preview deploy
+
+# Open/refresh a per-PR preview environment (scope = pr-<n>) — the GitHub
+# Pages analogue of claude-frontend-test's preview system. Every PR push
+# builds the game and publishes it under
+#   https://<owner>.github.io/<repo>/pr-<n>/
+# by syncing the build into pr-<n>/ on the gh-pages state branch, then posts
+# (or updates) a sticky PR comment with the URL. The main site at the root is
+# untouched, so you can play a PR without merging to main.
+# preview-teardown.yml removes the directory when the PR closes.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write # push to the gh-pages state branch
+  pull-requests: write # to comment the preview URL
+
+concurrency:
+  group: preview-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  SCOPE: pr-${{ github.event.pull_request.number }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Fork PRs get a read-only token — they can't push previews or comment.
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Label the build with the PR head sha (the merge-commit sha the
+      # checkout sits on means nothing to a reviewer) plus the scope, so the
+      # info overlay says exactly which preview you're looking at.
+      - name: Resolve revision
+        id: rev
+        run: |
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          echo "label=${HEAD_SHA:0:7}-$SCOPE" >> "$GITHUB_OUTPUT"
+
+      - name: Build site
+        uses: ./.github/actions/build-site
+        with:
+          revision: ${{ steps.rev.outputs.label }}
+
+      - name: Sync preview into gh-pages branch
+        uses: ./.github/actions/sync-pages-branch
+        with:
+          subdir: ${{ env.SCOPE }}
+          source-dir: site
+          message: "${{ env.SCOPE }}: deploy ${{ steps.rev.outputs.label }}"
+
+      - name: Comment preview URL
+        uses: actions/github-script@v7
+        env:
+          REV: ${{ steps.rev.outputs.label }}
+        with:
+          script: |
+            const scope = `pr-${context.issue.number}`;
+            // Ask the Pages API for the real site URL (handles custom
+            // domains); fall back to the conventional one.
+            let base = `https://${context.repo.owner}.github.io/${context.repo.repo}/`;
+            try {
+              const { data: pages } = await github.rest.repos.getPages(context.repo);
+              if (pages.html_url) base = pages.html_url;
+            } catch (e) { /* Pages not queryable with this token — use fallback */ }
+            const url = `${base.replace(/\/?$/, '/')}${scope}/`;
+            const marker = '<!-- preview-env -->';
+            const body = `${marker}\n### 🚀 Preview deployed\n` +
+              `Scope \`${scope}\` (\`${process.env.REV}\`) → ${url}\n\n` +
+              `_Pages takes a minute or two to publish after this comment appears._`;
+            const { data: comments } = await github.rest.issues.listComments({
+              ...context.repo, issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body?.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                ...context.repo, comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: context.issue.number, body,
+              });
+            }

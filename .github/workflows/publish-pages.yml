@@ -1,0 +1,53 @@
+name: Publish Pages
+
+# The ONLY workflow that actually deploys to GitHub Pages. It snapshots the
+# gh-pages state branch (root = main build, pr-<n>/ = live previews) and
+# publishes the whole tree as the Pages artifact.
+#
+# Why the indirection: the auto-created `github-pages` environment only allows
+# deployments from `main`, so a pull_request-triggered workflow can't call
+# deploy-pages itself. `workflow_run` workflows always execute from the default
+# branch, so this passes the environment protection for previews and main
+# alike — no repo settings changes needed. Keep Settings → Pages → Source on
+# "GitHub Actions".
+#
+# The workflow names below must match the `name:` of deploy.yml,
+# preview-deploy.yml and preview-teardown.yml exactly.
+
+on:
+  workflow_run:
+    workflows: ["Main deploy", "Preview deploy", "Preview teardown"]
+    types: [completed]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Serialize deployments; only the newest snapshot matters.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true

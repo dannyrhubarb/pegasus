@@ -1,0 +1,53 @@
+name: Build site
+description: >
+  Build the WASM release, generate icons, and assemble the deployable site into
+  site/ — shared by the main deploy and the per-PR preview deploy.
+inputs:
+  revision:
+    description: Revision label injected into the info overlay (__GIT_REVISION__).
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Install Rust wasm target
+      shell: bash
+      run: rustup target add wasm32-unknown-unknown
+
+    - name: Cache cargo
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-cargo-
+
+    - name: Build WASM
+      shell: bash
+      run: cargo build --release --target wasm32-unknown-unknown
+
+    - name: Generate app icons
+      shell: bash
+      run: |
+        sudo apt-get install -y librsvg2-bin binaryen
+        rsvg-convert -w 512 -h 512 icon.svg -o icon-512.png
+        rsvg-convert -w 192 -h 192 icon.svg -o icon-192.png
+        rsvg-convert -w 180 -h 180 icon.svg -o icon-180.png
+
+    - name: Assemble site
+      shell: bash
+      env:
+        GIT_REV: ${{ inputs.revision }}
+      run: |
+        mkdir -p site
+        cp index.html site/
+        cp manifest.json site/
+        cp icon-512.png icon-192.png icon-180.png site/
+        cp mq_js_bundle.js site/
+        # Shrink the wasm (~30% on top of the size-tuned release profile).
+        wasm-opt -Oz -o site/rapier-test.wasm target/wasm32-unknown-unknown/release/rapier-test.wasm
+        # Inject the build's git revision and timestamp into the info overlay.
+        BUILD_TIME=$(date -u +"%Y-%m-%d %H:%M UTC")
+        sed -i "s|__GIT_REVISION__|${GIT_REV}|g" site/index.html
+        sed -i "s|__BUILD_TIME__|${BUILD_TIME}|g" site/index.html
