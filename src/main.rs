@@ -958,17 +958,18 @@ async fn main() {
         // sizes multiply by it. dpi = 1 on standard displays / native builds.
         let dpi = screen_dpi_scale();
 
-        // Mobile zoom: fit the cave's typical full height in the viewport so
-        // both walls are on screen on average in EITHER orientation. Average
-        // half-width is ~7.8 m (6.5 + 2·mean|sin| ≈ 6.5 + 1.27) → ~15.5 m of
-        // cave; MOBILE_VIEW_H adds breathing room. Deriving the scale from sh
-        // (not a fixed factor) is what keeps landscape from cropping the
-        // walls: portrait and landscape both show MOBILE_VIEW_H metres
-        // vertically. Desktop keeps the fixed SCALE zoom. Capped at the
-        // desktop scale so a short-but-wide window never zooms in past it.
-        const MOBILE_VIEW_H: f32 = 20.0; // world metres visible vertically on mobile
+        // Mobile zoom: ONE scale for both orientations, keyed on the smaller
+        // screen dimension — rotating the phone never changes the zoom level,
+        // the world just extends further along the long axis. The smaller
+        // dimension always spans MOBILE_VIEW_M metres; in landscape that
+        // dimension is the height, so the cave's typical full height (average
+        // half-width ~7.8 m → ~15.5 m of cave) fits with margin, and portrait
+        // shows the same-sized world with more of it visible vertically.
+        // Desktop keeps the fixed SCALE zoom; the cap stops a small desktop
+        // window from zooming in past it.
+        const MOBILE_VIEW_M: f32 = 19.0; // world metres across the smaller screen dimension
         let view_scale = if sw.min(sh) / dpi < 600.0 {
-            (sh / MOBILE_VIEW_H).min(SCALE * dpi)
+            (sw.min(sh) / MOBILE_VIEW_M).min(SCALE * dpi)
         } else {
             SCALE * dpi
         };
@@ -988,10 +989,13 @@ async fn main() {
         let ui = (sw.min(sh) / dpi / 980.0).min(1.0) * dpi;
 
         // Safe-area insets (notch / status bar), supplied by JS via env(safe-area-inset-*)
-        // in CSS pixels → converted to physical pixels here. Keeps the top-left
-        // HUD clear of the notch in both portrait (top) and landscape (left).
+        // in CSS pixels → converted to physical pixels here. The top inset is
+        // honoured in full (the notch/island sits at the top in portrait); the
+        // LEFT inset is capped — in landscape the island sits mid-edge, not in
+        // the top corner, and the full ~47-59 px inset shoved the minimap far
+        // into the screen when only the rounded bezel corner actually matters.
         let safe_top = f32::from_bits(SAFE_AREA_TOP.load(Ordering::Relaxed)) * dpi;
-        let safe_left = f32::from_bits(SAFE_AREA_LEFT.load(Ordering::Relaxed)) * dpi;
+        let safe_left = f32::from_bits(SAFE_AREA_LEFT.load(Ordering::Relaxed)).min(24.0) * dpi;
 
         let (cam_x, cam_y, angle, ship_vx, ship_vy) = {
             let body = &rigid_body_set[box_handle];
@@ -1114,7 +1118,7 @@ async fn main() {
         for &(sx, sy) in &stars {
             let px = (sx * sw - cam_x * view_scale * 0.05).rem_euclid(sw);
             let py = (sy * sh + cam_y * view_scale * 0.05).rem_euclid(sh);
-            draw_circle(px, py, dpi, Color::from_rgba(200, 200, 255, 150));
+            draw_circle(px, py, (0.5 * dpi).max(1.0), Color::from_rgba(200, 200, 255, 150));
         }
 
         // Cave walls. Cull pad: 4 m of world keeps jittered deep-row facets from
@@ -1704,7 +1708,7 @@ async fn main() {
             Color::from_rgba(255, 255, 255, 180));
 
         // Ship dot — map centre
-        draw_circle(mm_cx, mm_cy, 3.0 * dpi, YELLOW);
+        draw_circle(mm_cx, mm_cy, 3.0 * ui, YELLOW);
 
         // Border
         draw_rectangle_lines(mm_ox, mm_oy, mm_w, mm_h, 1.0, Color::from_rgba(255, 255, 255, 120));
