@@ -57,8 +57,14 @@ push-retry loop for concurrent deploys):
 Four input paths feed the same physics, combined in the main loop:
 - **Keyboard** (desktop): `Down` thrust, `Left`/`Right` rotate, `R` reset.
 - **Mouse**: left-button held = thrust.
-- **Touch** (mobile): on-screen THRUST button + analog torque slider, forwarded
-  from `index.html` via exported `set_touch_thrust(i32)` / `set_touch_torque(f32)`.
+- **Touch** (mobile): a **single analog stick** (bottom-right, `#stick-base` in
+  `index.html`). x-deflection = steering torque; **downward** pull = main-engine
+  throttle (matches the Down thrust key). At full travel 0° (right) / 180°
+  (left) = max torque, 270° (straight down) = max thrust; in-between angles
+  blend both from the x/y components (e.g. 200° ≈ 94% left + 34% thrust), and
+  shorter travel scales everything linearly (12% per-axis dead-zone, rescaled
+  so ±1 stays reachable). Pushing up does nothing. Forwarded via exported
+  `set_touch_thrust(f32)` (**analog** 0..1 throttle) / `set_touch_torque(f32)`.
 - **Game controller** (BT/USB, web): `index.html` polls the **Web Gamepad API**
   each `requestAnimationFrame` and forwards to exported `set_pad_thrust(i32)` /
   `set_pad_torque(f32)` / `set_pad_reset()`. Mapping (standard layout): thrust =
@@ -68,9 +74,12 @@ Four input paths feed the same physics, combined in the main loop:
   (releasing held inputs) if the pad drops out.
 
 Touch and gamepad use **separate atomics** (`TOUCH_*` vs `PAD_*`) so a
-connected-but-idle source never stomps the other; thrust is OR'd and analog
-torque is summed-then-clamped to ±1. `PAD_RESET` is a swap-to-consume flag so a
-held reset button fires exactly once.
+connected-but-idle source never stomps the other. The main engine is a
+**throttle (0..1)**: the touch stick supplies an analog value; any binary
+source (keyboard/mouse/pad) overrides it to full power. Engine force, glow,
+fuel burn, and exhaust particle count/speed all scale with the throttle.
+Analog torque is summed-then-clamped to ±1. `PAD_RESET` is a swap-to-consume
+flag so a held reset button fires exactly once.
 
 ## Info overlay (web only)
 A fixed top-right "i" button (`#info-btn`) opens a fullscreen `#info-overlay`
@@ -141,8 +150,8 @@ shader supply all the visible variation — there is no longer a smooth bevel
 gradient. (Previously a warm-brown set `80/64/50 · 118/95/72 · 150/120/88`.)
 
 ## Thrust / glow system
-- `glow`: smoothed 0→1 float, exponentially approaches thrust input with factor 0.12 per frame.
-- Thrust applies upward force along the ship's heading via Rapier `add_force`.
+- `glow`: smoothed 0→1 float, exponentially approaches the throttle (0..1) with factor 0.12 per frame.
+- Thrust applies upward force along the ship's heading via Rapier `add_force`, scaled by the throttle (max force 8.0).
 - `light_radius` and warm tint both scale with `glow`, producing the radial light effect on cave walls.
 
 ## macroquad 0.4.15 material API (verified from vendored source)
@@ -331,8 +340,9 @@ AudioContext on the first user gesture (handled by the miniquad JS bundle).
 
 ## Fuel
 
-`FUEL_MAX = 100`; the main engine burns `FUEL_BURN_MAIN = 3.5/s` (~28 s of
-continuous thrust), RCS burns `FUEL_BURN_RCS = 1.2/s`. `thrusting_now` and the
+`FUEL_MAX = 100`; the main engine burns `FUEL_BURN_MAIN = 3.5/s` at **full
+throttle** (~28 s of continuous thrust; partial throttle burns proportionally),
+RCS burns `FUEL_BURN_RCS = 1.2/s`. `thrusting_now` and the
 RCS gates (`rcs_ok`) require `fuel > 0` — an empty tank kills engine, RCS,
 particles and glow, and shows "OUT OF FUEL — [R] RESET" (reset and respawn
 refill). HUD: slim gauge bar directly under the minimap (green > 50%, amber
