@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Pegasus — Moon Lander</title>
+  <link rel="manifest" href="./manifest.json">
+  <meta name="theme-color" content="#14141e">
+  <!-- iOS home screen support -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Pegasus">
+  <link rel="apple-touch-icon" href="./icon-180.png">
+  <style>
+    * { margin: 0; padding: 0; }
+    body { overflow: hidden; background: #14141e; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+
+    #touch-controls {
+      position: fixed;
+      bottom: 20px;
+      left: 0;
+      right: 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0 20px;
+      pointer-events: none;
+    }
+
+    #thrust-btn {
+      width: 100px;
+      height: 100px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.15);
+      border: 2px solid rgba(255, 255, 255, 0.4);
+      pointer-events: all;
+      touch-action: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: rgba(255,255,255,0.5);
+      font-size: 13px;
+      user-select: none;
+    }
+    #thrust-btn.active {
+      background: rgba(255, 200, 0, 0.4);
+      border-color: rgba(255, 200, 0, 0.8);
+    }
+
+    #torque-area {
+      pointer-events: all;
+      touch-action: none;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+    #torque-track {
+      width: 180px;
+      height: 70px;
+      border-radius: 35px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 2px solid rgba(255, 255, 255, 0.4);
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #torque-knob {
+      width: 54px;
+      height: 54px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.5);
+      position: absolute;
+      transition: background 0.1s;
+    }
+    #torque-track.active #torque-knob {
+      background: rgba(255, 200, 0, 0.8);
+      transition: none;
+    }
+
+    /* Info button — top-right corner, clear of the notch */
+    #info-btn {
+      position: fixed;
+      top: calc(env(safe-area-inset-top) + 12px);
+      right: calc(env(safe-area-inset-right) + 12px);
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: rgba(40, 60, 100, 0.55);
+      border: 1.5px solid rgba(180, 210, 255, 0.7);
+      color: rgba(220, 235, 255, 0.95);
+      font: italic 700 24px/40px Georgia, "Times New Roman", serif;
+      text-align: center;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      pointer-events: all;
+      touch-action: manipulation;
+      z-index: 10;
+    }
+    #info-btn:hover { background: rgba(80, 140, 220, 0.7); }
+
+    /* Fullscreen info overlay */
+    #info-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(10, 16, 30, 0.92);
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 28px;
+      padding: max(env(safe-area-inset-top), 24px) 24px max(env(safe-area-inset-bottom), 24px);
+      color: #dde9ff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      text-align: center;
+      z-index: 20;
+      pointer-events: all;
+    }
+    #info-overlay.open { display: flex; }
+    #info-overlay h1 {
+      font-size: clamp(28px, 6vw, 48px);
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+    #info-overlay .info-row { font-size: clamp(16px, 3.5vw, 24px); }
+    #info-overlay .info-label {
+      color: #8ba8d6;
+      margin-bottom: 6px;
+    }
+    #info-overlay .info-value {
+      font-family: "SF Mono", "Menlo", "Consolas", monospace;
+      font-size: clamp(20px, 5vw, 34px);
+      color: #ffffff;
+    }
+    #info-close {
+      position: fixed;
+      top: calc(env(safe-area-inset-top) + 12px);
+      right: calc(env(safe-area-inset-right) + 12px);
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1.5px solid rgba(255, 255, 255, 0.4);
+      color: #dde9ff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font: 700 22px/1 sans-serif;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    #info-overlay .info-hint {
+      font-size: 14px;
+      color: #6c84ad;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="glcanvas" tabindex="1"></canvas>
+
+  <!-- Probe element to read the top/left safe-area insets in CSS pixels -->
+  <div id="safe-area-probe" style="position:fixed;top:0;left:0;height:env(safe-area-inset-top);width:env(safe-area-inset-left);pointer-events:none;"></div>
+
+  <!-- Info button + fullscreen overlay -->
+  <div id="info-btn" role="button" aria-label="Info" title="Info">i</div>
+  <div id="info-overlay" role="dialog" aria-modal="true">
+    <div id="info-close" role="button" aria-label="Close">&times;</div>
+    <h1>Pegasus — Moon Lander</h1>
+    <div class="info-row">
+      <div class="info-label">Build revision</div>
+      <div class="info-value" id="git-rev">caddd8f</div>
+    </div>
+    <div class="info-row">
+      <div class="info-label">Build time</div>
+      <div class="info-value" id="build-time">2026-07-05 09:07 UTC</div>
+    </div>
+    <div class="info-hint">Tap anywhere to close</div>
+  </div>
+
+  <div id="touch-controls">
+    <div id="thrust-btn">THRUST</div>
+    <div id="torque-area">
+      <div id="torque-track">
+        <div id="torque-knob"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="./mq_js_bundle.js"></script>
+  <script>
+    function call(name, ...args) {
+      if (typeof wasm_exports !== "undefined" && wasm_exports[name]) {
+        wasm_exports[name](...args);
+      }
+    }
+
+    // Thrust button
+    const thrustBtn = document.getElementById("thrust-btn");
+    thrustBtn.addEventListener("touchstart", e => {
+      e.preventDefault();
+      thrustBtn.classList.add("active");
+      call("set_touch_thrust", 1);
+    }, { passive: false });
+    thrustBtn.addEventListener("touchend", () => {
+      thrustBtn.classList.remove("active");
+      call("set_touch_thrust", 0);
+    });
+    thrustBtn.addEventListener("touchcancel", () => {
+      thrustBtn.classList.remove("active");
+      call("set_touch_thrust", 0);
+    });
+
+    // Torque knob
+    const torqueTrack = document.getElementById("torque-track");
+    const torqueKnob = document.getElementById("torque-knob");
+    const MAX_DRAG = 60; // px from center = full torque
+
+    torqueTrack.addEventListener("touchstart", e => {
+      e.preventDefault();
+      torqueTrack.classList.add("active");
+    }, { passive: false });
+
+    torqueTrack.addEventListener("touchmove", e => {
+      e.preventDefault();
+      // targetTouches, not touches: e.touches[0] is the FIRST touch on the
+      // whole page — usually the thrust finger — which slammed torque hard
+      // left whenever thrust was held while steering.
+      const touch = e.targetTouches[0];
+      if (!touch) return;
+      const rect = torqueTrack.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const dx = touch.clientX - cx;
+      const clamped = Math.max(-MAX_DRAG, Math.min(MAX_DRAG, dx));
+      const normalized = clamped / MAX_DRAG;
+      torqueKnob.style.transform = `translateX(${clamped}px)`;
+      call("set_touch_torque", normalized);
+    }, { passive: false });
+
+    function releaseTorque(e) {
+      if (e.targetTouches.length > 0) return; // another finger still on the track
+      torqueTrack.classList.remove("active");
+      torqueKnob.style.transform = "translateX(0)";
+      call("set_touch_torque", 0);
+    }
+    torqueTrack.addEventListener("touchend", releaseTorque);
+    torqueTrack.addEventListener("touchcancel", releaseTorque);
+
+    // --- Bluetooth / USB game controller (Web Gamepad API) ---
+    // A controller paired with the device shows up in navigator.getGamepads().
+    // We poll it each animation frame and forward to dedicated WASM exports
+    // (set_pad_*), which are combined with touch/keyboard inside the game.
+    //   Thrust   : A / Cross (0), R2 trigger (7), or D-pad up (12)
+    //   Steer    : left stick X (axes[0], dead-zoned) or D-pad left/right (14/15)
+    //   Reset    : Start (9) or Y / Triangle (3)
+    // Standard mapping is assumed (the common layout for BT pads in browsers).
+    const STICK_DEADZONE = 0.18;
+    let padPolling = false;
+    let prevResetPressed = false;
+
+    function firstGamepad() {
+      const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+      for (const p of pads) if (p) return p;
+      return null;
+    }
+
+    function pollGamepad() {
+      const pad = firstGamepad();
+      if (!pad) {
+        // Controller dropped out — release any held inputs and stop polling.
+        call("set_pad_thrust", 0);
+        call("set_pad_torque", 0);
+        prevResetPressed = false;
+        padPolling = false;
+        return;
+      }
+
+      const btn = i => pad.buttons[i] && pad.buttons[i].pressed;
+      const val = i => (pad.buttons[i] ? pad.buttons[i].value : 0);
+
+      // Thrust: A button, R2 trigger (analog → treat >0.3 as on), or D-pad up.
+      const thrust = (btn(0) || val(7) > 0.3 || btn(12)) ? 1 : 0;
+      call("set_pad_thrust", thrust);
+
+      // Steering: analog left stick with a dead-zone, rescaled so it still
+      // reaches ±1 past the dead-zone. D-pad overrides to full deflection.
+      let x = pad.axes[0] || 0;
+      if (Math.abs(x) < STICK_DEADZONE) {
+        x = 0;
+      } else {
+        x = (x - Math.sign(x) * STICK_DEADZONE) / (1 - STICK_DEADZONE);
+      }
+      if (btn(14)) x = -1;
+      else if (btn(15)) x = 1;
+      call("set_pad_torque", Math.max(-1, Math.min(1, x)));
+
+      // Reset: edge-triggered so a held button fires once.
+      const resetPressed = btn(9) || btn(3);
+      if (resetPressed && !prevResetPressed) call("set_pad_reset");
+      prevResetPressed = resetPressed;
+
+      requestAnimationFrame(pollGamepad);
+    }
+
+    function startPadPolling() {
+      if (padPolling) return;
+      padPolling = true;
+      requestAnimationFrame(pollGamepad);
+    }
+
+    window.addEventListener("gamepadconnected", startPadPolling);
+    // Some browsers report an already-connected pad without firing the event
+    // (e.g. after a reload), so probe once the WASM exports are ready too.
+    if (firstGamepad()) startPadPolling();
+
+    // Report the safe-area insets (notch / status bar) to the WASM HUD.
+    const safeProbe = document.getElementById("safe-area-probe");
+    function reportSafeArea() {
+      const rect = safeProbe.getBoundingClientRect();
+      call("set_safe_area", rect.height, rect.width);
+    }
+    window.addEventListener("resize", reportSafeArea);
+    window.addEventListener("orientationchange", () => setTimeout(reportSafeArea, 300));
+    // The WASM exports aren't ready immediately; poll briefly until it loads.
+    const safeAreaTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_safe_area) {
+        reportSafeArea();
+        clearInterval(safeAreaTimer);
+      }
+    }, 200);
+
+    // Info overlay toggle. Stop propagation so taps on the button/overlay
+    // don't reach the canvas (which would fire the thruster).
+    const infoBtn = document.getElementById("info-btn");
+    const infoOverlay = document.getElementById("info-overlay");
+    const infoClose = document.getElementById("info-close");
+    const gitRev = document.getElementById("git-rev");
+    const buildTime = document.getElementById("build-time");
+
+    // If the deploy-time placeholders weren't substituted (e.g. opened locally),
+    // show a friendly fallback instead of the raw token.
+    // sed replaces the placeholders everywhere including in string literals,
+    // so compare with startsWith("__") rather than a literal match.
+    if (gitRev.textContent.trim().startsWith("__")) {
+      gitRev.textContent = "dev (local build)";
+    }
+    if (buildTime.textContent.trim().startsWith("__")) {
+      buildTime.textContent = "dev (local build)";
+    }
+
+    function openInfo(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      infoOverlay.classList.add("open");
+    }
+    function closeInfo(e) {
+      if (e) { e.preventDefault(); e.stopPropagation(); }
+      infoOverlay.classList.remove("open");
+    }
+    // Swallow mousedown so it never reaches the canvas/window listener that
+    // fires the thruster on desktop (mousedown precedes click).
+    const swallow = e => e.stopPropagation();
+    infoBtn.addEventListener("mousedown", swallow);
+    infoOverlay.addEventListener("mousedown", swallow);
+
+    infoBtn.addEventListener("click", openInfo);
+    infoBtn.addEventListener("touchstart", openInfo, { passive: false });
+    infoOverlay.addEventListener("click", closeInfo);
+    infoOverlay.addEventListener("touchstart", closeInfo, { passive: false });
+    infoClose.addEventListener("click", closeInfo);
+
+    // Cache-bust the wasm with the deploy revision so a fresh deploy never
+    // serves a stale binary from the browser/CDN cache. Locally the
+    // placeholder is untouched (sed only runs at deploy) → plain URL.
+    const wasmRev = "caddd8f";
+    load("./rapier-test.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
+  </script>
+</body>
+</html>
