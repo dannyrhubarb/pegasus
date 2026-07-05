@@ -93,7 +93,9 @@ respectively. Opened locally without that substitution, the JS falls back to
 "dev (local build)" for each (detected via `startsWith("__")`). Button/overlay handlers `stopPropagation` on `mousedown` so a desktop
 click doesn't bleed through to the canvas and fire the thruster.
 
-The overlay also has a **⟳ Reload latest build** button (`#force-reload`) —
+The overlay also hosts the **Velocity vector** settings checkbox
+(`#vel-toggle-row`; `stopPropagation` but *no* `preventDefault`, which would
+kill the checkbox click) and a **⟳ Reload latest build** button (`#force-reload`) —
 the manual cache-bypass: same `?fresh=<ts>` navigation as the toast below,
 for when you don't want to wait for detection.
 
@@ -154,7 +156,7 @@ gradient. (Previously a warm-brown set `80/64/50 · 118/95/72 · 150/120/88`.)
 - `glow`: smoothed 0→1 float, exponentially approaches the (curved) throttle with factor 0.12 per frame.
 - Thrust applies upward force along the ship's heading via Rapier `add_force`, scaled by the throttle (max force 8.0).
 - The body carries `linear_damping(0.2)` — imperceptible at landing speeds, but it caps how much momentum piles up on long burns/free-falls.
-- **Velocity vector**: an arrow drawn from the ship along its momentum, length grows with speed, color = green ≤ 1 m/s (landable) / amber ≤ `CRASH_DV_SOFT` (damage-free touch) / red above (damaging); hidden under 0.25 m/s and while crashed. The HUD line also appends `v=…` in the same danger color.
+- **Velocity vector** (opt-in, **off by default**): an arrow drawn from the ship along its momentum, length grows with speed, color = green ≤ 1 m/s (landable) / amber ≤ `CRASH_DV_SOFT` (damage-free touch) / red above (damaging); hidden under 0.25 m/s and while crashed. Toggled by the "Velocity vector" checkbox in the info overlay → exported `set_show_velocity(i32)` → `SHOW_VEL` atomic; the choice persists per device in `localStorage` (`pegasus_show_vel`) and is re-applied once the WASM exports load. The HUD line always appends `v=…` in the same danger color regardless of the toggle.
 - `light_radius` and warm tint both scale with `glow`, producing the radial light effect on cave walls.
 
 ## macroquad 0.4.15 material API (verified from vendored source)
