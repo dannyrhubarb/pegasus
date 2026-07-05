@@ -307,6 +307,14 @@ fn cave_half_width(x: f32) -> f32 {
     + (x * BASE * 11.0).sin().abs() * 2.0 // pinch points (abs keeps it positive)
 }
 
+// Spawn/reset height at x: standing on the floor (feet reach 0.73 below the
+// body origin). Spawning at cave_center dropped the ship 8–9 m; the ~5.5 m/s
+// touchdown tripped CRASH_DV and put spawn → crash → respawn into an endless
+// loop.
+fn stand_y(x: f32) -> f32 {
+    cave_center(x) - cave_half_width(x) + 0.78
+}
+
 // Returns (top_a, top_b, bot_a, bot_b) for segment index i
 fn seg_points(idx: i64) -> (Point<f32>, Point<f32>, Point<f32>, Point<f32>) {
     let x0 = idx as f32 * SEG_LEN;
@@ -755,7 +763,7 @@ async fn main() {
 
     // Ship starts at cave centre
     let box_body = RigidBodyBuilder::dynamic()
-        .translation(vector![0.0, cave_center(0.0)])
+        .translation(vector![0.0, stand_y(0.0)])
         .angular_damping(3.0)
         .ccd_enabled(true)
         .build();
@@ -854,7 +862,7 @@ async fn main() {
 
     let mut phys_accum = 0.0f32;
     // Ship state at the previous physics step, for render interpolation.
-    let mut prev_ship = (0.0f32, cave_center(0.0), 0.0f32); // x, y, angle
+    let mut prev_ship = (0.0f32, stand_y(0.0), 0.0f32); // x, y, angle
     // Crash state: velocity last frame (impact = big dv) and the wreck timer
     // (> 0 → crashed: input dead, ship hidden, respawn when it hits 0).
     let mut prev_vel = (0.0f32, 0.0f32);
@@ -931,11 +939,11 @@ async fn main() {
             if crash_timer <= 0.0 {
                 let rb = rigid_body_set.get_mut(box_handle).unwrap();
                 rb.set_gravity_scale(1.0, true);
-                rb.set_translation(vector![RESET_X, cave_center(RESET_X)], true);
+                rb.set_translation(vector![RESET_X, stand_y(RESET_X)], true);
                 rb.set_linvel(vector![0.0, 0.0], true);
                 rb.set_angvel(0.0, true);
                 rb.set_rotation(Rotation::new(0.0), true);
-                prev_ship = (RESET_X, cave_center(RESET_X), 0.0);
+                prev_ship = (RESET_X, stand_y(RESET_X), 0.0);
                 prev_vel = (0.0, 0.0);
                 fuel = FUEL_MAX;
             }
@@ -1555,13 +1563,13 @@ async fn main() {
         if is_key_pressed(KeyCode::R) || PAD_RESET.swap(0, Ordering::Relaxed) != 0 {
             let rb = rigid_body_set.get_mut(box_handle).unwrap();
             rb.set_gravity_scale(1.0, true); // in case we reset out of a crash
-            rb.set_translation(vector![RESET_X, cave_center(RESET_X)], true);
+            rb.set_translation(vector![RESET_X, stand_y(RESET_X)], true);
             rb.set_linvel(vector![0.0, 0.0], true);
             rb.set_angvel(0.0, true);
             rb.set_rotation(Rotation::new(0.0), true);
             // Snap the interpolation + crash state too, or the camera lerps
             // across the teleport and the velocity jump reads as an impact.
-            prev_ship = (RESET_X, cave_center(RESET_X), 0.0);
+            prev_ship = (RESET_X, stand_y(RESET_X), 0.0);
             prev_vel = (0.0, 0.0);
             crash_timer = 0.0;
             fuel = FUEL_MAX;
