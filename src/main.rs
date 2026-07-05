@@ -22,6 +22,8 @@ struct Particle {
     kind: u8,   // 0 = main thruster, 1 = left RCS, 2 = right RCS
 }
 
+// Touch throttle is ANALOG (f32 bits, 0..1): the on-screen analog stick maps
+// downward pull depth to main-engine power. Torque is f32 bits in -1..1.
 static TOUCH_THRUST: AtomicU32 = AtomicU32::new(0);
 static TOUCH_TORQUE: AtomicU32 = AtomicU32::new(0);
 // Gamepad state lives on its own atomics (not the touch ones) so a connected-but-
@@ -34,8 +36,8 @@ static SAFE_AREA_TOP: AtomicU32 = AtomicU32::new(0);
 static SAFE_AREA_LEFT: AtomicU32 = AtomicU32::new(0);
 
 #[unsafe(no_mangle)]
-pub extern "C" fn set_touch_thrust(active: i32) {
-    TOUCH_THRUST.store(active as u32, Ordering::Relaxed);
+pub extern "C" fn set_touch_thrust(value: f32) {
+    TOUCH_THRUST.store(value.to_bits(), Ordering::Relaxed);
 }
 
 #[unsafe(no_mangle)]
@@ -472,14 +474,21 @@ async fn main() {
              lx * angle.sin() + ly * angle.cos())
         };
 
-        // Read thrust state early so lighting can use it (dead while crashed
-        // or with an empty tank)
-        let thrusting_now = !crashed && fuel > 0.0
-            && (is_mouse_button_down(MouseButton::Left)
-                || is_key_down(KeyCode::Down)
-                || TOUCH_THRUST.load(Ordering::Relaxed) != 0
-                || PAD_THRUST.load(Ordering::Relaxed) != 0);
-        glow += (if thrusting_now { 1.0 } else { 0.0 } - glow) * 0.12;
+        // Main-engine throttle (0..1), read early so lighting can use it.
+        // The touch stick is analog (pull-down depth = power); keyboard,
+        // mouse and gamepad are full power. Dead while crashed or dry.
+        let mut throttle = f32::from_bits(TOUCH_THRUST.load(Ordering::Relaxed)).clamp(0.0, 1.0);
+        if is_mouse_button_down(MouseButton::Left)
+            || is_key_down(KeyCode::Down)
+            || PAD_THRUST.load(Ordering::Relaxed) != 0
+        {
+            throttle = 1.0;
+        }
+        if crashed || fuel <= 0.0 {
+            throttle = 0.0;
+        }
+        let thrusting_now = throttle > 0.0;
+        glow += (throttle - glow) * 0.12;
         if let Some(s) = &thruster_snd {
             set_sound_volume(s, glow * 0.6);
         }
@@ -1036,7 +1045,8 @@ async fn main() {
         rb.reset_torques(true);
         if thrusting_now {
             let a = rb.rotation().angle();
-            rb.add_force(vector![-a.sin() * 8.0, a.cos() * 8.0], true);
+            let f = 8.0 * throttle;
+            rb.add_force(vector![-a.sin() * f, a.cos() * f], true);
         }
         // Analog steering: touch slider + gamepad stick share one value. They
         // live on separate atomics so neither stomps the other; sum and clamp
@@ -1070,21 +1080,22 @@ async fn main() {
         // --- Particle emission ---
         let dt = get_frame_time();
 
-        // Burn fuel for whatever fired this frame.
+        // Burn fuel for whatever fired this frame (main burn scales with throttle).
         if thrusting_now {
-            fuel -= FUEL_BURN_MAIN * dt;
+            fuel -= FUEL_BURN_MAIN * throttle * dt;
         }
         if rotating_left || rotating_right || (rcs_ok && touch_torque != 0.0) {
             fuel -= FUEL_BURN_RCS * dt;
         }
         fuel = fuel.max(0.0);
 
-        // Main thruster: exhaust exits local -Y (out the bottom), 8 particles/frame
+        // Main thruster: exhaust exits local -Y (out the bottom), up to 8
+        // particles/frame — count and exhaust speed scale with the throttle.
         if thrusting_now {
-            for _ in 0..8 {
+            for _ in 0..(8.0 * throttle).ceil() as i32 {
                 let spread = gen_range(-0.25f32, 0.25);
                 let (px, py) = lp(spread * 0.45, -0.72);
-                let speed = gen_range(4.0f32, 8.0);
+                let speed = gen_range(4.0f32, 8.0) * (0.4 + 0.6 * throttle);
                 let (dvx, dvy) = ld(spread * 1.5, -speed);
                 particles.push(Particle {
                     x: px, y: py,
