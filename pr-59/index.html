@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Pegasus — Moon Lander</title>
+  <link rel="manifest" href="./manifest.json">
+  <meta name="theme-color" content="#14141e">
+  <!-- iOS home screen support -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Pegasus">
+  <link rel="apple-touch-icon" href="./icon-180.png">
+  <style>
+    * { margin: 0; padding: 0; }
+    body { overflow: hidden; background: #14141e; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+
+    /* Single analog stick: x = steering, pull DOWN = main engine.
+       Full travel right (0°) / left (180°) = max torque, straight down
+       (270°) = max thrust; angles in between blend both proportionally. */
+    #touch-controls {
+      position: fixed;
+      bottom: calc(env(safe-area-inset-bottom) + 20px);
+      right: calc(env(safe-area-inset-right) + 24px);
+      pointer-events: none;
+    }
+
+    #stick-base {
+      position: relative;
+      width: 170px;
+      height: 170px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.08);
+      border: 2px solid rgba(255, 255, 255, 0.35);
+      pointer-events: all;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    #stick-base .stick-hint {
+      position: absolute;
+      color: rgba(255, 255, 255, 0.35);
+      font: 600 14px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      pointer-events: none;
+    }
+    .stick-hint.left  { left: 10px;  top: 50%; transform: translateY(-50%); }
+    .stick-hint.right { right: 10px; top: 50%; transform: translateY(-50%); }
+    .stick-hint.down  { bottom: 8px; left: 50%; transform: translateX(-50%);
+                        color: rgba(255, 200, 0, 0.55); }
+    #stick-knob {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 64px;
+      height: 64px;
+      margin: -32px 0 0 -32px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.45);
+      transition: transform 0.12s, background 0.1s;
+    }
+    #stick-base.active #stick-knob {
+      transition: background 0.1s;   /* knob tracks the finger with no lag */
+    }
+    #stick-base.thrusting { border-color: rgba(255, 200, 0, 0.7); }
+    #stick-base.thrusting #stick-knob { background: rgba(255, 200, 0, 0.85); }
+
+    /* Info button — top-right corner, clear of the notch */
+    #info-btn {
+      position: fixed;
+      top: calc(env(safe-area-inset-top) + 12px);
+      right: calc(env(safe-area-inset-right) + 12px);
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: rgba(40, 60, 100, 0.55);
+      border: 1.5px solid rgba(180, 210, 255, 0.7);
+      color: rgba(220, 235, 255, 0.95);
+      font: italic 700 24px/40px Georgia, "Times New Roman", serif;
+      text-align: center;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      pointer-events: all;
+      touch-action: manipulation;
+      z-index: 10;
+    }
+    #info-btn:hover { background: rgba(80, 140, 220, 0.7); }
+
+    /* Fullscreen info overlay */
+    #info-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(10, 16, 30, 0.92);
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 28px;
+      padding: max(env(safe-area-inset-top), 24px) 24px max(env(safe-area-inset-bottom), 24px);
+      color: #dde9ff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      text-align: center;
+      z-index: 20;
+      pointer-events: all;
+    }
+    #info-overlay.open { display: flex; }
+    #info-overlay h1 {
+      font-size: clamp(28px, 6vw, 48px);
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+    #info-overlay .info-row { font-size: clamp(16px, 3.5vw, 24px); }
+    #info-overlay .info-label {
+      color: #8ba8d6;
+      margin-bottom: 6px;
+    }
+    #info-overlay .info-value {
+      font-family: "SF Mono", "Menlo", "Consolas", monospace;
+      font-size: clamp(20px, 5vw, 34px);
+      color: #ffffff;
+    }
+    #info-close {
+      position: fixed;
+      top: calc(env(safe-area-inset-top) + 12px);
+      right: calc(env(safe-area-inset-right) + 12px);
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1.5px solid rgba(255, 255, 255, 0.4);
+      color: #dde9ff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font: 700 22px/1 sans-serif;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    #info-overlay .info-hint {
+      font-size: 14px;
+      color: #6c84ad;
+      margin-top: 8px;
+    }
+    /* Manual cache-bypass reload — same ?fresh= mechanism as the toast, for
+       when you want the newest build without waiting for detection. */
+    #force-reload {
+      margin-top: 12px;
+      padding: 12px 24px;
+      border: 1.5px solid rgba(140, 200, 255, 0.8);
+      border-radius: 24px;
+      background: rgba(24, 40, 72, 0.6);
+      color: #dde9ff;
+      font: 600 16px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    #force-reload:hover { background: rgba(60, 110, 190, 0.6); }
+
+    /* "New build available" toast — GitHub Pages caches index.html for
+       ~10 min, so a fresh deploy can serve a stale page; version.json is
+       fetched with the cache bypassed and a mismatch shows this. */
+    #update-toast {
+      position: fixed;
+      top: calc(env(safe-area-inset-top) + 64px);
+      left: 50%;
+      transform: translateX(-50%) translateY(-16px);
+      background: rgba(24, 40, 72, 0.95);
+      border: 1.5px solid rgba(140, 200, 255, 0.8);
+      border-radius: 24px;
+      color: #dde9ff;
+      font: 600 15px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 12px 20px;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      pointer-events: all;
+      z-index: 30;
+      opacity: 0;
+      transition: opacity 0.3s, transform 0.3s;
+    }
+    #update-toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+  </style>
+</head>
+<body>
+  <canvas id="glcanvas" tabindex="1"></canvas>
+
+  <!-- Probe element to read the top/left safe-area insets in CSS pixels -->
+  <div id="safe-area-probe" style="position:fixed;top:0;left:0;height:env(safe-area-inset-top);width:env(safe-area-inset-left);pointer-events:none;"></div>
+
+  <!-- Info button + fullscreen overlay -->
+  <div id="info-btn" role="button" aria-label="Info" title="Info">i</div>
+  <div id="info-overlay" role="dialog" aria-modal="true">
+    <div id="info-close" role="button" aria-label="Close">&times;</div>
+    <h1>Pegasus — Moon Lander</h1>
+    <div class="info-row">
+      <div class="info-label">Build revision</div>
+      <div class="info-value" id="git-rev">ae14a73-pr-59</div>
+    </div>
+    <div class="info-row">
+      <div class="info-label">Build time</div>
+      <div class="info-value" id="build-time">2026-07-05 13:48 UTC</div>
+    </div>
+    <div id="force-reload" role="button">&#10227; Reload latest build</div>
+    <div class="info-hint">Tap anywhere to close</div>
+  </div>
+
+  <!-- Stale-cache reload toast (hidden until a newer version.json is seen) -->
+  <div id="update-toast" role="button">⟳ New build available — tap to reload</div>
+
+  <div id="touch-controls">
+    <div id="stick-base">
+      <span class="stick-hint left">&#9664;</span>
+      <span class="stick-hint right">&#9654;</span>
+      <span class="stick-hint down">&#9660;</span>
+      <div id="stick-knob"></div>
+    </div>
+  </div>
+
+  <script src="./mq_js_bundle.js"></script>
+  <script>
+    function call(name, ...args) {
+      if (typeof wasm_exports !== "undefined" && wasm_exports[name]) {
+        wasm_exports[name](...args);
+      }
+    }
+
+    // --- Single analog stick (replaces the THRUST button + torque slider) ---
+    // x-deflection = steering torque, DOWNWARD pull = main-engine throttle
+    // (matches the Down-arrow thrust key). At full travel: 0° (right) and
+    // 180° (left) = max torque, 270° (straight down) = max thrust; angles in
+    // between blend both from the x/y components — e.g. 200° ≈ 94% left +
+    // 34% thrust. Shorter travel scales everything down linearly. Pushing
+    // up does nothing (no reverse thrust). set_touch_thrust takes an analog
+    // 0..1 throttle (the WASM export was widened from the old on/off i32).
+    const stickBase = document.getElementById("stick-base");
+    const stickKnob = document.getElementById("stick-knob");
+    const STICK_TRAVEL = 60;  // px from center = full deflection
+    const STICK_DZ = 0.12;    // per-axis dead-zone, rescaled so ±1 is reachable
+
+    function deadzone(v) {
+      if (Math.abs(v) < STICK_DZ) return 0;
+      return (v - Math.sign(v) * STICK_DZ) / (1 - STICK_DZ);
+    }
+
+    function stickUpdate(touch) {
+      const rect = stickBase.getBoundingClientRect();
+      let dx = touch.clientX - (rect.left + rect.width / 2);
+      let dy = touch.clientY - (rect.top + rect.height / 2);
+      const len = Math.hypot(dx, dy);
+      if (len > STICK_TRAVEL) {        // clamp to the travel circle
+        dx *= STICK_TRAVEL / len;
+        dy *= STICK_TRAVEL / len;
+      }
+      stickKnob.style.transform = `translate(${dx}px, ${dy}px)`;
+      const torque = deadzone(dx / STICK_TRAVEL);
+      // Screen y grows downward, so a downward pull is positive dy = thrust.
+      const throttle = Math.max(0, deadzone(dy / STICK_TRAVEL));
+      stickBase.classList.toggle("thrusting", throttle > 0);
+      call("set_touch_torque", torque);
+      call("set_touch_thrust", throttle);
+    }
+
+    stickBase.addEventListener("touchstart", e => {
+      e.preventDefault();
+      stickBase.classList.add("active");
+      stickUpdate(e.targetTouches[0]);
+    }, { passive: false });
+
+    stickBase.addEventListener("touchmove", e => {
+      e.preventDefault();
+      // targetTouches, not touches: e.touches[0] is the FIRST touch on the
+      // whole page, which may be a different finger elsewhere on the screen.
+      const touch = e.targetTouches[0];
+      if (touch) stickUpdate(touch);
+    }, { passive: false });
+
+    function stickRelease(e) {
+      if (e.targetTouches.length > 0) {          // another finger still on it
+        stickUpdate(e.targetTouches[0]);
+        return;
+      }
+      stickBase.classList.remove("active", "thrusting");
+      stickKnob.style.transform = "translate(0, 0)";
+      call("set_touch_torque", 0);
+      call("set_touch_thrust", 0);
+    }
+    stickBase.addEventListener("touchend", stickRelease);
+    stickBase.addEventListener("touchcancel", stickRelease);
+
+    // --- Bluetooth / USB game controller (Web Gamepad API) ---
+    // A controller paired with the device shows up in navigator.getGamepads().
+    // We poll it each animation frame and forward to dedicated WASM exports
+    // (set_pad_*), which are combined with touch/keyboard inside the game.
+    //   Thrust   : A / Cross (0), R2 trigger (7), or D-pad up (12)
+    //   Steer    : left stick X (axes[0], dead-zoned) or D-pad left/right (14/15)
+    //   Reset    : Start (9) or Y / Triangle (3)
+    // Standard mapping is assumed (the common layout for BT pads in browsers).
+    const STICK_DEADZONE = 0.18;
+    let padPolling = false;
+    let prevResetPressed = false;
+
+    function firstGamepad() {
+      const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+      for (const p of pads) if (p) return p;
+      return null;
+    }
+
+    function pollGamepad() {
+      const pad = firstGamepad();
+      if (!pad) {
+        // Controller dropped out — release any held inputs and stop polling.
+        call("set_pad_thrust", 0);
+        call("set_pad_torque", 0);
+        prevResetPressed = false;
+        padPolling = false;
+        return;
+      }
+
+      const btn = i => pad.buttons[i] && pad.buttons[i].pressed;
+      const val = i => (pad.buttons[i] ? pad.buttons[i].value : 0);
+
+      // Thrust: A button, R2 trigger (analog → treat >0.3 as on), or D-pad up.
+      const thrust = (btn(0) || val(7) > 0.3 || btn(12)) ? 1 : 0;
+      call("set_pad_thrust", thrust);
+
+      // Steering: analog left stick with a dead-zone, rescaled so it still
+      // reaches ±1 past the dead-zone. D-pad overrides to full deflection.
+      let x = pad.axes[0] || 0;
+      if (Math.abs(x) < STICK_DEADZONE) {
+        x = 0;
+      } else {
+        x = (x - Math.sign(x) * STICK_DEADZONE) / (1 - STICK_DEADZONE);
+      }
+      if (btn(14)) x = -1;
+      else if (btn(15)) x = 1;
+      call("set_pad_torque", Math.max(-1, Math.min(1, x)));
+
+      // Reset: edge-triggered so a held button fires once.
+      const resetPressed = btn(9) || btn(3);
+      if (resetPressed && !prevResetPressed) call("set_pad_reset");
+      prevResetPressed = resetPressed;
+
+      requestAnimationFrame(pollGamepad);
+    }
+
+    function startPadPolling() {
+      if (padPolling) return;
+      padPolling = true;
+      requestAnimationFrame(pollGamepad);
+    }
+
+    window.addEventListener("gamepadconnected", startPadPolling);
+    // Some browsers report an already-connected pad without firing the event
+    // (e.g. after a reload), so probe once the WASM exports are ready too.
+    if (firstGamepad()) startPadPolling();
+
+    // Report the safe-area insets (notch / status bar) to the WASM HUD.
+    const safeProbe = document.getElementById("safe-area-probe");
+    function reportSafeArea() {
+      const rect = safeProbe.getBoundingClientRect();
+      call("set_safe_area", rect.height, rect.width);
+    }
+    window.addEventListener("resize", reportSafeArea);
+    window.addEventListener("orientationchange", () => setTimeout(reportSafeArea, 300));
+    // The WASM exports aren't ready immediately; poll briefly until it loads.
+    const safeAreaTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_safe_area) {
+        reportSafeArea();
+        clearInterval(safeAreaTimer);
+      }
+    }, 200);
+
+    // Info overlay toggle. Stop propagation so taps on the button/overlay
+    // don't reach the canvas (which would fire the thruster).
+    const infoBtn = document.getElementById("info-btn");
+    const infoOverlay = document.getElementById("info-overlay");
+    const infoClose = document.getElementById("info-close");
+    const gitRev = document.getElementById("git-rev");
+    const buildTime = document.getElementById("build-time");
+
+    // If the deploy-time placeholders weren't substituted (e.g. opened locally),
+    // show a friendly fallback instead of the raw token.
+    // sed replaces the placeholders everywhere including in string literals,
+    // so compare with startsWith("__") rather than a literal match.
+    if (gitRev.textContent.trim().startsWith("__")) {
+      gitRev.textContent = "dev (local build)";
+    }
+    if (buildTime.textContent.trim().startsWith("__")) {
+      buildTime.textContent = "dev (local build)";
+    }
+
+    function openInfo(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      infoOverlay.classList.add("open");
+    }
+    function closeInfo(e) {
+      if (e) { e.preventDefault(); e.stopPropagation(); }
+      infoOverlay.classList.remove("open");
+    }
+    // Swallow mousedown so it never reaches the canvas/window listener that
+    // fires the thruster on desktop (mousedown precedes click).
+    const swallow = e => e.stopPropagation();
+    infoBtn.addEventListener("mousedown", swallow);
+    infoOverlay.addEventListener("mousedown", swallow);
+
+    infoBtn.addEventListener("click", openInfo);
+    infoBtn.addEventListener("touchstart", openInfo, { passive: false });
+    infoOverlay.addEventListener("click", closeInfo);
+    infoOverlay.addEventListener("touchstart", closeInfo, { passive: false });
+    infoClose.addEventListener("click", closeInfo);
+
+    // Cache-bust the wasm with the deploy revision so a fresh deploy never
+    // serves a stale binary from the browser/CDN cache. Locally the
+    // placeholder is untouched (sed only runs at deploy) → plain URL.
+    const wasmRev = "ae14a73-pr-59";
+    load("./rapier-test.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
+
+    // --- Stale-cache detection ---
+    // GitHub Pages caches index.html for ~10 minutes, so right after a deploy
+    // this page (and the ?v= it carries) can be the PREVIOUS build. Compare
+    // the baked-in revision against version.json fetched with the cache
+    // bypassed; on mismatch show a reload toast. Reloading navigates to a
+    // ?fresh=<ts> URL, which skips the cached HTML entirely.
+    const updateToast = document.getElementById("update-toast");
+    let lastVersionCheck = 0;
+
+    // Navigate to a ?fresh=<ts> URL: a unique query string bypasses the
+    // cached copy of index.html (a plain reload would re-serve it).
+    function freshReload() {
+      location.replace(location.pathname + "?fresh=" + Date.now());
+    }
+
+    function checkVersion() {
+      if (wasmRev.startsWith("__")) return;          // local dev: no version.json
+      const now = Date.now();
+      if (now - lastVersionCheck < 30000) return;    // throttle
+      lastVersionCheck = now;
+      fetch("./version.json?nocache=" + now, { cache: "no-store" })
+        .then(r => (r.ok ? r.json() : null))
+        .then(v => {
+          if (v && v.revision && v.revision !== wasmRev) {
+            updateToast.classList.add("show");
+          }
+        })
+        .catch(() => {});                            // offline / pre-toast deploys: ignore
+    }
+
+    updateToast.addEventListener("mousedown", e => e.stopPropagation());
+    updateToast.addEventListener("click", e => {
+      e.stopPropagation();
+      freshReload();
+    });
+    updateToast.addEventListener("touchstart", e => {
+      e.preventDefault();
+      e.stopPropagation();
+      freshReload();
+    }, { passive: false });
+
+    // Manual reload button in the info overlay (stopPropagation so the tap
+    // doesn't just close the overlay).
+    const forceReload = document.getElementById("force-reload");
+    forceReload.addEventListener("mousedown", e => e.stopPropagation());
+    forceReload.addEventListener("click", e => {
+      e.stopPropagation();
+      freshReload();
+    });
+    forceReload.addEventListener("touchstart", e => {
+      e.preventDefault();
+      e.stopPropagation();
+      freshReload();
+    }, { passive: false });
+
+    // Trigger the check on load, then on every plausible "came back to this
+    // page" signal AND on a slow interval — visibilitychange alone never
+    // fires in an iOS in-app webview that simply stays open, which is
+    // exactly where a stale page lingers longest. The 30 s throttle in
+    // checkVersion keeps the overlapping triggers cheap.
+    checkVersion();
+    setInterval(checkVersion, 60000);
+    window.addEventListener("focus", checkVersion);
+    window.addEventListener("pageshow", checkVersion);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") checkVersion();
+    });
+  </script>
+</body>
+</html>
