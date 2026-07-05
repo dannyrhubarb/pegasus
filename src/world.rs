@@ -32,8 +32,8 @@ pub fn cave_half_width(x: f32) -> f32 {
 
 // Spawn/reset height at x: standing on the floor (feet reach 0.73 below the
 // body origin). Spawning at cave_center dropped the ship 8–9 m; the ~5.5 m/s
-// touchdown tripped CRASH_DV and put spawn → crash → respawn into an endless
-// loop.
+// touchdown tripped the crash threshold and put spawn → crash → respawn into
+// an endless loop.
 pub fn stand_y(x: f32) -> f32 {
     let mut ground = cave_center(x) - cave_half_width(x);
     // If a landing pad deck covers x, stand on the deck instead (its friction

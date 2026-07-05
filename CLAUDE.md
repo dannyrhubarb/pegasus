@@ -150,8 +150,11 @@ shader supply all the visible variation — there is no longer a smooth bevel
 gradient. (Previously a warm-brown set `80/64/50 · 118/95/72 · 150/120/88`.)
 
 ## Thrust / glow system
-- `glow`: smoothed 0→1 float, exponentially approaches the throttle (0..1) with factor 0.12 per frame.
+- The touch throttle has a **quadratic response** (`throttle *= throttle` in the main loop, applied before the binary-source override so keyboard/mouse/pad at 1.0 are unaffected): mid-stick is a gentle hover trim, full deflection the emergency burn.
+- `glow`: smoothed 0→1 float, exponentially approaches the (curved) throttle with factor 0.12 per frame.
 - Thrust applies upward force along the ship's heading via Rapier `add_force`, scaled by the throttle (max force 8.0).
+- The body carries `linear_damping(0.2)` — imperceptible at landing speeds, but it caps how much momentum piles up on long burns/free-falls.
+- **Velocity vector**: an arrow drawn from the ship along its momentum, length grows with speed, color = green ≤ 1 m/s (landable) / amber ≤ `CRASH_DV_SOFT` (damage-free touch) / red above (damaging); hidden under 0.25 m/s and while crashed. The HUD line also appends `v=…` in the same danger color.
 - `light_radius` and warm tint both scale with `glow`, producing the radial light effect on cave walls.
 
 ## macroquad 0.4.15 material API (verified from vendored source)
@@ -346,8 +349,8 @@ RCS burns `FUEL_BURN_RCS = 1.2/s`. `thrusting_now` and the
 RCS gates (`rcs_ok`) require `fuel > 0` — an empty tank kills engine, RCS,
 particles and glow, and shows "OUT OF FUEL — [R] RESET" (reset and respawn
 refill). HUD: slim gauge bar directly under the minimap (green > 50%, amber
-> 25%, red below); the HUD text line moved down to `232*ui` baseline to clear
-it.
+> 25%, red below), with the **hull gauge** in a matching bar just beneath it;
+the HUD text line sits at the `252*ui` baseline to clear both.
 
 ## Landing pads & scoring
 
@@ -370,23 +373,40 @@ steady blue; the minimap draws a deck-width line (green → blue-grey).
 Pads are drawn with the **default material** (readable in the dark), deck top
 exactly on the collider line (alignment rule).
 
-## Crash & respawn
+## Impacts, hull damage, crash & respawn
 
 Impacts are detected from the **frame-to-frame velocity change**: after the
-physics substeps, `|v − prev_vel| > CRASH_DV (5 m/s)` means a collision impulse
+physics substeps, `|v − prev_vel|` above a threshold means a collision impulse
 (thrust/gravity change v by < 0.3 m/s per frame) — no Rapier contact-event
-plumbing needed. On crash: 70 explosion particles (`kind 3`, ~1.1 s life), the
-wreck is parked (`set_gravity_scale(0)`, velocities zeroed) so the camera holds
-still, input is dead (`crashed` gates thrust/RCS and ship rendering), and a
-"CRASHED" banner shows. After `CRASH_RESPAWN = 1.5 s` the ship respawns at
-`RESET_X` (gravity restored). Anything that teleports or zeroes velocity
-(reset, respawn) must also snap `prev_vel` — otherwise the velocity jump reads
-as an impact — and `prev_ship` (render interpolation). Spawn/reset place the
-ship **standing on the floor** (`stand_y(x)` = floor + 0.78, feet at 0.73):
-dropping it from `cave_center` reached ~5.5 m/s at touchdown, which itself
-tripped `CRASH_DV` and looped spawn → crash → respawn forever.
+plumbing needed. Damage is **graduated**, not binary:
+- dv ≤ `CRASH_DV_SOFT (2.5 m/s)`: free.
+- `CRASH_DV_SOFT`..`CRASH_DV_HARD (6 m/s)`: survivable scrape — hull damage
+  proportional to dv (full `HULL_MAX = 100` bar exactly at HARD), a small
+  spark burst (kind 3, short-lived), a quiet thud (boom sound at 0.25
+  volume), and screen shake (`shake` 0..1, random ±0.12 m camera jitter
+  decaying at 4/s, applied to `cam_x/cam_y` after interpolation).
+- dv > `CRASH_DV_HARD`, **or a scrape that empties the hull**: destroyed.
+
+Hull is repaired while parked on a pad (`HULL_REPAIR_PER_S = 20`, alongside
+refueling — the banner reads REFUELING, or REPAIRING once fuel is full) and
+restored by reset/respawn. HUD: a second slim gauge bar (blue-grey → amber →
+red) directly under the fuel bar.
+
+On destruction: 70 explosion particles (`kind 3`, ~1.1 s life), the wreck is
+parked (`set_gravity_scale(0)`, velocities zeroed) so the camera holds still,
+input is dead (`crashed` gates thrust/RCS and ship rendering), and a "CRASHED"
+banner shows. After `CRASH_RESPAWN = 1.5 s` the ship respawns at `RESET_X`
+(gravity restored). Anything that teleports or zeroes velocity (reset,
+respawn) must also snap `prev_vel` — otherwise the velocity jump reads as an
+impact — and `prev_ship` (render interpolation). Spawn/reset place the ship
+**standing on the floor** (`stand_y(x)` = floor + 0.78, feet at 0.73):
+dropping it from `cave_center` reached ~5.5 m/s at touchdown, which tripped
+the crash threshold and looped spawn → crash → respawn forever.
 
 ## Physics notes
+
+The body has `angular_damping(3.0)` and `linear_damping(0.2)` (see Thrust /
+glow system for why the linear term exists).
 
 **Fixed timestep**: physics steps at `PHYSICS_DT = 1/120 s` through an
 accumulator in the main loop (catch-up capped at 0.05 s per frame), so handling
