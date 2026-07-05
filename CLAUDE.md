@@ -406,6 +406,9 @@ Each is built `ColliderBuilder::new(SharedShape::capsule(a, b, r)).restitution(0
 **RCS / attitude thrusters** (cosmetic particles, `kind 1/2`): bottom nozzles flanking the main booster vent **downward** (like a mini main thruster). Turning **left** → left nozzle at scaled-local `(−0.30, −0.71)`; turning **right** → right nozzle at `(0.30, −0.71)`. Gas exits `−Y` (downward) from both. The x positions sit in the leg nozzle (gold accent: unscaled x ≈ ±0.152–0.249 → midpoint ±0.30 scaled). Emission coords are in **scaled world units** — `lp()`/`ld()` do **not** apply `SHIP_SCALE` (only the render-time `rot` closure does), so don't multiply these by `SHIP_SCALE` (an earlier bug double-scaled them to ±0.60 and spawned the puffs outside the hull).
 
 ## Git workflow
+- **Always open a PR** after pushing a feature branch — standing instruction
+  from the owner (no need to ask first). The PR also produces a phone-testable
+  preview deployment at `pr-<n>/`.
 - Development branch: `claude/replicate-pr-review-deployment-gjw4x0` (current); previous: `claude/vertical-wrapping-caves-csv79r`
 - Merges to `main` via rebase PRs using the GitHub MCP tools (`mcp__github__create_pull_request`, `mcp__github__merge_pull_request`).
 - Branch consistently diverges from main after merges — always `git fetch origin main && git rebase origin/main && git push --force-with-lease` before creating a PR to avoid merge conflicts.
