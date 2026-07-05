@@ -173,11 +173,11 @@
     <h1>Pegasus — Moon Lander</h1>
     <div class="info-row">
       <div class="info-label">Build revision</div>
-      <div class="info-value" id="git-rev">caddd8f</div>
+      <div class="info-value" id="git-rev">f218c94</div>
     </div>
     <div class="info-row">
       <div class="info-label">Build time</div>
-      <div class="info-value" id="build-time">2026-07-05 09:07 UTC</div>
+      <div class="info-value" id="build-time">2026-07-05 09:33 UTC</div>
     </div>
     <div class="info-hint">Tap anywhere to close</div>
   </div>
@@ -376,7 +376,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "caddd8f";
+    const wasmRev = "f218c94";
     load("./rapier-test.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
   </script>
 </body>
