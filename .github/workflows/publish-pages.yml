@@ -46,8 +46,24 @@ jobs:
         with:
           path: .
 
+      # The Pages API intermittently rejects deployments created in rapid
+      # succession ("Deployment failed, try again later.") — seen in practice
+      # when several preview deploys land within a minute. One retry after a
+      # pause covers it; if the retry also fails, the run goes red and the
+      # next branch event re-publishes anyway.
       - name: Deploy to GitHub Pages
         id: deployment
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+      - name: Pause before retry
+        if: ${{ steps.deployment.outcome == 'failure' }}
+        run: sleep 30
+
+      - name: Retry deploy (transient Pages API failure)
+        if: ${{ steps.deployment.outcome == 'failure' }}
         uses: actions/deploy-pages@v4
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true

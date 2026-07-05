@@ -38,7 +38,11 @@ push-retry loop for concurrent deploys):
   would never fire — `workflow_run` is load-bearing, not a style choice.
   Keep **Settings → Pages → Source = "GitHub Actions"** (do *not* switch it to
   the `gh-pages` branch — that would bypass this pipeline and serve the branch
-  with Jekyll defaults).
+  with Jekyll defaults). The Pages API intermittently rejects deployments
+  created in rapid succession ("Deployment failed, try again later." — seen
+  live when 4 preview deploys landed within a minute), so the deploy step
+  retries once after 30 s; a red publish run self-heals on the next branch
+  event regardless.
 
 ## Project structure
 - `src/main.rs` — entire game (single file): physics, rendering, cave generation, HUD, minimap, touch controls
