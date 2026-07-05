@@ -80,6 +80,19 @@ respectively. Opened locally without that substitution, the JS falls back to
 "dev (local build)" for each (detected via `startsWith("__")`). Button/overlay handlers `stopPropagation` on `mousedown` so a desktop
 click doesn't bleed through to the canvas and fire the thruster.
 
+### Stale-cache reload toast
+GitHub Pages caches `index.html` for ~10 min, so right after a deploy the
+served page (and the `?v=` wasm cache-buster it carries) can be the previous
+build. `build-site` writes `site/version.json` (`{"revision": …}`); on load
+and whenever the tab becomes visible again (throttled to 30 s), `index.html`
+fetches it with `cache: no-store` + a `?nocache=` timestamp and compares
+against its baked-in revision. On mismatch `#update-toast` slides in ("New
+build available — tap to reload"); tapping navigates to
+`location.pathname + "?fresh=<ts>"`, which bypasses the cached HTML. Skipped
+entirely in local dev (placeholder revision) and on 404 (pre-toast deploys),
+and the toast swallows `mousedown` like the info button so it can't fire the
+thruster.
+
 ## Key constants & configuration (`src/main.rs`)
 
 | Symbol | Value | Purpose |

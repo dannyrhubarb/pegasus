@@ -51,3 +51,6 @@ runs:
         BUILD_TIME=$(date -u +"%Y-%m-%d %H:%M UTC")
         sed -i "s|__GIT_REVISION__|${GIT_REV}|g" site/index.html
         sed -i "s|__BUILD_TIME__|${BUILD_TIME}|g" site/index.html
+        # Version marker fetched with cache bypassed by index.html, to detect
+        # a stale cached page and offer the "new build" reload toast.
+        printf '{"revision":"%s"}\n' "${GIT_REV}" > site/version.json

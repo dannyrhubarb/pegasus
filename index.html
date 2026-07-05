@@ -158,6 +158,33 @@
       color: #6c84ad;
       margin-top: 8px;
     }
+
+    /* "New build available" toast — GitHub Pages caches index.html for
+       ~10 min, so a fresh deploy can serve a stale page; version.json is
+       fetched with the cache bypassed and a mismatch shows this. */
+    #update-toast {
+      position: fixed;
+      top: calc(env(safe-area-inset-top) + 64px);
+      left: 50%;
+      transform: translateX(-50%) translateY(-16px);
+      background: rgba(24, 40, 72, 0.95);
+      border: 1.5px solid rgba(140, 200, 255, 0.8);
+      border-radius: 24px;
+      color: #dde9ff;
+      font: 600 15px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 12px 20px;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      pointer-events: all;
+      z-index: 30;
+      opacity: 0;
+      transition: opacity 0.3s, transform 0.3s;
+    }
+    #update-toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
   </style>
 </head>
 <body>
@@ -181,6 +208,9 @@
     </div>
     <div class="info-hint">Tap anywhere to close</div>
   </div>
+
+  <!-- Stale-cache reload toast (hidden until a newer version.json is seen) -->
+  <div id="update-toast" role="button">⟳ New build available — tap to reload</div>
 
   <div id="touch-controls">
     <div id="thrust-btn">THRUST</div>
@@ -378,6 +408,46 @@
     // placeholder is untouched (sed only runs at deploy) → plain URL.
     const wasmRev = "__GIT_REVISION__";
     load("./rapier-test.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
+
+    // --- Stale-cache detection ---
+    // GitHub Pages caches index.html for ~10 minutes, so right after a deploy
+    // this page (and the ?v= it carries) can be the PREVIOUS build. Compare
+    // the baked-in revision against version.json fetched with the cache
+    // bypassed; on mismatch show a reload toast. Reloading navigates to a
+    // ?fresh=<ts> URL, which skips the cached HTML entirely.
+    const updateToast = document.getElementById("update-toast");
+    let lastVersionCheck = 0;
+
+    function checkVersion() {
+      if (wasmRev.startsWith("__")) return;          // local dev: no version.json
+      const now = Date.now();
+      if (now - lastVersionCheck < 30000) return;    // throttle
+      lastVersionCheck = now;
+      fetch("./version.json?nocache=" + now, { cache: "no-store" })
+        .then(r => (r.ok ? r.json() : null))
+        .then(v => {
+          if (v && v.revision && v.revision !== wasmRev) {
+            updateToast.classList.add("show");
+          }
+        })
+        .catch(() => {});                            // offline / pre-toast deploys: ignore
+    }
+
+    updateToast.addEventListener("mousedown", e => e.stopPropagation());
+    updateToast.addEventListener("click", e => {
+      e.stopPropagation();
+      location.replace(location.pathname + "?fresh=" + Date.now());
+    });
+    updateToast.addEventListener("touchstart", e => {
+      e.preventDefault();
+      e.stopPropagation();
+      location.replace(location.pathname + "?fresh=" + Date.now());
+    }, { passive: false });
+
+    checkVersion();
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") checkVersion();
+    });
   </script>
 </body>
 </html>
