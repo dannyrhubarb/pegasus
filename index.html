@@ -480,7 +480,15 @@
       freshReload();
     }, { passive: false });
 
+    // Trigger the check on load, then on every plausible "came back to this
+    // page" signal AND on a slow interval — visibilitychange alone never
+    // fires in an iOS in-app webview that simply stays open, which is
+    // exactly where a stale page lingers longest. The 30 s throttle in
+    // checkVersion keeps the overlapping triggers cheap.
     checkVersion();
+    setInterval(checkVersion, 60000);
+    window.addEventListener("focus", checkVersion);
+    window.addEventListener("pageshow", checkVersion);
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") checkVersion();
     });
