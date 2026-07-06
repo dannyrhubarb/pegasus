@@ -539,6 +539,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
+name = "pegasus"
+version = "0.1.0"
+dependencies = [
+ "macroquad",
+ "rapier2d",
+]
+
+[[package]]
 name = "png"
 version = "0.17.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -614,14 +622,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924"
 dependencies = [
  "proc-macro2",
-]
-
-[[package]]
-name = "rapier-test"
-version = "0.1.0"
-dependencies = [
- "macroquad",
- "rapier2d",
 ]
 
 [[package]]
