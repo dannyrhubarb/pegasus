@@ -61,8 +61,8 @@ Four input paths feed the same physics, combined in the main loop:
   **JET button** (`#thrust-btn`, bottom-left) in `index.html`.
   - **Attitude stick = commanded nose direction**: push up → nose up, push
     left → nose left, pull down → nose down. The game runs a **PD heading
-    controller** (`HEADING_KP = 8`, `HEADING_KD = 1.6`, clamp
-    `HEADING_TORQUE_MAX = 3.5`, applied via `add_torque`) that rotates the
+    controller** (`HEADING_KP = 14`, `HEADING_KD = 2.2`, clamp
+    `HEADING_TORQUE_MAX = 6`, applied via `add_torque`) that rotates the
     ship the **short way** to the commanded angle; deflection magnitude
     scales the torque (nudge = trim, rim = hard flip). 15% radial dead-zone,
     rescaled. Manual rotation (keyboard/pad) overrides while held; heading
@@ -85,7 +85,9 @@ Four input paths feed the same physics, combined in the main loop:
     reused by the heading controller).
   - **JET button** = thrust-only alternative, binary full power while held,
     ungated (sends 1.0/0.0 through the still-analog `set_touch_thrust(f32)`
-    export).
+    export). **Hidden by default** behind the "JET button" checkbox in the
+    info overlay (`#jet-toggle-row`, persisted as `pegasus_jet_btn` in
+    `localStorage`; pure client-side `display` toggle, no wasm export).
   - **Floating**: parked bottom-right as a translucent ghost; a touch on the
     canvas in the lower 45% of the viewport (`STICK_ZONE = 0.55`) spawns the
     stick centred under the finger, release parks it again. Handlers sit on
