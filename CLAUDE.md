@@ -57,9 +57,22 @@ push-retry loop for concurrent deploys):
 Four input paths feed the same physics, combined in the main loop:
 - **Keyboard** (desktop): `Down` thrust, `Left`/`Right` rotate, `R` reset.
 - **Mouse**: left-button held = thrust.
-- **Touch** (mobile): a single **floating analog stick** (`#stick-base` in
-  `index.html`). x-deflection = steering torque; **downward** pull = main-engine
-  throttle (matches the Down thrust key). Pushing up does nothing.
+- **Touch** (mobile): a **floating attitude stick** (`#stick-base`) + a fixed
+  **JET button** (`#thrust-btn`, bottom-left) in `index.html`.
+  - **Attitude stick = commanded nose direction**: push up → nose up, push
+    left → nose left, pull down → nose down. The game runs a **PD heading
+    controller** (`HEADING_KP = 5`, `HEADING_KD = 1.2`, clamp
+    `HEADING_TORQUE_MAX = 2.5`, applied via `add_torque`) that rotates the
+    ship the **short way** to the commanded angle; deflection magnitude
+    scales the torque (nudge = trim, rim = hard flip). 15% radial dead-zone,
+    rescaled. Manual rotation (keyboard/pad) overrides while held; heading
+    RCS burns fuel proportional to commanded torque and puffs the matching
+    nozzle beyond ±0.4 torque (negative torque = left nozzle — `fire_rcs(-1)`
+    produces negative torque). Forwarded via exported `set_touch_steer(x, y)`
+    (screen convention, y down; `(0,0)` = released; game maps target angle =
+    `atan2(-x, -y)` since the nose at angle `a` points `(-sin a, cos a)`).
+  - **JET button** = main engine, binary full power while held (sends
+    1.0/0.0 through the still-analog `set_touch_thrust(f32)` export).
   - **Floating**: parked bottom-right as a translucent ghost; a touch on the
     canvas in the lower 45% of the viewport (`STICK_ZONE = 0.55`) spawns the
     stick centred under the finger, release parks it again. Handlers sit on
@@ -68,14 +81,8 @@ Four input paths feed the same physics, combined in the main loop:
     listeners see it — miniquad synthesizes mouse events from canvas touches
     and mouse-down = full thrust. Mouse events are untouched (desktop
     click-to-thrust works everywhere). `#stick-base` is `pointer-events:
-    none` — it's pure visuals; the inline `left/top` spawn position wins over
-    the CSS `right/bottom` parking spot while set, cleared on release.
-  - **Square travel zone**: each axis clamps independently to `STICK_TRAVEL`
-    (not the vector length), so corners are reachable — bottom-left corner =
-    100% left torque **and** 100% throttle simultaneously. Shorter travel
-    scales per-axis linearly (12% dead-zone, rescaled so ±1 stays reachable).
-  - Forwarded via exported `set_touch_thrust(f32)` (**analog** 0..1 throttle)
-    / `set_touch_torque(f32)`.
+    none` — pure visuals; the JET button is its own element, so the document
+    handler ignores its touches (`e.target` check).
 - **Game controller** (BT/USB, web): `index.html` polls the **Web Gamepad API**
   each `requestAnimationFrame` and forwards to exported `set_pad_thrust(i32)` /
   `set_pad_torque(f32)` / `set_pad_reset()`. Mapping (standard layout): thrust =
@@ -86,11 +93,13 @@ Four input paths feed the same physics, combined in the main loop:
 
 Touch and gamepad use **separate atomics** (`TOUCH_*` vs `PAD_*`) so a
 connected-but-idle source never stomps the other. The main engine is a
-**throttle (0..1)**: the touch stick supplies an analog value; any binary
-source (keyboard/mouse/pad) overrides it to full power. Engine force, glow,
-fuel burn, and exhaust particle count/speed all scale with the throttle.
-Analog torque is summed-then-clamped to ±1. `PAD_RESET` is a swap-to-consume
-flag so a held reset button fires exactly once.
+**throttle (0..1)**: every current source is binary (1.0), but the plumbing
+stays analog — engine force, glow, fuel burn, and exhaust particle
+count/speed all scale with it. Rotation has two modes: **rate control**
+(keyboard keys / pad stick → nozzle force via `fire_rcs`) and the touch
+stick's **heading control** (PD to a commanded angle, pure `add_torque`);
+rate control wins while actively held. `PAD_RESET` is a swap-to-consume flag
+so a held reset button fires exactly once.
 
 ## Info overlay (web only)
 A fixed top-right "i" button (`#info-btn`) opens a fullscreen `#info-overlay`
@@ -175,8 +184,7 @@ shader supply all the visible variation — there is no longer a smooth bevel
 gradient. (Previously a warm-brown set `80/64/50 · 118/95/72 · 150/120/88`.)
 
 ## Thrust / glow system
-- The touch throttle has a **quadratic response** (`throttle *= throttle` in the main loop, applied before the binary-source override so keyboard/mouse/pad at 1.0 are unaffected): mid-stick is a gentle hover trim, full deflection the emergency burn.
-- `glow`: smoothed 0→1 float, exponentially approaches the (curved) throttle with factor 0.12 per frame.
+- `glow`: smoothed 0→1 float, exponentially approaches the throttle with factor 0.12 per frame.
 - Thrust applies upward force along the ship's heading via Rapier `add_force`, scaled by the throttle (max force 8.0).
 - The body carries `linear_damping(0.2)` — imperceptible at landing speeds, but it caps how much momentum piles up on long burns/free-falls.
 - **Velocity vector** (opt-in, **off by default**): an arrow drawn from the ship along its momentum, length grows with speed, color = green ≤ 1 m/s (landable) / amber ≤ `CRASH_DV_SOFT` (damage-free touch) / red above (damaging); hidden under 0.25 m/s and while crashed. Toggled by the "Velocity vector" checkbox in the info overlay → exported `set_show_velocity(i32)` → `SHOW_VEL` atomic; the choice persists per device in `localStorage` (`pegasus_show_vel`) and is re-applied once the WASM exports load. The HUD line always appends `v=…` in the same danger color regardless of the toggle.
