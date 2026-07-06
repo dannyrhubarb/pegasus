@@ -74,11 +74,18 @@ Four input paths feed the same physics, combined in the main loop:
   - **Holding the stick fires the main engine** — even dead-centre (inside
     the dead-zone there's just no heading command). One-handed flight:
     touch = burn + point, release = coast. The stick glows amber while held.
-    JS ORs the stick-hold and JET-button sources (`stickThrust`/`btnThrust`
-    flags → one `syncThrust()`) so releasing one never cuts the other.
-  - **JET button** = thrust-only alternative, binary full power while held
-    (both paths send 1.0/0.0 through the still-analog
-    `set_touch_thrust(f32)` export).
+    **Gated game-side** so steering stays cheap: flicks shorter than
+    `STICK_THRUST_DELAY = 0.12 s` never light the engine, thrust then ramps
+    to full over `STICK_THRUST_RAMP = 0.18 s`, and a commanded flip past
+    `FLIP_GATE_RAD (~92°)` keeps the engine cold (`flip_settling` latch)
+    until the nose settles within `FLIP_DONE_RAD (~20°)` — the gate resets
+    the ramp, so post-flip thrust also fades in. The stick therefore
+    reports contact via its own `set_touch_stick_held(i32)` export (the
+    heading error is computed in the throttle block, post-physics, and
+    reused by the heading controller).
+  - **JET button** = thrust-only alternative, binary full power while held,
+    ungated (sends 1.0/0.0 through the still-analog `set_touch_thrust(f32)`
+    export).
   - **Floating**: parked bottom-right as a translucent ghost; a touch on the
     canvas in the lower 45% of the viewport (`STICK_ZONE = 0.55`) spawns the
     stick centred under the finger, release parks it again. Handlers sit on

@@ -341,11 +341,6 @@
     const STICK_ZONE = 0.55;   // touches below 55% of viewport height grab the stick
     let stickId = null;        // active touch identifier (null = parked)
     let stickCX = 0, stickCY = 0; // stick centre = where the touch landed
-    let stickThrust = false, btnThrust = false; // engine sources (OR'd)
-
-    function syncThrust() {
-      call("set_touch_thrust", stickThrust || btnThrust ? 1 : 0);
-    }
 
     function stickApply(dx, dy) {
       const len = Math.hypot(dx, dy);
@@ -374,8 +369,7 @@
       stickBase.style.top = "";
       stickKnob.style.transform = "translate(0, 0)";
       call("set_touch_steer", 0, 0);
-      stickThrust = false;
-      syncThrust();
+      call("set_touch_stick_held", 0);
     }
 
     document.addEventListener("touchstart", e => {
@@ -393,8 +387,9 @@
           stickBase.style.top = (stickCY - r) + "px";
           stickBase.classList.add("active");
           stickApply(0, 0);
-          stickThrust = true;   // holding the stick lights the main engine
-          syncThrust();
+          // Holding the stick lights the main engine, but through the
+          // game-side gating (flick grace + flip settle) — separate export.
+          call("set_touch_stick_held", 1);
         }
       }
       // Swallow every canvas touch in the zone (extra fingers included) so
@@ -441,13 +436,11 @@
       e.preventDefault();
       e.stopPropagation();
       thrustBtn.classList.add("active");
-      btnThrust = true;
-      syncThrust();
+      call("set_touch_thrust", 1);
     }
     function thrustOff() {
       thrustBtn.classList.remove("active");
-      btnThrust = false;
-      syncThrust();
+      call("set_touch_thrust", 0);
     }
     thrustBtn.addEventListener("touchstart", thrustOn, { passive: false });
     thrustBtn.addEventListener("touchend", e => {
