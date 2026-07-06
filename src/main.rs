@@ -129,10 +129,12 @@ const HULL_REPAIR_PER_S: f32 = 20.0;
 // Touch heading control: the stick commands a nose DIRECTION; a PD controller
 // torques the ship toward it (shortest way). Authority scales with deflection.
 // Tuned snappy: strong spring (KP), high torque ceiling, damping raised with
-// them so the nose stops crisply instead of ringing.
-const HEADING_KP: f32 = 8.0;
-const HEADING_KD: f32 = 1.6;
-const HEADING_TORQUE_MAX: f32 = 3.5;
+// them so the nose stops crisply instead of ringing. The torque ceiling is
+// what sets the 180°-flip time (the spring saturates it for most of the
+// swing) — 6.0 flips roughly twice as fast as the earlier 3.5.
+const HEADING_KP: f32 = 14.0;
+const HEADING_KD: f32 = 2.2;
+const HEADING_TORQUE_MAX: f32 = 6.0;
 // Stick-hold engine gating (one-handed scheme): a quick flick shorter than
 // DELAY never lights the engine, thrust then ramps to full over RAMP, and a
 // commanded flip past FLIP_GATE keeps the engine cold until the nose settles
