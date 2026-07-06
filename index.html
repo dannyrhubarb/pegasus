@@ -247,11 +247,11 @@
     <h1>Pegasus — Moon Lander</h1>
     <div class="info-row">
       <div class="info-label">Build revision</div>
-      <div class="info-value" id="git-rev">1c9d104</div>
+      <div class="info-value" id="git-rev">0c352ab</div>
     </div>
     <div class="info-row">
       <div class="info-label">Build time</div>
-      <div class="info-value" id="build-time">2026-07-06 19:14 UTC</div>
+      <div class="info-value" id="build-time">2026-07-06 20:49 UTC</div>
     </div>
     <label id="vel-toggle-row">
       <input type="checkbox" id="vel-toggle">
@@ -596,8 +596,8 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "1c9d104";
-    load("./rapier-test.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
+    const wasmRev = "0c352ab";
+    load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // --- Stale-cache detection ---
     // GitHub Pages caches index.html for ~10 minutes, so right after a deploy
