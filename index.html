@@ -168,8 +168,9 @@
       color: #6c84ad;
       margin-top: 8px;
     }
-    /* Settings row: velocity-vector arrow toggle (off by default) */
-    #vel-toggle-row {
+    /* Settings rows: velocity-vector arrow + JET button (both off by default) */
+    #vel-toggle-row,
+    #jet-toggle-row {
       display: flex;
       align-items: center;
       gap: 10px;
@@ -179,7 +180,8 @@
       user-select: none;
       -webkit-user-select: none;
     }
-    #vel-toggle-row input {
+    #vel-toggle-row input,
+    #jet-toggle-row input {
       width: 20px;
       height: 20px;
       accent-color: #6ec1ff;
@@ -252,6 +254,10 @@
     <label id="vel-toggle-row">
       <input type="checkbox" id="vel-toggle">
       Velocity vector
+    </label>
+    <label id="jet-toggle-row">
+      <input type="checkbox" id="jet-toggle">
+      JET button
     </label>
     <div id="force-reload" role="button">&#10227; Reload latest build</div>
     <div class="info-hint">Tap anywhere to close</div>
@@ -646,6 +652,23 @@
         clearInterval(velTimer);
       }
     }, 200);
+
+    // JET button visibility toggle: hidden by default (the stick-hold engine
+    // covers one-handed play); pure client-side — no wasm export involved,
+    // so the saved value applies immediately.
+    const jetToggle = document.getElementById("jet-toggle");
+    const jetRow = document.getElementById("jet-toggle-row");
+    jetToggle.checked = localStorage.getItem("pegasus_jet_btn") === "1";
+    function applyJetSetting() {
+      thrustBtn.style.display = jetToggle.checked ? "" : "none";
+    }
+    jetToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_jet_btn", jetToggle.checked ? "1" : "0");
+      applyJetSetting();
+    });
+    ["mousedown", "click", "touchstart"].forEach(ev =>
+      jetRow.addEventListener(ev, e => e.stopPropagation()));
+    applyJetSetting();
 
     // Manual reload button in the info overlay (stopPropagation so the tap
     // doesn't just close the overlay).
