@@ -170,7 +170,8 @@
     }
     /* Settings rows: velocity-vector arrow + JET button (both off by default) */
     #vel-toggle-row,
-    #jet-toggle-row {
+    #jet-toggle-row,
+    #inv-toggle-row {
       display: flex;
       align-items: center;
       gap: 10px;
@@ -181,7 +182,8 @@
       -webkit-user-select: none;
     }
     #vel-toggle-row input,
-    #jet-toggle-row input {
+    #jet-toggle-row input,
+    #inv-toggle-row input {
       width: 20px;
       height: 20px;
       accent-color: #6ec1ff;
@@ -258,6 +260,10 @@
     <label id="jet-toggle-row">
       <input type="checkbox" id="jet-toggle">
       JET button
+    </label>
+    <label id="inv-toggle-row">
+      <input type="checkbox" id="inv-toggle">
+      Invert stick
     </label>
     <div id="force-reload" role="button">&#10227; Reload latest build</div>
     <div class="info-hint">Tap anywhere to close</div>
@@ -347,6 +353,10 @@
     const STICK_ZONE = 0.55;   // touches below 55% of viewport height grab the stick
     let stickId = null;        // active touch identifier (null = parked)
     let stickCX = 0, stickCY = 0; // stick centre = where the touch landed
+    // "Invert stick" setting (checkbox wired further down): negates the
+    // commanded direction — push down = nose up, like pulling back on a
+    // flight stick. The knob visual still follows the finger.
+    let invertStick = localStorage.getItem("pegasus_invert_stick") === "1";
 
     function stickApply(dx, dy) {
       const len = Math.hypot(dx, dy);
@@ -360,7 +370,8 @@
       const m = Math.min(len / STICK_TRAVEL, 1);
       const eff = m < STICK_DZ ? 0 : (m - STICK_DZ) / (1 - STICK_DZ);
       if (eff > 0 && len > 0) {
-        call("set_touch_steer", (dx / len) * eff, (dy / len) * eff);
+        const flip = invertStick ? -1 : 1;
+        call("set_touch_steer", (dx / len) * eff * flip, (dy / len) * eff * flip);
       } else {
         call("set_touch_steer", 0, 0);
       }
@@ -669,6 +680,18 @@
     ["mousedown", "click", "touchstart"].forEach(ev =>
       jetRow.addEventListener(ev, e => e.stopPropagation()));
     applyJetSetting();
+
+    // Invert-stick toggle: flips the commanded direction (both axes) in
+    // stickApply via the invertStick flag — pure client-side, no wasm export.
+    const invToggle = document.getElementById("inv-toggle");
+    const invRow = document.getElementById("inv-toggle-row");
+    invToggle.checked = invertStick;
+    invToggle.addEventListener("change", () => {
+      invertStick = invToggle.checked;
+      localStorage.setItem("pegasus_invert_stick", invertStick ? "1" : "0");
+    });
+    ["mousedown", "click", "touchstart"].forEach(ev =>
+      invRow.addEventListener(ev, e => e.stopPropagation()));
 
     // Manual reload button in the info overlay (stopPropagation so the tap
     // doesn't just close the overlay).

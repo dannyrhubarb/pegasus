@@ -58,7 +58,7 @@ push-retry loop for concurrent deploys):
 geometry, TWR, damping), its effects, and preset recipes are documented in
 `docs/control-tuning.md` — update it in the same commit as any knob change.
 It also sketches the plumbing for the planned settings/controller-picker
-pane (localStorage → wasm exports → atomics, with two working examples).
+pane (localStorage → wasm exports → atomics, with three working examples).
 
 Four input paths feed the same physics, combined in the main loop:
 - **Keyboard** (desktop): `Down` thrust, `Left`/`Right` rotate, `R` reset.
@@ -66,7 +66,11 @@ Four input paths feed the same physics, combined in the main loop:
 - **Touch** (mobile): a **floating attitude stick** (`#stick-base`) + a fixed
   **JET button** (`#thrust-btn`, bottom-left) in `index.html`.
   - **Attitude stick = commanded nose direction**: push up → nose up, push
-    left → nose left, pull down → nose down. The game runs a **PD heading
+    left → nose left, pull down → nose down. The "Invert stick" overlay
+    checkbox (`#inv-toggle-row`, `pegasus_invert_stick`) negates the
+    commanded direction JS-side (both axes — push down = nose up, like
+    pulling back on a flight stick; the knob visual still follows the
+    finger; no wasm export). The game runs a **PD heading
     controller** (`HEADING_KP = 14`, `HEADING_KD = 2.2`, clamp
     `HEADING_TORQUE_MAX = 6`, applied via `add_torque`) that rotates the
     ship the **short way** to the commanded angle; deflection magnitude
@@ -134,9 +138,10 @@ respectively. Opened locally without that substitution, the JS falls back to
 "dev (local build)" for each (detected via `startsWith("__")`). Button/overlay handlers `stopPropagation` on `mousedown` so a desktop
 click doesn't bleed through to the canvas and fire the thruster.
 
-The overlay also hosts the **Velocity vector** settings checkbox
-(`#vel-toggle-row`; `stopPropagation` but *no* `preventDefault`, which would
-kill the checkbox click) and a **⟳ Reload latest build** button (`#force-reload`) —
+The overlay also hosts the settings checkboxes — **Velocity vector**
+(`#vel-toggle-row`), **JET button** (`#jet-toggle-row`), **Invert stick**
+(`#inv-toggle-row`); all `stopPropagation` but *no* `preventDefault`, which
+would kill the checkbox click — and a **⟳ Reload latest build** button (`#force-reload`) —
 the manual cache-bypass: same `?fresh=<ts>` navigation as the toast below,
 for when you don't want to wait for detection.
 

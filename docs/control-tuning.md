@@ -98,8 +98,8 @@ in mind as a *scheme*, not a tuning, for the controller-picker below.
 
 ## 8. Toward a settings / controller pane
 
-The plumbing pattern already exists and has two working examples
-(velocity-vector toggle, JET-button toggle) in `index.html`:
+The plumbing pattern already exists and has three working examples
+(velocity-vector, JET-button, and invert-stick toggles) in `index.html`:
 
 1. Checkbox/slider in the info overlay (`stopPropagation`, **no**
    `preventDefault` — that kills checkbox clicks).
@@ -107,7 +107,8 @@ The plumbing pattern already exists and has two working examples
 3. If the game needs the value: a wasm export (`set_*`) + an atomic, with a
    short `setInterval` retry until `wasm_exports` is ready (see
    `applyVelSetting`). Pure-visual settings skip the export (see
-   `applyJetSetting`).
+   `applyJetSetting`), and settings that only remap input can live entirely
+   in JS (see the `invertStick` flag consumed in `stickApply`).
 
 For live tuning without rebuilds, add one export per knob group, e.g.
 `set_heading_gains(kp, kd, tmax)` and `set_stick_gates(delay, ramp, gate,
