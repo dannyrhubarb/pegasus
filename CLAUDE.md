@@ -61,8 +61,8 @@ Four input paths feed the same physics, combined in the main loop:
   **JET button** (`#thrust-btn`, bottom-left) in `index.html`.
   - **Attitude stick = commanded nose direction**: push up → nose up, push
     left → nose left, pull down → nose down. The game runs a **PD heading
-    controller** (`HEADING_KP = 5`, `HEADING_KD = 1.2`, clamp
-    `HEADING_TORQUE_MAX = 2.5`, applied via `add_torque`) that rotates the
+    controller** (`HEADING_KP = 8`, `HEADING_KD = 1.6`, clamp
+    `HEADING_TORQUE_MAX = 3.5`, applied via `add_torque`) that rotates the
     ship the **short way** to the commanded angle; deflection magnitude
     scales the torque (nudge = trim, rim = hard flip). 15% radial dead-zone,
     rescaled. Manual rotation (keyboard/pad) overrides while held; heading
@@ -71,8 +71,14 @@ Four input paths feed the same physics, combined in the main loop:
     produces negative torque). Forwarded via exported `set_touch_steer(x, y)`
     (screen convention, y down; `(0,0)` = released; game maps target angle =
     `atan2(-x, -y)` since the nose at angle `a` points `(-sin a, cos a)`).
-  - **JET button** = main engine, binary full power while held (sends
-    1.0/0.0 through the still-analog `set_touch_thrust(f32)` export).
+  - **Holding the stick fires the main engine** — even dead-centre (inside
+    the dead-zone there's just no heading command). One-handed flight:
+    touch = burn + point, release = coast. The stick glows amber while held.
+    JS ORs the stick-hold and JET-button sources (`stickThrust`/`btnThrust`
+    flags → one `syncThrust()`) so releasing one never cuts the other.
+  - **JET button** = thrust-only alternative, binary full power while held
+    (both paths send 1.0/0.0 through the still-analog
+    `set_touch_thrust(f32)` export).
   - **Floating**: parked bottom-right as a translucent ghost; a touch on the
     canvas in the lower 45% of the viewport (`STICK_ZONE = 0.55`) spawns the
     stick centred under the finger, release parks it again. Handlers sit on

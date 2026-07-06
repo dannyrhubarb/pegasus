@@ -119,9 +119,11 @@ const HULL_MAX: f32 = 100.0;
 const HULL_REPAIR_PER_S: f32 = 20.0;
 // Touch heading control: the stick commands a nose DIRECTION; a PD controller
 // torques the ship toward it (shortest way). Authority scales with deflection.
-const HEADING_KP: f32 = 5.0;
-const HEADING_KD: f32 = 1.2;
-const HEADING_TORQUE_MAX: f32 = 2.5;
+// Tuned snappy: strong spring (KP), high torque ceiling, damping raised with
+// them so the nose stops crisply instead of ringing.
+const HEADING_KP: f32 = 8.0;
+const HEADING_KD: f32 = 1.6;
+const HEADING_TORQUE_MAX: f32 = 3.5;
 // Fuel: the main engine burns a full tank in ~28 s of continuous thrust; the
 // RCS sips. An empty tank kills engine and RCS until reset/respawn refills it.
 const FUEL_MAX: f32 = 100.0;
