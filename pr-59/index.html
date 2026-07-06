@@ -243,11 +243,11 @@
     <h1>Pegasus — Moon Lander</h1>
     <div class="info-row">
       <div class="info-label">Build revision</div>
-      <div class="info-value" id="git-rev">c49f237-pr-59</div>
+      <div class="info-value" id="git-rev">50cf932-pr-59</div>
     </div>
     <div class="info-row">
       <div class="info-label">Build time</div>
-      <div class="info-value" id="build-time">2026-07-06 16:59 UTC</div>
+      <div class="info-value" id="build-time">2026-07-06 17:06 UTC</div>
     </div>
     <label id="vel-toggle-row">
       <input type="checkbox" id="vel-toggle">
@@ -341,11 +341,6 @@
     const STICK_ZONE = 0.55;   // touches below 55% of viewport height grab the stick
     let stickId = null;        // active touch identifier (null = parked)
     let stickCX = 0, stickCY = 0; // stick centre = where the touch landed
-    let stickThrust = false, btnThrust = false; // engine sources (OR'd)
-
-    function syncThrust() {
-      call("set_touch_thrust", stickThrust || btnThrust ? 1 : 0);
-    }
 
     function stickApply(dx, dy) {
       const len = Math.hypot(dx, dy);
@@ -374,8 +369,7 @@
       stickBase.style.top = "";
       stickKnob.style.transform = "translate(0, 0)";
       call("set_touch_steer", 0, 0);
-      stickThrust = false;
-      syncThrust();
+      call("set_touch_stick_held", 0);
     }
 
     document.addEventListener("touchstart", e => {
@@ -393,8 +387,9 @@
           stickBase.style.top = (stickCY - r) + "px";
           stickBase.classList.add("active");
           stickApply(0, 0);
-          stickThrust = true;   // holding the stick lights the main engine
-          syncThrust();
+          // Holding the stick lights the main engine, but through the
+          // game-side gating (flick grace + flip settle) — separate export.
+          call("set_touch_stick_held", 1);
         }
       }
       // Swallow every canvas touch in the zone (extra fingers included) so
@@ -441,13 +436,11 @@
       e.preventDefault();
       e.stopPropagation();
       thrustBtn.classList.add("active");
-      btnThrust = true;
-      syncThrust();
+      call("set_touch_thrust", 1);
     }
     function thrustOff() {
       thrustBtn.classList.remove("active");
-      btnThrust = false;
-      syncThrust();
+      call("set_touch_thrust", 0);
     }
     thrustBtn.addEventListener("touchstart", thrustOn, { passive: false });
     thrustBtn.addEventListener("touchend", e => {
@@ -586,7 +579,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "c49f237-pr-59";
+    const wasmRev = "50cf932-pr-59";
     load("./rapier-test.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // --- Stale-cache detection ---
