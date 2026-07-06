@@ -11,6 +11,10 @@ A 2D physics demo using [Rapier](https://rapier.rs) and [macroquad](https://macr
 | R | Reset |
 | Touch (mobile) | Floating stick: hold = main engine, direction = point the nose (auto-rotates the short way). Optional JET button in settings |
 
+How the controls feel is governed by a small set of constants — see
+[`docs/control-tuning.md`](docs/control-tuning.md) for the full knob
+reference and preset recipes.
+
 ## Development
 
 ### Build

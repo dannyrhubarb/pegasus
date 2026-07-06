@@ -54,6 +54,12 @@ push-retry loop for concurrent deploys):
 - `mq_js_bundle.js` — **vendored** miniquad/quad-snd JS loader (from not-fl3/miniquad-samples). Pinned in-repo so deploys don't depend on a third-party host; includes the audio backend. Update it deliberately if macroquad is upgraded. **Gotcha**: it declares globals at top level (`const canvas`, `var gl`, `wasm_exports`, `function load`, …) that share the page's global scope — redeclaring any of them in `index.html`'s inline script is a SyntaxError that silently kills the *whole* inline script (no `load()` → no wasm, page shows only the HTML chrome). Pick distinct names and check the bundle before adding top-level identifiers.
 
 ## Input sources
+**Control-feel tuning**: every feel knob (PD gains, thrust gates, stick
+geometry, TWR, damping), its effects, and preset recipes are documented in
+`docs/control-tuning.md` — update it in the same commit as any knob change.
+It also sketches the plumbing for the planned settings/controller-picker
+pane (localStorage → wasm exports → atomics, with two working examples).
+
 Four input paths feed the same physics, combined in the main loop:
 - **Keyboard** (desktop): `Down` thrust, `Left`/`Right` rotate, `R` reset.
 - **Mouse**: left-button held = thrust.
