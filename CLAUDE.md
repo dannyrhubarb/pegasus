@@ -50,21 +50,32 @@ push-retry loop for concurrent deploys):
 - `src/render.rs` — radial light shader sources, faceted wall/shaft lattice (`lattice_point`, `shaft_lattice`, `facet_shade`), `draw_flat_mesh`
 - `src/ship_mesh.rs` — `SHIP_TRIS` / `SHIP_DETAILS` data tables extracted from the Flash SWF
 - `src/audio.rs` — in-memory WAV synthesis (`wav_from_samples`, `thruster_wav`, `boom_wav`)
-- `index.html` — web wrapper, touch event forwarding, safe-area insets, **info overlay**, **gamepad polling**
+- `index.html` — web wrapper, touch event forwarding, safe-area insets, **info overlay**, **gamepad polling**, and a **boot guard**: a small standalone `<script>` tag ahead of the bundle (script tags parse independently, so no error in the bundle/main script can kill it) that paints any script error on screen with file:line and offers a tap-to-reload if `wasm_exports` is missing 8 s after load. Keep it first and self-contained.
 - `mq_js_bundle.js` — **vendored** miniquad/quad-snd JS loader (from not-fl3/miniquad-samples). Pinned in-repo so deploys don't depend on a third-party host; includes the audio backend. Update it deliberately if macroquad is upgraded. **Gotcha**: it declares globals at top level (`const canvas`, `var gl`, `wasm_exports`, `function load`, …) that share the page's global scope — redeclaring any of them in `index.html`'s inline script is a SyntaxError that silently kills the *whole* inline script (no `load()` → no wasm, page shows only the HTML chrome). Pick distinct names and check the bundle before adding top-level identifiers.
 
 ## Input sources
 Four input paths feed the same physics, combined in the main loop:
 - **Keyboard** (desktop): `Down` thrust, `Left`/`Right` rotate, `R` reset.
 - **Mouse**: left-button held = thrust.
-- **Touch** (mobile): a **single analog stick** (bottom-right, `#stick-base` in
+- **Touch** (mobile): a single **floating analog stick** (`#stick-base` in
   `index.html`). x-deflection = steering torque; **downward** pull = main-engine
-  throttle (matches the Down thrust key). At full travel 0° (right) / 180°
-  (left) = max torque, 270° (straight down) = max thrust; in-between angles
-  blend both from the x/y components (e.g. 200° ≈ 94% left + 34% thrust), and
-  shorter travel scales everything linearly (12% per-axis dead-zone, rescaled
-  so ±1 stays reachable). Pushing up does nothing. Forwarded via exported
-  `set_touch_thrust(f32)` (**analog** 0..1 throttle) / `set_touch_torque(f32)`.
+  throttle (matches the Down thrust key). Pushing up does nothing.
+  - **Floating**: parked bottom-right as a translucent ghost; a touch on the
+    canvas in the lower 45% of the viewport (`STICK_ZONE = 0.55`) spawns the
+    stick centred under the finger, release parks it again. Handlers sit on
+    the **document, capture phase**, and swallow every canvas touch in the
+    zone (`preventDefault` + `stopPropagation`) *before* miniquad's canvas
+    listeners see it — miniquad synthesizes mouse events from canvas touches
+    and mouse-down = full thrust. Mouse events are untouched (desktop
+    click-to-thrust works everywhere). `#stick-base` is `pointer-events:
+    none` — it's pure visuals; the inline `left/top` spawn position wins over
+    the CSS `right/bottom` parking spot while set, cleared on release.
+  - **Square travel zone**: each axis clamps independently to `STICK_TRAVEL`
+    (not the vector length), so corners are reachable — bottom-left corner =
+    100% left torque **and** 100% throttle simultaneously. Shorter travel
+    scales per-axis linearly (12% dead-zone, rescaled so ±1 stays reachable).
+  - Forwarded via exported `set_touch_thrust(f32)` (**analog** 0..1 throttle)
+    / `set_touch_torque(f32)`.
 - **Game controller** (BT/USB, web): `index.html` polls the **Web Gamepad API**
   each `requestAnimationFrame` and forwards to exported `set_pad_thrust(i32)` /
   `set_pad_torque(f32)` / `set_pad_reset()`. Mapping (standard layout): thrust =
@@ -113,6 +124,18 @@ build available — tap to reload"); tapping navigates to
 entirely in local dev (placeholder revision) and on 404 (pre-toast deploys),
 and the toast swallows `mousedown` like the info button so it can't fire the
 thruster.
+
+**Hard-won caveat (2026-07): query strings do NOT reliably bust the cache.**
+An intermediary on the owner's phone served one broken `pr-59/index.html` for
+2+ hours across many `?fresh=<unique>` loads (the `no-store` `version.json`
+fetch was served stale too, so the toast never fired) while the same
+deployment worked instantly at a never-before-seen `pr-<n>/` path. When a
+preview path looks wedged on a device: do NOT trust `?fresh=` testing — open a
+throwaway draft PR pinned to the suspect commit and test at its virgin
+`pr-<n>/` URL instead (that bisects "bad code" vs "stale delivery" in one
+step). The boot guard (see Project structure) exists because the wedged page
+was a script-killing SyntaxError that also disabled the reload button and all
+error reporting.
 
 ## Key constants & configuration (world/gameplay constants live in `src/world.rs` and `src/main.rs`)
 
