@@ -57,25 +57,14 @@ push-retry loop for concurrent deploys):
 Four input paths feed the same physics, combined in the main loop:
 - **Keyboard** (desktop): `Down` thrust, `Left`/`Right` rotate, `R` reset.
 - **Mouse**: left-button held = thrust.
-- **Touch** (mobile): a single **floating analog stick** (`#stick-base` in
+- **Touch** (mobile): a **single analog stick** (bottom-right, `#stick-base` in
   `index.html`). x-deflection = steering torque; **downward** pull = main-engine
-  throttle (matches the Down thrust key). Pushing up does nothing.
-  - **Floating**: parked bottom-right as a translucent ghost; a touch on the
-    canvas in the lower 45% of the viewport (`STICK_ZONE = 0.55`) spawns the
-    stick centred under the finger, release parks it again. Handlers sit on
-    the **document, capture phase**, and swallow every canvas touch in the
-    zone (`preventDefault` + `stopPropagation`) *before* miniquad's canvas
-    listeners see it — miniquad synthesizes mouse events from canvas touches
-    and mouse-down = full thrust. Mouse events are untouched (desktop
-    click-to-thrust works everywhere). `#stick-base` is `pointer-events:
-    none` — it's pure visuals; the inline `left/top` spawn position wins over
-    the CSS `right/bottom` parking spot while set, cleared on release.
-  - **Square travel zone**: each axis clamps independently to `STICK_TRAVEL`
-    (not the vector length), so corners are reachable — bottom-left corner =
-    100% left torque **and** 100% throttle simultaneously. Shorter travel
-    scales per-axis linearly (12% dead-zone, rescaled so ±1 stays reachable).
-  - Forwarded via exported `set_touch_thrust(f32)` (**analog** 0..1 throttle)
-    / `set_touch_torque(f32)`.
+  throttle (matches the Down thrust key). At full travel 0° (right) / 180°
+  (left) = max torque, 270° (straight down) = max thrust; in-between angles
+  blend both from the x/y components (e.g. 200° ≈ 94% left + 34% thrust), and
+  shorter travel scales everything linearly (12% per-axis dead-zone, rescaled
+  so ±1 stays reachable). Pushing up does nothing. Forwarded via exported
+  `set_touch_thrust(f32)` (**analog** 0..1 throttle) / `set_touch_torque(f32)`.
 - **Game controller** (BT/USB, web): `index.html` polls the **Web Gamepad API**
   each `requestAnimationFrame` and forwards to exported `set_pad_thrust(i32)` /
   `set_pad_torque(f32)` / `set_pad_reset()`. Mapping (standard layout): thrust =
