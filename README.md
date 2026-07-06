@@ -1,6 +1,11 @@
 # Pegasus
 
-A 2D physics demo using [Rapier](https://rapier.rs) and [macroquad](https://macroquad.rs), compiled to WebAssembly.
+Pilot a fragile ship through a procedurally-generated cave system that twists,
+narrows, and branches into vertical shafts connecting infinite layers below.
+Thread the rock, dodge boulders, and stick the landing on fuel pads before you
+run dry — real 2D physics via [Rapier](https://rapier.rs), rendered with
+[macroquad](https://macroquad.rs), running straight in the browser via
+WebAssembly.
 
 ## Controls
 
