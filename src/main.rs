@@ -2,7 +2,7 @@ use macroquad::audio::{load_sound_from_bytes, play_sound, set_sound_volume, Play
 use macroquad::prelude::*;
 use macroquad::rand::gen_range;
 use rapier2d::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 mod audio;
@@ -20,6 +20,40 @@ struct Particle {
     vx: f32, vy: f32,
     life: f32,  // 1.0 = fresh, 0.0 = dead
     kind: u8,   // 0 = main thruster, 1 = left RCS, 2 = right RCS
+}
+
+// Top-level game mode. Flying covers normal play AND the brief wreck/
+// explosion phase (crash_timer > 0); the dialog and replay pause physics.
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    Flying,
+    CrashDialog,
+    Replay,
+}
+
+// One recorded physics step for the instant replay: the ship pose plus the
+// visual state (velocity for the HUD/exhaust, engine glow, RCS puff side)
+// needed to re-render the flight. This is VISUAL-state playback — the
+// planned cross-platform-deterministic Rapier replay (record inputs, re-run
+// the sim) can replace the recording source behind the same dialog/playback
+// UI later.
+#[derive(Clone, Copy)]
+struct ReplayFrame {
+    x: f32,
+    y: f32,
+    angle: f32,
+    vx: f32,
+    vy: f32,
+    glow: f32,
+    rcs: i8, // -1 = left nozzle puffing, +1 = right, 0 = none
+}
+
+// Shortest-path angle interpolation (replay playback samples between steps).
+fn lerp_angle(a: f32, b: f32, t: f32) -> f32 {
+    let mut d = b - a;
+    if d > std::f32::consts::PI { d -= std::f32::consts::TAU; }
+    if d < -std::f32::consts::PI { d += std::f32::consts::TAU; }
+    a + d * t
 }
 
 // Touch throttle is ANALOG (f32 bits, 0..1): the on-screen JET button sends
@@ -120,8 +154,13 @@ const PHYSICS_DT: f32 = 1.0 / 120.0;
 // or a scrape that empties the hull — destroys the ship.
 const CRASH_DV_SOFT: f32 = 2.5;
 const CRASH_DV_HARD: f32 = 6.0;
-// Seconds from crash to respawn at RESET_X.
-const CRASH_RESPAWN: f32 = 1.5;
+// Seconds from crash to the crash dialog (fly again / watch replay) — long
+// enough for the explosion to play out with the camera held still.
+const CRASH_DIALOG_DELAY: f32 = 1.5;
+// Instant replay: how many seconds of flight the ring buffer keeps (recorded
+// once per physics step, so the buffer holds REPLAY_MAX_SECS / PHYSICS_DT
+// frames). Recording stops at the moment of destruction.
+const REPLAY_MAX_SECS: f32 = 15.0;
 // Hull integrity: scraped off by survivable impacts, restored while parked on
 // a pad (alongside refueling) and by reset/respawn.
 const HULL_MAX: f32 = 100.0;
@@ -364,6 +403,30 @@ async fn main() {
     // (> 0 → crashed: input dead, ship hidden, respawn when it hits 0).
     let mut prev_vel = (0.0f32, 0.0f32);
     let mut crash_timer = 0.0f32;
+    let mut mode = Mode::Flying;
+    // Instant-replay ring buffer (one frame per physics step) and the
+    // playback cursor, in fractional frame indices.
+    let replay_cap = (REPLAY_MAX_SECS / PHYSICS_DT) as usize;
+    let mut replay_buf: VecDeque<ReplayFrame> = VecDeque::with_capacity(replay_cap);
+    let mut replay_t = 0.0f32;
+    let mut last_rcs: i8 = 0; // RCS puff side of the previous frame, recorded per step
+
+    // Debris burst at (x, y) — fired at the real crash and again when the
+    // replay reaches its end.
+    let boom_burst = |x: f32, y: f32, particles: &mut Vec<Particle>| {
+        for _ in 0..70 {
+            let ang = gen_range(0.0f32, std::f32::consts::TAU);
+            let spd = gen_range(1.0f32, 9.0);
+            particles.push(Particle {
+                x: x + gen_range(-0.3f32, 0.3),
+                y: y + gen_range(-0.3f32, 0.3),
+                vx: ang.cos() * spd,
+                vy: ang.sin() * spd + 1.5,
+                life: gen_range(0.5f32, 1.0),
+                kind: 3,
+            });
+        }
+    };
     let mut fuel = FUEL_MAX;
     let mut hull = HULL_MAX;
     let mut shake = 0.0f32; // impact screen-shake intensity, 0..1, decays fast
@@ -378,29 +441,54 @@ async fn main() {
 
     loop {
         // Fixed-timestep accumulator: the cap bounds catch-up work after a
-        // hitch (same role as the old per-frame dt cap of 0.05 s).
-        phys_accum = (phys_accum + get_frame_time()).min(0.05);
-        while phys_accum >= PHYSICS_DT {
-            {
-                let body = &rigid_body_set[box_handle];
-                prev_ship = (body.translation().x, body.translation().y, body.rotation().angle());
+        // hitch (same role as the old per-frame dt cap of 0.05 s). Physics
+        // only runs while flying — the crash dialog and the replay pause the
+        // sim (the wreck is parked anyway) and drain the accumulator so no
+        // catch-up burst fires on resume.
+        if mode == Mode::Flying {
+            phys_accum = (phys_accum + get_frame_time()).min(0.05);
+            while phys_accum >= PHYSICS_DT {
+                {
+                    let body = &rigid_body_set[box_handle];
+                    prev_ship = (body.translation().x, body.translation().y, body.rotation().angle());
+                }
+                physics_pipeline.step(
+                    &gravity,
+                    &integration_params,
+                    &mut island_manager,
+                    &mut broad_phase,
+                    &mut narrow_phase,
+                    &mut rigid_body_set,
+                    &mut collider_set,
+                    &mut impulse_joint_set,
+                    &mut multibody_joint_set,
+                    &mut ccd_solver,
+                    Some(&mut query_pipeline),
+                    &(),
+                    &(),
+                );
+                phys_accum -= PHYSICS_DT;
+                // Record the step for the instant replay (stops at the moment
+                // of destruction — crash_timer flips positive the same frame,
+                // after this loop, so the impact itself IS captured).
+                if crash_timer <= 0.0 {
+                    if replay_buf.len() >= replay_cap {
+                        replay_buf.pop_front();
+                    }
+                    let b = &rigid_body_set[box_handle];
+                    replay_buf.push_back(ReplayFrame {
+                        x: b.translation().x,
+                        y: b.translation().y,
+                        angle: b.rotation().angle(),
+                        vx: b.linvel().x,
+                        vy: b.linvel().y,
+                        glow,
+                        rcs: last_rcs,
+                    });
+                }
             }
-            physics_pipeline.step(
-                &gravity,
-                &integration_params,
-                &mut island_manager,
-                &mut broad_phase,
-                &mut narrow_phase,
-                &mut rigid_body_set,
-                &mut collider_set,
-                &mut impulse_joint_set,
-                &mut multibody_joint_set,
-                &mut ccd_solver,
-                Some(&mut query_pipeline),
-                &(),
-                &(),
-            );
-            phys_accum -= PHYSICS_DT;
+        } else {
+            phys_accum = 0.0;
         }
 
         // --- Impact / crash detection ---
@@ -408,7 +496,7 @@ async fn main() {
         // physics steps. Graduated: dv in SOFT..HARD scrapes the hull
         // (proportionally, full bar at HARD); dv past HARD — or a scrape the
         // hull can't absorb — destroys the ship.
-        {
+        if mode == Mode::Flying {
             let (wx, wy, vx, vy) = {
                 let b = &rigid_body_set[box_handle];
                 (b.translation().x, b.translation().y, b.linvel().x, b.linvel().y)
@@ -423,20 +511,9 @@ async fn main() {
                     shake = (shake + damage / HULL_MAX + 0.25).min(1.0);
                     if dv > CRASH_DV_HARD || hull <= 0.0 {
                         hull = 0.0;
-                        crash_timer = CRASH_RESPAWN;
+                        crash_timer = CRASH_DIALOG_DELAY;
                         // Debris burst at the crash site.
-                        for _ in 0..70 {
-                            let ang = gen_range(0.0f32, std::f32::consts::TAU);
-                            let spd = gen_range(1.0f32, 9.0);
-                            particles.push(Particle {
-                                x: wx + gen_range(-0.3f32, 0.3),
-                                y: wy + gen_range(-0.3f32, 0.3),
-                                vx: ang.cos() * spd,
-                                vy: ang.sin() * spd + 1.5,
-                                life: gen_range(0.5f32, 1.0),
-                                kind: 3,
-                            });
-                        }
+                        boom_burst(wx, wy, &mut particles);
                         if let Some(s) = &boom_snd {
                             play_sound(s, PlaySoundParams { looped: false, volume: 0.9 });
                         }
@@ -468,20 +545,13 @@ async fn main() {
             }
             prev_vel = (vx, vy);
         }
-        // Wreck timer → respawn at the reset point with a fresh ship.
+        // Wreck timer → once the explosion has played out, hand over to the
+        // crash dialog (fly again / watch replay). Respawn happens from there.
         if crash_timer > 0.0 {
             crash_timer -= get_frame_time();
             if crash_timer <= 0.0 {
-                let rb = rigid_body_set.get_mut(box_handle).unwrap();
-                rb.set_gravity_scale(1.0, true);
-                rb.set_translation(vector![RESET_X, stand_y(RESET_X)], true);
-                rb.set_linvel(vector![0.0, 0.0], true);
-                rb.set_angvel(0.0, true);
-                rb.set_rotation(Rotation::new(0.0), true);
-                prev_ship = (RESET_X, stand_y(RESET_X), 0.0);
-                prev_vel = (0.0, 0.0);
-                fuel = FUEL_MAX;
-                hull = HULL_MAX;
+                crash_timer = 0.0;
+                mode = Mode::CrashDialog;
             }
         }
         let crashed = crash_timer > 0.0;
@@ -533,7 +603,7 @@ async fn main() {
         let safe_top = f32::from_bits(SAFE_AREA_TOP.load(Ordering::Relaxed)) * dpi;
         let safe_left = f32::from_bits(SAFE_AREA_LEFT.load(Ordering::Relaxed)).min(24.0) * dpi;
 
-        let (mut cam_x, mut cam_y, angle, ship_vx, ship_vy) = {
+        let (mut cam_x, mut cam_y, mut angle, mut ship_vx, mut ship_vy) = {
             let body = &rigid_body_set[box_handle];
             let p = body.translation();
             let v = body.linvel();
@@ -560,6 +630,45 @@ async fn main() {
             cam_x += gen_range(-1.0f32, 1.0) * shake * 0.12;
             cam_y += gen_range(-1.0f32, 1.0) * shake * 0.12;
             shake = (shake - 4.0 * get_frame_time()).max(0.0);
+        }
+
+        // Replay playback: advance the cursor and override the camera/pose
+        // (and velocity, for the HUD and exhaust) with the recorded flight.
+        // The sliding windows below key off cam_x/cam_y, so the world loads
+        // around the replayed ship automatically. Ends by replaying the
+        // explosion at the crash site, then returns to the dialog.
+        let mut replay_frame: Option<ReplayFrame> = None;
+        if mode == Mode::Replay {
+            replay_t += get_frame_time() / PHYSICS_DT;
+            let last = replay_buf.len() - 1; // entry is gated on len >= 2
+            if replay_t >= last as f32 {
+                let f = replay_buf[last];
+                boom_burst(f.x, f.y, &mut particles);
+                if let Some(s) = &boom_snd {
+                    play_sound(s, PlaySoundParams { looped: false, volume: 0.9 });
+                }
+                mode = Mode::CrashDialog;
+            } else {
+                let i = replay_t.floor() as usize;
+                let t = replay_t - i as f32;
+                let (a, b) = (replay_buf[i], replay_buf[i + 1]);
+                replay_frame = Some(ReplayFrame {
+                    x: a.x + (b.x - a.x) * t,
+                    y: a.y + (b.y - a.y) * t,
+                    angle: lerp_angle(a.angle, b.angle, t),
+                    vx: a.vx + (b.vx - a.vx) * t,
+                    vy: a.vy + (b.vy - a.vy) * t,
+                    glow: a.glow + (b.glow - a.glow) * t,
+                    rcs: a.rcs,
+                });
+            }
+        }
+        if let Some(f) = replay_frame {
+            cam_x = f.x;
+            cam_y = f.y;
+            angle = f.angle;
+            ship_vx = f.vx;
+            ship_vy = f.vy;
         }
 
         // Local-to-world helpers (position and direction)
@@ -618,11 +727,15 @@ async fn main() {
         {
             throttle = 1.0;
         }
-        if crashed || fuel <= 0.0 {
+        if crashed || mode != Mode::Flying || fuel <= 0.0 {
             throttle = 0.0;
         }
         let thrusting_now = throttle > 0.0;
         glow += (throttle - glow) * 0.12;
+        // During playback the engine visuals/sound follow the recording.
+        if let Some(f) = replay_frame {
+            glow = f.glow;
+        }
         if let Some(s) = &thruster_snd {
             set_sound_volume(s, glow * 0.6);
         }
@@ -724,7 +837,7 @@ async fn main() {
         // PAD_LAND_TIME. First visit scores; parked ships refuel.
         let frame_dt = get_frame_time();
         let mut on_pad: Option<(i64, i64)> = None;
-        if !crashed {
+        if mode == Mode::Flying && !crashed {
             let b = &rigid_body_set[box_handle];
             let (bx, by) = (b.translation().x, b.translation().y);
             let v = b.linvel();
@@ -1090,9 +1203,18 @@ async fn main() {
             )
         };
 
+        // The ship renders while flying (unless it's a wreck) and during the
+        // replay (where cam/angle/glow carry the recorded pose); the crash
+        // dialog shows no ship — it was just destroyed.
+        let ship_visible = match mode {
+            Mode::Flying => !crashed,
+            Mode::Replay => true,
+            Mode::CrashDialog => false,
+        };
+
         // Thruster flame drawn first (behind the hull), out of the engine base
         // at local -Y. Scales with `glow`.
-        if !crashed && glow > 0.02 {
+        if ship_visible && glow > 0.02 {
             let base = -0.475;
             let fw = 0.10 + glow * 0.05;
             let ft = glow * 0.36;
@@ -1113,7 +1235,7 @@ async fn main() {
         let hull_base = (168.0_f32, 174.0_f32, 188.0_f32); // silver (#CCCCCC family)
         let tip_base  = (210.0_f32, 50.0_f32,  45.0_f32);  // red nose cone
         const TIP_Y: f32 = 0.30;
-        for t in SHIP_TRIS.iter().filter(|_| !crashed) {
+        for t in SHIP_TRIS.iter().filter(|_| ship_visible) {
             let cy = (t[1] + t[3] + t[5]) / 3.0;
             let s = (0.84 + (cy + 0.475) / 0.95 * 0.34).min(1.25);
             let base = if cy > TIP_Y { tip_base } else { hull_base };
@@ -1128,7 +1250,7 @@ async fn main() {
         // Detail overlays (window, leg-pods, engine cup, gold accent) — exact
         // sub-shapes from the original ship, drawn on top of the hull. The two
         // leg-pods (extracted dark-silver 0.518/0.537/0.588) are recoloured red.
-        for d in SHIP_DETAILS.iter().filter(|_| !crashed) {
+        for d in SHIP_DETAILS.iter().filter(|_| ship_visible) {
             let is_leg = (d[6] - 0.518).abs() < 0.001
                 && (d[7] - 0.537).abs() < 0.001
                 && (d[8] - 0.588).abs() < 0.001;
@@ -1154,7 +1276,7 @@ async fn main() {
         // Velocity vector (opt-in via the info overlay): an arrow from the
         // ship showing where momentum is carrying it, length grows with
         // speed; near-hover shows nothing.
-        if SHOW_VEL.load(Ordering::Relaxed) != 0 && !crashed && speed > 0.25 {
+        if SHOW_VEL.load(Ordering::Relaxed) != 0 && ship_visible && speed > 0.25 {
             let dir = vec2(ship_vx, -ship_vy) / speed; // w2s inverts y
             let ship_scr = vec2(sw / 2.0, sh / 2.0);   // camera is ship-centred
             let p0 = ship_scr + dir * (0.85 * view_scale); // start clear of the hull
@@ -1177,7 +1299,80 @@ async fn main() {
         draw_text(format!("  v={speed:.1}"),
             safe_left + 10.0 * ui + hud_w, hud_y, hud_fs, speed_col);
 
-        if crashed {
+        // Crash dialog / replay overlay / status banners. `do_reset` is
+        // consumed by the reset block below (same path as the R key).
+        let mut do_reset = false;
+        if mode == Mode::CrashDialog {
+            // Dim the scene so the dialog reads over the cave.
+            draw_rectangle(0.0, 0.0, sw, sh, Color::from_rgba(0, 0, 0, 130));
+            let msg = "CRASHED";
+            let fs = 96.0 * ui;
+            let dims = measure_text(msg, None, fs as u16, 1.0);
+            draw_text(msg, (sw - dims.width) / 2.0, sh * 0.30, fs,
+                Color::from_rgba(255, 90, 60, 255));
+
+            // Two buttons side by side, kept ABOVE the touch-stick zone: the
+            // JS stick handler swallows canvas touches in the lower 45% of
+            // the viewport before miniquad sees them, so buttons there would
+            // be untappable on mobile.
+            let bw = 300.0 * ui;
+            let bh = 84.0 * ui;
+            let gap = 28.0 * ui;
+            let by = sh * 0.36;
+            let (mx, my) = mouse_position();
+            let click = is_mouse_button_pressed(MouseButton::Left);
+            let button = |x: f32, label: &str, hint: &str| -> bool {
+                let hover = mx >= x && mx <= x + bw && my >= by && my <= by + bh;
+                let bg = if hover {
+                    Color::from_rgba(60, 80, 120, 235)
+                } else {
+                    Color::from_rgba(28, 38, 58, 235)
+                };
+                draw_rectangle(x, by, bw, bh, bg);
+                draw_rectangle_lines(x, by, bw, bh, 2.0 * dpi,
+                    Color::from_rgba(190, 200, 218, 255));
+                let lfs = 34.0 * ui;
+                let d = measure_text(label, None, lfs as u16, 1.0);
+                draw_text(label, x + (bw - d.width) / 2.0, by + bh * 0.46, lfs, WHITE);
+                let hfs = 22.0 * ui;
+                let hd = measure_text(hint, None, hfs as u16, 1.0);
+                draw_text(hint, x + (bw - hd.width) / 2.0, by + bh * 0.82, hfs,
+                    Color::from_rgba(170, 180, 200, 255));
+                hover && click
+            };
+            if button(sw / 2.0 - bw - gap / 2.0, "FLY AGAIN", "[R]") {
+                do_reset = true;
+            }
+            let replay_clicked = button(sw / 2.0 + gap / 2.0, "WATCH REPLAY", "[ENTER]");
+            if (replay_clicked || is_key_pressed(KeyCode::Enter)) && replay_buf.len() >= 2 {
+                mode = Mode::Replay;
+                replay_t = 0.0;
+            }
+        } else if mode == Mode::Replay {
+            // Pulsing banner + progress bar; any click/tap (above the stick
+            // zone) skips back to the dialog, R skips straight to a respawn.
+            let pulse = 180.0 + (get_time() * 4.0).sin() as f32 * 60.0;
+            let msg = "REPLAY";
+            let fs = 48.0 * ui;
+            let dims = measure_text(msg, None, fs as u16, 1.0);
+            let msg_y = sh * 0.16;
+            draw_text(msg, (sw - dims.width) / 2.0, msg_y, fs,
+                Color::from_rgba(255, 220, 120, pulse as u8));
+            let hint = "tap to skip";
+            let hfs = 24.0 * ui;
+            let hd = measure_text(hint, None, hfs as u16, 1.0);
+            draw_text(hint, (sw - hd.width) / 2.0, msg_y + 34.0 * ui, hfs,
+                Color::from_rgba(200, 205, 220, 160));
+            let pw = sw * 0.30;
+            let frac = (replay_t / (replay_buf.len().max(2) - 1) as f32).clamp(0.0, 1.0);
+            let px = (sw - pw) / 2.0;
+            let py = msg_y + 48.0 * ui;
+            draw_rectangle(px, py, pw, 4.0 * ui, Color::from_rgba(255, 255, 255, 60));
+            draw_rectangle(px, py, pw * frac, 4.0 * ui, Color::from_rgba(255, 220, 120, 200));
+            if is_mouse_button_pressed(MouseButton::Left) {
+                mode = Mode::CrashDialog;
+            }
+        } else if crashed {
             let msg = "CRASHED";
             let fs = 96.0 * ui;
             let dims = measure_text(msg, None, fs as u16, 1.0);
@@ -1215,7 +1410,7 @@ async fn main() {
         }
         // Manual rate rotation: keyboard keys and the gamepad's analog stick.
         let pad_torque = f32::from_bits(PAD_TORQUE.load(Ordering::Relaxed)).clamp(-1.0, 1.0);
-        let rcs_ok = !crashed && fuel > 0.0;
+        let rcs_ok = mode == Mode::Flying && !crashed && fuel > 0.0;
         let rotating_left  = rcs_ok && (is_key_down(KeyCode::Left)  || pad_torque < -0.1);
         let rotating_right = rcs_ok && (is_key_down(KeyCode::Right) || pad_torque >  0.1);
         // Rotate by firing a side RCS booster: apply the force *at the nozzle*
@@ -1256,6 +1451,18 @@ async fn main() {
         // --- Particle emission ---
         let dt = get_frame_time();
 
+        // Which RCS nozzle is puffing: live flags while flying, the recorded
+        // side during playback. `last_rcs` feeds the replay recorder.
+        let (puff_left, puff_right) = if let Some(f) = replay_frame {
+            (f.rcs < 0, f.rcs > 0)
+        } else {
+            (rotating_left || heading_torque < -0.4,
+             rotating_right || heading_torque > 0.4)
+        };
+        if mode == Mode::Flying {
+            last_rcs = if puff_left { -1 } else if puff_right { 1 } else { 0 };
+        }
+
         // Burn fuel for whatever fired this frame (main burn scales with throttle).
         if thrusting_now {
             fuel -= FUEL_BURN_MAIN * throttle * dt;
@@ -1270,11 +1477,18 @@ async fn main() {
 
         // Main thruster: exhaust exits local -Y (out the bottom), up to 8
         // particles/frame — count and exhaust speed scale with the throttle.
-        if thrusting_now {
-            for _ in 0..(8.0 * throttle).ceil() as i32 {
+        // During playback the recorded glow stands in for the throttle so the
+        // replayed burn trails exhaust too (fuel burn above stays live-only).
+        let exhaust = match replay_frame {
+            Some(f) if f.glow > 0.05 => f.glow,
+            Some(_) => 0.0,
+            None => throttle,
+        };
+        if exhaust > 0.0 {
+            for _ in 0..(8.0 * exhaust).ceil() as i32 {
                 let spread = gen_range(-0.25f32, 0.25);
                 let (px, py) = lp(spread * 0.45, -0.72);
-                let speed = gen_range(4.0f32, 8.0) * (0.4 + 0.6 * throttle);
+                let speed = gen_range(4.0f32, 8.0) * (0.4 + 0.6 * exhaust);
                 let (dvx, dvy) = ld(spread * 1.5, -speed);
                 particles.push(Particle {
                     x: px, y: py,
@@ -1291,7 +1505,7 @@ async fn main() {
         // torque, so negative heading torque puffs the LEFT nozzle and
         // positive the RIGHT (threshold keeps small trim corrections silent).
         // Coords are in scaled world units — lp() does NOT apply SHIP_SCALE.
-        if rotating_left || heading_torque < -0.4 {
+        if puff_left {
             for _ in 0..3 {
                 let spread = gen_range(-0.15f32, 0.15);
                 let (px, py) = lp(-0.30, -0.71);   // left leg nozzle (gold accent, scaled)
@@ -1304,7 +1518,7 @@ async fn main() {
                 });
             }
         }
-        if rotating_right || heading_torque > 0.4 {
+        if puff_right {
             for _ in 0..3 {
                 let spread = gen_range(-0.15f32, 0.15);
                 let (px, py) = lp(0.30, -0.71);    // right leg nozzle (gold accent, scaled)
@@ -1330,7 +1544,9 @@ async fn main() {
         }
         particles.retain(|p| p.life > 0.0);
 
-        if is_key_pressed(KeyCode::R) || PAD_RESET.swap(0, Ordering::Relaxed) != 0 {
+        // Reset / respawn: R key, gamepad Start/Y, or the dialog's FLY AGAIN
+        // button. Also the escape hatch out of the dialog and the replay.
+        if is_key_pressed(KeyCode::R) || PAD_RESET.swap(0, Ordering::Relaxed) != 0 || do_reset {
             let rb = rigid_body_set.get_mut(box_handle).unwrap();
             rb.set_gravity_scale(1.0, true); // in case we reset out of a crash
             rb.set_translation(vector![RESET_X, stand_y(RESET_X)], true);
@@ -1345,6 +1561,12 @@ async fn main() {
             fuel = FUEL_MAX;
             hull = HULL_MAX;
             shake = 0.0;
+            mode = Mode::Flying;
+            // A fresh attempt records a fresh replay.
+            replay_buf.clear();
+            replay_t = 0.0;
+            last_rcs = 0;
+            glow = 0.0;
         }
 
         // --- Minimap (ship always centred; pans in BOTH axes) ---
@@ -1662,6 +1884,21 @@ mod tests {
             let v = r.range_int(3, 9);
             assert!((3..=9).contains(&v));
         }
+    }
+
+    #[test]
+    fn lerp_angle_takes_the_short_way() {
+        use std::f32::consts::PI;
+        // Plain case: no wrap involved.
+        assert!((lerp_angle(0.0, 1.0, 0.5) - 0.5).abs() < 1e-6);
+        // Across the ±π seam: 170° → -170° should pass through 180°, not 0°.
+        let a = 170.0f32.to_radians();
+        let b = -170.0f32.to_radians();
+        let mid = lerp_angle(a, b, 0.5);
+        assert!((mid.abs() - PI).abs() < 1e-5, "went the long way: {mid}");
+        // Endpoints are exact.
+        assert!((lerp_angle(a, b, 0.0) - a).abs() < 1e-6);
+        assert!((lerp_angle(a, b, 1.0) - (a + (b - a + std::f32::consts::TAU))).abs() < 1e-5);
     }
 
     #[test]
