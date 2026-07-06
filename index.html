@@ -321,6 +321,14 @@
         return origConsoleError.apply(console, arguments);
       };
       window.addEventListener("error", function (e) {
+        // Fully-anonymous error (no filename) with no console.error trace:
+        // cannot be ours. Same-origin scripts always report file:line, and a
+        // wasm panic always logs through the panic hook first. What does land
+        // here is Safari-injected third-party JS — reproduced live: opening
+        // the iOS share sheet runs share/action extensions' preprocessing
+        // scripts in the page, and any error they throw arrives as a muted
+        // "Script error." Don't paint the banner over that noise.
+        if (!e.filename && !lastConsoleError) return;
         var msg = "Script error: " + (e.message || "unknown") +
           (e.filename ? "\n" + e.filename.split("/").pop() + ":" + e.lineno : "");
         // Anonymous or wasm-trap error: iOS Safari mutes wasm errors to a
@@ -333,6 +341,7 @@
         show(msg);
       });
       window.addEventListener("unhandledrejection", function (e) {
+        if (e.reason == null) return; // contentless → same third-party noise rule
         show("Unhandled promise rejection: " + String(e.reason).slice(0, 300));
       });
       setTimeout(function () {
