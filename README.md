@@ -9,7 +9,7 @@ A 2D physics demo using [Rapier](https://rapier.rs) and [macroquad](https://macr
 | Click / Down arrow | Thrust in the direction the box is pointing |
 | Left / Right arrow | Rotate |
 | R | Reset |
-| Touch (mobile) | Floating stick points the ship's nose (auto-rotates the short way); JET button fires the main engine |
+| Touch (mobile) | Floating stick: hold = main engine, direction = point the nose (auto-rotates the short way). JET button = thrust only |
 
 ## Development
 
