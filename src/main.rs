@@ -29,6 +29,10 @@ struct Particle {
 static TOUCH_THRUST: AtomicU32 = AtomicU32::new(0);
 static TOUCH_STEER_X: AtomicU32 = AtomicU32::new(0);
 static TOUCH_STEER_Y: AtomicU32 = AtomicU32::new(0);
+// Stick contact (0/1): holding the stick fires the main engine too, but
+// through the flick-grace / flip-settle gating in the main loop — hence a
+// separate flag instead of driving TOUCH_THRUST directly.
+static TOUCH_STICK_HELD: AtomicU32 = AtomicU32::new(0);
 // Gamepad state lives on its own atomics (not the touch ones) so a connected-but-
 // idle controller never stomps an active touch input, and vice versa. The two
 // sources are combined in the main loop.
@@ -50,6 +54,11 @@ pub extern "C" fn set_touch_thrust(value: f32) {
 pub extern "C" fn set_touch_steer(x: f32, y: f32) {
     TOUCH_STEER_X.store(x.to_bits(), Ordering::Relaxed);
     TOUCH_STEER_Y.store(y.to_bits(), Ordering::Relaxed);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_touch_stick_held(held: i32) {
+    TOUCH_STICK_HELD.store(held as u32, Ordering::Relaxed);
 }
 
 // --- Bluetooth / USB game controller bridge (Web Gamepad API, see index.html) ---
@@ -124,6 +133,14 @@ const HULL_REPAIR_PER_S: f32 = 20.0;
 const HEADING_KP: f32 = 8.0;
 const HEADING_KD: f32 = 1.6;
 const HEADING_TORQUE_MAX: f32 = 3.5;
+// Stick-hold engine gating (one-handed scheme): a quick flick shorter than
+// DELAY never lights the engine, thrust then ramps to full over RAMP, and a
+// commanded flip past FLIP_GATE keeps the engine cold until the nose settles
+// within FLIP_DONE of the target (steer first, burn once pointed).
+const STICK_THRUST_DELAY: f32 = 0.12;
+const STICK_THRUST_RAMP: f32 = 0.18;
+const FLIP_GATE_RAD: f32 = 1.6;  // ~92°
+const FLIP_DONE_RAD: f32 = 0.35; // ~20°
 // Fuel: the main engine burns a full tank in ~28 s of continuous thrust; the
 // RCS sips. An empty tank kills engine and RCS until reset/respawn refills it.
 const FUEL_MAX: f32 = 100.0;
@@ -340,6 +357,8 @@ async fn main() {
     let mut fuel = FUEL_MAX;
     let mut hull = HULL_MAX;
     let mut shake = 0.0f32; // impact screen-shake intensity, 0..1, decays fast
+    let mut stick_thrust_t = 0.0f32; // seconds the stick-hold engine has been eligible
+    let mut flip_settling = false;   // big flip commanded: engine cold until nose settles
     // Landing pads: score, first-visit set, and how long the ship has been
     // settled on the current pad (landing counts at PAD_LAND_TIME).
     let mut score = 0u32;
@@ -544,10 +563,45 @@ async fn main() {
         };
 
         // Main-engine throttle (0..1), read early so lighting can use it.
-        // The touch JET button sends 1.0/0.0 (the export stays analog for a
-        // future analog source); keyboard, mouse and gamepad are full power.
-        // Dead while crashed or dry.
-        let mut throttle = f32::from_bits(TOUCH_THRUST.load(Ordering::Relaxed)).clamp(0.0, 1.0);
+        // JET button / keyboard / mouse / pad = immediate full power. HOLDING
+        // the attitude stick also thrusts, but gated so steering stays cheap:
+        // a flick shorter than STICK_THRUST_DELAY never lights the engine,
+        // thrust then ramps in over STICK_THRUST_RAMP, and a commanded flip
+        // past FLIP_GATE_RAD keeps it cold until the nose settles within
+        // FLIP_DONE_RAD (the gate resets the ramp, so post-flip thrust also
+        // fades in). Dead while crashed or dry.
+        let stick_held = TOUCH_STICK_HELD.load(Ordering::Relaxed) != 0;
+        let steer_x = f32::from_bits(TOUCH_STEER_X.load(Ordering::Relaxed));
+        let steer_y = f32::from_bits(TOUCH_STEER_Y.load(Ordering::Relaxed));
+        let steer_mag = (steer_x * steer_x + steer_y * steer_y).sqrt().min(1.0);
+        // Heading error to the commanded nose direction (0 when centred).
+        // Physics already stepped this frame, so this is the same angle the
+        // heading controller below acts on.
+        let heading_err = if steer_mag > 0.0 {
+            let target = (-steer_x).atan2(-steer_y);
+            let mut e = target - rigid_body_set[box_handle].rotation().angle();
+            if e > std::f32::consts::PI { e -= std::f32::consts::TAU; }
+            if e < -std::f32::consts::PI { e += std::f32::consts::TAU; }
+            e
+        } else {
+            0.0
+        };
+        if stick_held && heading_err.abs() > FLIP_GATE_RAD {
+            flip_settling = true;
+        }
+        if !stick_held || heading_err.abs() < FLIP_DONE_RAD {
+            flip_settling = false;
+        }
+        if stick_held && !flip_settling {
+            stick_thrust_t += get_frame_time();
+        } else {
+            stick_thrust_t = 0.0;
+        }
+        let stick_throttle =
+            ((stick_thrust_t - STICK_THRUST_DELAY) / STICK_THRUST_RAMP).clamp(0.0, 1.0);
+        let mut throttle = f32::from_bits(TOUCH_THRUST.load(Ordering::Relaxed))
+            .clamp(0.0, 1.0)
+            .max(stick_throttle);
         if is_mouse_button_down(MouseButton::Left)
             || is_key_down(KeyCode::Down)
             || PAD_THRUST.load(Ordering::Relaxed) != 0
@@ -1179,19 +1233,12 @@ async fn main() {
         // while held. Applied as a pure torque (convention-safe: err > 0
         // always means "target is counter-clockwise of the nose in world
         // space", and positive torque rotates counter-clockwise).
-        let steer_x = f32::from_bits(TOUCH_STEER_X.load(Ordering::Relaxed));
-        let steer_y = f32::from_bits(TOUCH_STEER_Y.load(Ordering::Relaxed));
-        let steer_mag = (steer_x * steer_x + steer_y * steer_y).sqrt().min(1.0);
+        // steer_mag / heading_err come from the throttle block above (screen
+        // y grows downward, so stick (x, y) commands world nose (x, -y); the
+        // nose at angle a points (-sin a, cos a) → target = atan2(-x, -y)).
         let mut heading_torque = 0.0f32;
         if rcs_ok && steer_mag > 0.0 && !rotating_left && !rotating_right {
-            // Screen y grows downward, so stick (x, y) commands world nose
-            // direction (x, -y). The nose at angle a points (-sin a, cos a),
-            // hence the commanded angle is atan2(-x, -y) (y in screen sense).
-            let target = (-steer_x).atan2(-steer_y);
-            let mut err = target - rb.rotation().angle();
-            if err > std::f32::consts::PI { err -= std::f32::consts::TAU; }
-            if err < -std::f32::consts::PI { err += std::f32::consts::TAU; }
-            heading_torque = (err * HEADING_KP - rb.angvel() * HEADING_KD)
+            heading_torque = (heading_err * HEADING_KP - rb.angvel() * HEADING_KD)
                 .clamp(-HEADING_TORQUE_MAX, HEADING_TORQUE_MAX) * steer_mag;
             rb.add_torque(heading_torque, true);
         }
