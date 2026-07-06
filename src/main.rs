@@ -151,6 +151,14 @@ const FUEL_BURN_RCS: f32 = 1.2;  // units/s while an RCS nozzle fires
 
 #[macroquad::main(window_conf)]
 async fn main() {
+    // Panic hook: log the human-readable panic ("panicked at src/…:line: msg")
+    // through miniquad's console_error import. The default hook prints the
+    // opaque Debug form (`PanicHookInfo { payload: Any { .. }, … }`), and the
+    // JS error event that follows the trap is muted to a bare "Script error."
+    // on iOS Safari — this line is what the boot guard's console.error mirror
+    // shows on screen, so keep it a single message.
+    std::panic::set_hook(Box::new(|info| error!("{}", info)));
+
     let mut rigid_body_set = RigidBodySet::new();
     let mut collider_set = ColliderSet::new();
 
