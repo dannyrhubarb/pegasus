@@ -247,11 +247,11 @@
     <h1>Pegasus — Moon Lander</h1>
     <div class="info-row">
       <div class="info-label">Build revision</div>
-      <div class="info-value" id="git-rev">0c352ab</div>
+      <div class="info-value" id="git-rev">767f774</div>
     </div>
     <div class="info-row">
       <div class="info-label">Build time</div>
-      <div class="info-value" id="build-time">2026-07-06 20:49 UTC</div>
+      <div class="info-value" id="build-time">2026-07-06 22:00 UTC</div>
     </div>
     <label id="vel-toggle-row">
       <input type="checkbox" id="vel-toggle">
@@ -305,9 +305,44 @@
         }
         box.textContent = msg + "\n(tap here to reload the latest build)";
       }
+      // Rust panics print their message + location via console.error just
+      // before the wasm traps, but the error event that follows is muted to a
+      // bare "Script error." (no file/line) on iOS Safari — wasm frames fail
+      // its same-origin check. Mirror the last console.error so the banner
+      // can show the real panic instead. Installed here (before the bundle
+      // loads) so the bundle's console_error import routes through it.
+      var lastConsoleError = "";
+      var origConsoleError = console.error;
+      console.error = function () {
+        try {
+          lastConsoleError =
+            Array.prototype.map.call(arguments, String).join(" ").slice(0, 300);
+        } catch (_) { /* never let logging break the logger */ }
+        return origConsoleError.apply(console, arguments);
+      };
       window.addEventListener("error", function (e) {
-        show("Script error: " + (e.message || "unknown") +
-          (e.filename ? "\n" + e.filename.split("/").pop() + ":" + e.lineno : ""));
+        // Fully-anonymous error (no filename) with no console.error trace:
+        // cannot be ours. Same-origin scripts always report file:line, and a
+        // wasm panic always logs through the panic hook first. What does land
+        // here is Safari-injected third-party JS — reproduced live: opening
+        // the iOS share sheet runs share/action extensions' preprocessing
+        // scripts in the page, and any error they throw arrives as a muted
+        // "Script error." Don't paint the banner over that noise.
+        if (!e.filename && !lastConsoleError) return;
+        var msg = "Script error: " + (e.message || "unknown") +
+          (e.filename ? "\n" + e.filename.split("/").pop() + ":" + e.lineno : "");
+        // Anonymous or wasm-trap error: iOS Safari mutes wasm errors to a
+        // bare "Script error." (no filename); Chrome attributes them to the
+        // .wasm URL but the message is just "unreachable". Either way the
+        // last console.error (the panic hook's output) is the real cause.
+        if ((!e.filename || /\.wasm(\?|$)/.test(e.filename)) && lastConsoleError) {
+          msg += "\n" + lastConsoleError;
+        }
+        show(msg);
+      });
+      window.addEventListener("unhandledrejection", function (e) {
+        if (e.reason == null) return; // contentless → same third-party noise rule
+        show("Unhandled promise rejection: " + String(e.reason).slice(0, 300));
       });
       setTimeout(function () {
         if (typeof wasm_exports === "undefined" || !wasm_exports) {
@@ -596,7 +631,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "0c352ab";
+    const wasmRev = "767f774";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // --- Stale-cache detection ---
