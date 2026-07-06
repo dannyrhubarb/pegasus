@@ -38,7 +38,9 @@
       opacity: 0.45;
       transition: opacity 0.15s;
     }
-    #stick-base.active { opacity: 1; }
+    /* Active = engine lit (holding the stick thrusts), so it glows amber */
+    #stick-base.active { opacity: 1; border-color: rgba(255, 200, 0, 0.7); }
+    #stick-base.active #stick-knob { background: rgba(255, 200, 0, 0.85); }
     #stick-base .stick-hint {
       position: absolute;
       color: rgba(255, 255, 255, 0.35);
@@ -241,11 +243,11 @@
     <h1>Pegasus — Moon Lander</h1>
     <div class="info-row">
       <div class="info-label">Build revision</div>
-      <div class="info-value" id="git-rev">7d9aa96-pr-61</div>
+      <div class="info-value" id="git-rev">c49f237-pr-61</div>
     </div>
     <div class="info-row">
       <div class="info-label">Build time</div>
-      <div class="info-value" id="build-time">2026-07-06 14:14 UTC</div>
+      <div class="info-value" id="build-time">2026-07-06 16:59 UTC</div>
     </div>
     <label id="vel-toggle-row">
       <input type="checkbox" id="vel-toggle">
@@ -315,7 +317,10 @@
     // up, push left = nose left, pull down = nose down — a PD controller in
     // the game rotates the ship the short way around). Deflection magnitude
     // scales the rotation authority: a small nudge trims, the rim flips
-    // hard. The main engine lives on the separate JET button (bottom-left).
+    // hard. HOLDING the stick — even dead-centre — also fires the main
+    // engine (one-handed flight: touch = burn + point). The JET button
+    // (bottom-left) is an alternative thrust-only control; either source
+    // keeps the engine lit, tracked by the two flags below.
     //
     // FLOATING: any touch on the canvas in the lower STICK_ZONE of the
     // screen spawns the stick centred under the finger; on release it parks
@@ -336,6 +341,11 @@
     const STICK_ZONE = 0.55;   // touches below 55% of viewport height grab the stick
     let stickId = null;        // active touch identifier (null = parked)
     let stickCX = 0, stickCY = 0; // stick centre = where the touch landed
+    let stickThrust = false, btnThrust = false; // engine sources (OR'd)
+
+    function syncThrust() {
+      call("set_touch_thrust", stickThrust || btnThrust ? 1 : 0);
+    }
 
     function stickApply(dx, dy) {
       const len = Math.hypot(dx, dy);
@@ -364,6 +374,8 @@
       stickBase.style.top = "";
       stickKnob.style.transform = "translate(0, 0)";
       call("set_touch_steer", 0, 0);
+      stickThrust = false;
+      syncThrust();
     }
 
     document.addEventListener("touchstart", e => {
@@ -381,6 +393,8 @@
           stickBase.style.top = (stickCY - r) + "px";
           stickBase.classList.add("active");
           stickApply(0, 0);
+          stickThrust = true;   // holding the stick lights the main engine
+          syncThrust();
         }
       }
       // Swallow every canvas touch in the zone (extra fingers included) so
@@ -427,11 +441,13 @@
       e.preventDefault();
       e.stopPropagation();
       thrustBtn.classList.add("active");
-      call("set_touch_thrust", 1);
+      btnThrust = true;
+      syncThrust();
     }
     function thrustOff() {
       thrustBtn.classList.remove("active");
-      call("set_touch_thrust", 0);
+      btnThrust = false;
+      syncThrust();
     }
     thrustBtn.addEventListener("touchstart", thrustOn, { passive: false });
     thrustBtn.addEventListener("touchend", e => {
@@ -570,7 +586,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "7d9aa96-pr-61";
+    const wasmRev = "c49f237-pr-61";
     load("./rapier-test.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // --- Stale-cache detection ---
