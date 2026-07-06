@@ -1,6 +1,11 @@
-# rapier-test
+# Pegasus
 
-A 2D physics demo using [Rapier](https://rapier.rs) and [macroquad](https://macroquad.rs), compiled to WebAssembly.
+Pilot a fragile ship through a procedurally-generated cave system that twists,
+narrows, and branches into vertical shafts connecting infinite layers below.
+Thread the rock, dodge boulders, and stick the landing on fuel pads before you
+run dry — real 2D physics via [Rapier](https://rapier.rs), rendered with
+[macroquad](https://macroquad.rs), running straight in the browser via
+WebAssembly.
 
 ## Controls
 
@@ -21,7 +26,7 @@ reference and preset recipes.
 
 ```bash
 cargo build --release --target wasm32-unknown-unknown && \
-  cp target/wasm32-unknown-unknown/release/rapier-test.wasm rapier-test.wasm
+  cp target/wasm32-unknown-unknown/release/pegasus.wasm pegasus.wasm
 ```
 
 ### Serve locally
@@ -59,7 +64,7 @@ required. [`preview-deploy.yml`](.github/workflows/preview-deploy.yml) builds
 each PR push and publishes it at
 
 ```
-https://<owner>.github.io/rapier-test/pr-<n>/
+https://<owner>.github.io/pegasus/pr-<n>/
 ```
 
 posting a sticky comment with the link on the PR.

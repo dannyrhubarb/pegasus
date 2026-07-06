@@ -597,7 +597,7 @@
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
     const wasmRev = "__GIT_REVISION__";
-    load("./rapier-test.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
+    load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // --- Stale-cache detection ---
     // GitHub Pages caches index.html for ~10 minutes, so right after a deploy

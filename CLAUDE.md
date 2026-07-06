@@ -14,7 +14,7 @@ Deploy is automatic: any push to `main` triggers `.github/workflows/deploy.yml` 
 ### Deploy pipeline & PR previews
 The published site lives on the **`gh-pages` state branch**: the `main` build at
 the root, one **per-PR preview** in `pr-<n>/` (served at
-`https://<owner>.github.io/rapier-test/pr-<n>/` — works because every asset URL
+`https://<owner>.github.io/pegasus/pr-<n>/` — works because every asset URL
 in `index.html`/`manifest.json` is relative). Four workflows, sharing two
 composite actions (`.github/actions/build-site` = wasm build + icons + overlay
 injection; `.github/actions/sync-pages-branch` = commit into `gh-pages` with a
@@ -491,4 +491,4 @@ Each is built `ColliderBuilder::new(SharedShape::capsule(a, b, r)).restitution(0
 - Development branch: `claude/replicate-pr-review-deployment-gjw4x0` (current); previous: `claude/vertical-wrapping-caves-csv79r`
 - Merges to `main` via rebase PRs using the GitHub MCP tools (`mcp__github__create_pull_request`, `mcp__github__merge_pull_request`).
 - Branch consistently diverges from main after merges — always `git fetch origin main && git rebase origin/main && git push --force-with-lease` before creating a PR to avoid merge conflicts.
-- The wasm binary (`rapier-test.wasm`) is **not tracked** (gitignored) — deploy builds it from source, and for local play you build it into the repo root per the README. It previously lived in git and conflicted on every rebase; don't re-add it.
+- The wasm binary (`pegasus.wasm`) is **not tracked** (gitignored) — deploy builds it from source, and for local play you build it into the repo root per the README. It previously lived in git and conflicted on every rebase; don't re-add it.
