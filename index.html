@@ -305,9 +305,35 @@
         }
         box.textContent = msg + "\n(tap here to reload the latest build)";
       }
+      // Rust panics print their message + location via console.error just
+      // before the wasm traps, but the error event that follows is muted to a
+      // bare "Script error." (no file/line) on iOS Safari — wasm frames fail
+      // its same-origin check. Mirror the last console.error so the banner
+      // can show the real panic instead. Installed here (before the bundle
+      // loads) so the bundle's console_error import routes through it.
+      var lastConsoleError = "";
+      var origConsoleError = console.error;
+      console.error = function () {
+        try {
+          lastConsoleError =
+            Array.prototype.map.call(arguments, String).join(" ").slice(0, 300);
+        } catch (_) { /* never let logging break the logger */ }
+        return origConsoleError.apply(console, arguments);
+      };
       window.addEventListener("error", function (e) {
-        show("Script error: " + (e.message || "unknown") +
-          (e.filename ? "\n" + e.filename.split("/").pop() + ":" + e.lineno : ""));
+        var msg = "Script error: " + (e.message || "unknown") +
+          (e.filename ? "\n" + e.filename.split("/").pop() + ":" + e.lineno : "");
+        // Anonymous or wasm-trap error: iOS Safari mutes wasm errors to a
+        // bare "Script error." (no filename); Chrome attributes them to the
+        // .wasm URL but the message is just "unreachable". Either way the
+        // last console.error (the panic hook's output) is the real cause.
+        if ((!e.filename || /\.wasm(\?|$)/.test(e.filename)) && lastConsoleError) {
+          msg += "\n" + lastConsoleError;
+        }
+        show(msg);
+      });
+      window.addEventListener("unhandledrejection", function (e) {
+        show("Unhandled promise rejection: " + String(e.reason).slice(0, 300));
       });
       setTimeout(function () {
         if (typeof wasm_exports === "undefined" || !wasm_exports) {
