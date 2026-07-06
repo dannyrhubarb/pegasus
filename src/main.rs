@@ -22,10 +22,13 @@ struct Particle {
     kind: u8,   // 0 = main thruster, 1 = left RCS, 2 = right RCS
 }
 
-// Touch throttle is ANALOG (f32 bits, 0..1): the on-screen analog stick maps
-// downward pull depth to main-engine power. Torque is f32 bits in -1..1.
+// Touch throttle is ANALOG (f32 bits, 0..1): the on-screen JET button sends
+// 1.0/0.0 today, but the export stays analog. The stick supplies a STEER
+// VECTOR (f32 bits each, screen convention: x right, y down, magnitude ≤ 1):
+// its direction is the commanded nose direction, (0,0) = released.
 static TOUCH_THRUST: AtomicU32 = AtomicU32::new(0);
-static TOUCH_TORQUE: AtomicU32 = AtomicU32::new(0);
+static TOUCH_STEER_X: AtomicU32 = AtomicU32::new(0);
+static TOUCH_STEER_Y: AtomicU32 = AtomicU32::new(0);
 // Gamepad state lives on its own atomics (not the touch ones) so a connected-but-
 // idle controller never stomps an active touch input, and vice versa. The two
 // sources are combined in the main loop.
@@ -44,8 +47,9 @@ pub extern "C" fn set_touch_thrust(value: f32) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn set_touch_torque(value: f32) {
-    TOUCH_TORQUE.store(value.to_bits(), Ordering::Relaxed);
+pub extern "C" fn set_touch_steer(x: f32, y: f32) {
+    TOUCH_STEER_X.store(x.to_bits(), Ordering::Relaxed);
+    TOUCH_STEER_Y.store(y.to_bits(), Ordering::Relaxed);
 }
 
 // --- Bluetooth / USB game controller bridge (Web Gamepad API, see index.html) ---
@@ -113,6 +117,11 @@ const CRASH_RESPAWN: f32 = 1.5;
 // a pad (alongside refueling) and by reset/respawn.
 const HULL_MAX: f32 = 100.0;
 const HULL_REPAIR_PER_S: f32 = 20.0;
+// Touch heading control: the stick commands a nose DIRECTION; a PD controller
+// torques the ship toward it (shortest way). Authority scales with deflection.
+const HEADING_KP: f32 = 5.0;
+const HEADING_KD: f32 = 1.2;
+const HEADING_TORQUE_MAX: f32 = 2.5;
 // Fuel: the main engine burns a full tank in ~28 s of continuous thrust; the
 // RCS sips. An empty tank kills engine and RCS until reset/respawn refills it.
 const FUEL_MAX: f32 = 100.0;
@@ -533,12 +542,10 @@ async fn main() {
         };
 
         // Main-engine throttle (0..1), read early so lighting can use it.
-        // The touch stick is analog (pull-down depth = power) with a QUADRATIC
-        // response — mid-stick is a gentle hover trim, full deflection the
-        // emergency burn; keyboard, mouse and gamepad are full power (1.0, so
-        // the curve doesn't affect them). Dead while crashed or dry.
+        // The touch JET button sends 1.0/0.0 (the export stays analog for a
+        // future analog source); keyboard, mouse and gamepad are full power.
+        // Dead while crashed or dry.
         let mut throttle = f32::from_bits(TOUCH_THRUST.load(Ordering::Relaxed)).clamp(0.0, 1.0);
-        throttle *= throttle;
         if is_mouse_button_down(MouseButton::Left)
             || is_key_down(KeyCode::Down)
             || PAD_THRUST.load(Ordering::Relaxed) != 0
@@ -1140,15 +1147,11 @@ async fn main() {
             let f = 8.0 * throttle;
             rb.add_force(vector![-a.sin() * f, a.cos() * f], true);
         }
-        // Analog steering: touch slider + gamepad stick share one value. They
-        // live on separate atomics so neither stomps the other; sum and clamp
-        // (you won't push both at once, and clamping keeps |torque| ≤ 1).
-        let touch_torque = (f32::from_bits(TOUCH_TORQUE.load(Ordering::Relaxed))
-            + f32::from_bits(PAD_TORQUE.load(Ordering::Relaxed)))
-            .clamp(-1.0, 1.0);
+        // Manual rate rotation: keyboard keys and the gamepad's analog stick.
+        let pad_torque = f32::from_bits(PAD_TORQUE.load(Ordering::Relaxed)).clamp(-1.0, 1.0);
         let rcs_ok = !crashed && fuel > 0.0;
-        let rotating_left  = rcs_ok && (is_key_down(KeyCode::Left)  || touch_torque < -0.1);
-        let rotating_right = rcs_ok && (is_key_down(KeyCode::Right) || touch_torque >  0.1);
+        let rotating_left  = rcs_ok && (is_key_down(KeyCode::Left)  || pad_torque < -0.1);
+        let rotating_right = rcs_ok && (is_key_down(KeyCode::Right) || pad_torque >  0.1);
         // Rotate by firing a side RCS booster: apply the force *at the nozzle*
         // (off-center) instead of a pure couple, so the ship pivots about where
         // the boosters actually push. Nozzles exhaust downward (-Y local) → the
@@ -1165,8 +1168,30 @@ async fn main() {
             fire_rcs(rb, -1.0, RCS_FORCE);
         } else if rotating_right {
             fire_rcs(rb, 1.0, RCS_FORCE);
-        } else if rcs_ok && touch_torque != 0.0 {
-            fire_rcs(rb, touch_torque.signum(), RCS_FORCE * touch_torque.abs());
+        }
+
+        // Touch heading control: the stick's direction is the commanded nose
+        // direction; a PD controller torques the ship toward it the short way
+        // around, with authority scaled by deflection so a small nudge trims
+        // and full deflection flips hard. Manual rotation (keys/pad) wins
+        // while held. Applied as a pure torque (convention-safe: err > 0
+        // always means "target is counter-clockwise of the nose in world
+        // space", and positive torque rotates counter-clockwise).
+        let steer_x = f32::from_bits(TOUCH_STEER_X.load(Ordering::Relaxed));
+        let steer_y = f32::from_bits(TOUCH_STEER_Y.load(Ordering::Relaxed));
+        let steer_mag = (steer_x * steer_x + steer_y * steer_y).sqrt().min(1.0);
+        let mut heading_torque = 0.0f32;
+        if rcs_ok && steer_mag > 0.0 && !rotating_left && !rotating_right {
+            // Screen y grows downward, so stick (x, y) commands world nose
+            // direction (x, -y). The nose at angle a points (-sin a, cos a),
+            // hence the commanded angle is atan2(-x, -y) (y in screen sense).
+            let target = (-steer_x).atan2(-steer_y);
+            let mut err = target - rb.rotation().angle();
+            if err > std::f32::consts::PI { err -= std::f32::consts::TAU; }
+            if err < -std::f32::consts::PI { err += std::f32::consts::TAU; }
+            heading_torque = (err * HEADING_KP - rb.angvel() * HEADING_KD)
+                .clamp(-HEADING_TORQUE_MAX, HEADING_TORQUE_MAX) * steer_mag;
+            rb.add_torque(heading_torque, true);
         }
 
         // --- Particle emission ---
@@ -1176,8 +1201,11 @@ async fn main() {
         if thrusting_now {
             fuel -= FUEL_BURN_MAIN * throttle * dt;
         }
-        if rotating_left || rotating_right || (rcs_ok && touch_torque != 0.0) {
+        if rotating_left || rotating_right {
             fuel -= FUEL_BURN_RCS * dt;
+        } else if heading_torque != 0.0 {
+            // Heading control sips proportionally to the torque it commands.
+            fuel -= FUEL_BURN_RCS * (heading_torque.abs() / HEADING_TORQUE_MAX) * dt;
         }
         fuel = fuel.max(0.0);
 
@@ -1200,8 +1228,11 @@ async fn main() {
         // Side RCS thrusters (cosmetic): bottom nozzles flanking the main booster vent
         // downward (out the bottom, like a mini main thruster) to swing the ship.
         // Turning left → LEFT nozzle fires; turning right → RIGHT nozzle fires.
+        // Heading control maps by torque sign: fire_rcs(-1) produces negative
+        // torque, so negative heading torque puffs the LEFT nozzle and
+        // positive the RIGHT (threshold keeps small trim corrections silent).
         // Coords are in scaled world units — lp() does NOT apply SHIP_SCALE.
-        if rotating_left {
+        if rotating_left || heading_torque < -0.4 {
             for _ in 0..3 {
                 let spread = gen_range(-0.15f32, 0.15);
                 let (px, py) = lp(-0.30, -0.71);   // left leg nozzle (gold accent, scaled)
@@ -1214,7 +1245,7 @@ async fn main() {
                 });
             }
         }
-        if rotating_right {
+        if rotating_right || heading_torque > 0.4 {
             for _ in 0..3 {
                 let spread = gen_range(-0.15f32, 0.15);
                 let (px, py) = lp(0.30, -0.71);    // right leg nozzle (gold accent, scaled)
