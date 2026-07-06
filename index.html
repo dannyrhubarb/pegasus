@@ -16,68 +16,78 @@
     body { overflow: hidden; background: #14141e; }
     canvas { display: block; width: 100vw; height: 100vh; }
 
-    #touch-controls {
+    /* Floating attitude stick: its DIRECTION is the commanded nose
+       direction (push up = nose up, push left = nose left, …); the main
+       engine is the separate JET button. Parked bottom-right as a
+       translucent ghost; touching the lower part of the screen re-spawns
+       it centred under the finger (input is captured at the document level
+       in JS — pointer-events stays none so the element itself never eats
+       events). */
+    #stick-base {
       position: fixed;
-      bottom: 20px;
-      left: 0;
-      right: 0;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 0 20px;
+      bottom: calc(env(safe-area-inset-bottom) + 20px);
+      right: calc(env(safe-area-inset-right) + 24px);
+      width: 170px;
+      height: 170px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.08);
+      border: 2px solid rgba(255, 255, 255, 0.35);
+      pointer-events: none;
+      user-select: none;
+      -webkit-user-select: none;
+      opacity: 0.45;
+      transition: opacity 0.15s;
+    }
+    /* Active = engine lit (holding the stick thrusts), so it glows amber */
+    #stick-base.active { opacity: 1; border-color: rgba(255, 200, 0, 0.7); }
+    #stick-base.active #stick-knob { background: rgba(255, 200, 0, 0.85); }
+    #stick-base .stick-hint {
+      position: absolute;
+      color: rgba(255, 255, 255, 0.35);
+      font: 600 14px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       pointer-events: none;
     }
-
-    #thrust-btn {
-      width: 100px;
-      height: 100px;
+    .stick-hint.up    { top: 8px;    left: 50%; transform: translateX(-50%); }
+    .stick-hint.left  { left: 10px;  top: 50%; transform: translateY(-50%); }
+    .stick-hint.right { right: 10px; top: 50%; transform: translateY(-50%); }
+    .stick-hint.down  { bottom: 8px; left: 50%; transform: translateX(-50%); }
+    #stick-knob {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 64px;
+      height: 64px;
+      margin: -32px 0 0 -32px;
       border-radius: 50%;
-      background: rgba(255, 255, 255, 0.15);
-      border: 2px solid rgba(255, 255, 255, 0.4);
+      background: rgba(255, 255, 255, 0.45);
+      transition: transform 0.12s, background 0.1s;
+    }
+    #stick-base.active #stick-knob {
+      transition: background 0.1s;   /* knob tracks the finger with no lag */
+    }
+    /* Main-engine JET button — bottom-left, mirror of the stick's corner */
+    #thrust-btn {
+      position: fixed;
+      bottom: calc(env(safe-area-inset-bottom) + 40px);
+      left: calc(env(safe-area-inset-left) + 24px);
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.10);
+      border: 2px solid rgba(255, 255, 255, 0.35);
+      color: rgba(255, 255, 255, 0.5);
+      font: 600 15px/116px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      text-align: center;
       pointer-events: all;
       touch-action: none;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: rgba(255,255,255,0.5);
-      font-size: 13px;
       user-select: none;
+      -webkit-user-select: none;
+      z-index: 5;
     }
     #thrust-btn.active {
       background: rgba(255, 200, 0, 0.4);
       border-color: rgba(255, 200, 0, 0.8);
-    }
-
-    #torque-area {
-      pointer-events: all;
-      touch-action: none;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 8px;
-    }
-    #torque-track {
-      width: 180px;
-      height: 70px;
-      border-radius: 35px;
-      background: rgba(255, 255, 255, 0.1);
-      border: 2px solid rgba(255, 255, 255, 0.4);
-      position: relative;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    #torque-knob {
-      width: 54px;
-      height: 54px;
-      border-radius: 50%;
-      background: rgba(255, 255, 255, 0.5);
-      position: absolute;
-      transition: background 0.1s;
-    }
-    #torque-track.active #torque-knob {
-      background: rgba(255, 200, 0, 0.8);
-      transition: none;
+      color: rgba(255, 235, 180, 0.9);
     }
 
     /* Info button — top-right corner, clear of the notch */
@@ -158,6 +168,26 @@
       color: #6c84ad;
       margin-top: 8px;
     }
+    /* Settings rows: velocity-vector arrow + JET button (both off by default) */
+    #vel-toggle-row,
+    #jet-toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: clamp(16px, 3.5vw, 22px);
+      color: #dde9ff;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    #vel-toggle-row input,
+    #jet-toggle-row input {
+      width: 20px;
+      height: 20px;
+      accent-color: #6ec1ff;
+      cursor: pointer;
+    }
+
     /* Manual cache-bypass reload — same ?fresh= mechanism as the toast, for
        when you want the newest build without waiting for detection. */
     #force-reload {
@@ -215,12 +245,20 @@
     <h1>Pegasus — Moon Lander</h1>
     <div class="info-row">
       <div class="info-label">Build revision</div>
-      <div class="info-value" id="git-rev">a3d811c</div>
+      <div class="info-value" id="git-rev">e278b99</div>
     </div>
     <div class="info-row">
       <div class="info-label">Build time</div>
-      <div class="info-value" id="build-time">2026-07-05 13:20 UTC</div>
+      <div class="info-value" id="build-time">2026-07-06 18:57 UTC</div>
     </div>
+    <label id="vel-toggle-row">
+      <input type="checkbox" id="vel-toggle">
+      Velocity vector
+    </label>
+    <label id="jet-toggle-row">
+      <input type="checkbox" id="jet-toggle">
+      JET button
+    </label>
     <div id="force-reload" role="button">&#10227; Reload latest build</div>
     <div class="info-hint">Tap anywhere to close</div>
   </div>
@@ -228,15 +266,50 @@
   <!-- Stale-cache reload toast (hidden until a newer version.json is seen) -->
   <div id="update-toast" role="button">⟳ New build available — tap to reload</div>
 
-  <div id="touch-controls">
-    <div id="thrust-btn">THRUST</div>
-    <div id="torque-area">
-      <div id="torque-track">
-        <div id="torque-knob"></div>
-      </div>
-    </div>
+  <div id="stick-base">
+    <span class="stick-hint up">&#9650;</span>
+    <span class="stick-hint left">&#9664;</span>
+    <span class="stick-hint right">&#9654;</span>
+    <span class="stick-hint down">&#9660;</span>
+    <div id="stick-knob"></div>
   </div>
+  <div id="thrust-btn">JET</div>
 
+  <script>
+    // Boot guard — deliberately in its OWN <script> tag: script tags parse
+    // independently, so a SyntaxError in the bundle or the main inline
+    // script below cannot kill this one (that failure mode shipped once:
+    // a redeclared bundle global silently killed the whole main script and
+    // the page showed only HTML chrome with no error anywhere). Shows any
+    // script error on screen and offers a cache-bypass reload if the wasm
+    // hasn't started.
+    (function () {
+      var box = null;
+      function show(msg) {
+        if (!box) {
+          box = document.createElement("div");
+          box.style.cssText = "position:fixed;left:12px;right:12px;bottom:12px;" +
+            "z-index:99;background:rgba(130,25,25,0.93);color:#fff;" +
+            "font:13px/1.45 -apple-system,BlinkMacSystemFont,sans-serif;" +
+            "padding:10px 14px;border-radius:10px;white-space:pre-wrap;";
+          box.addEventListener("click", function () {
+            location.replace(location.pathname + "?fresh=" + Date.now());
+          });
+          document.body.appendChild(box);
+        }
+        box.textContent = msg + "\n(tap here to reload the latest build)";
+      }
+      window.addEventListener("error", function (e) {
+        show("Script error: " + (e.message || "unknown") +
+          (e.filename ? "\n" + e.filename.split("/").pop() + ":" + e.lineno : ""));
+      });
+      setTimeout(function () {
+        if (typeof wasm_exports === "undefined" || !wasm_exports) {
+          show("Game failed to start (wasm not running after 8 s).");
+        }
+      }, 8000);
+    })();
+  </script>
   <script src="./mq_js_bundle.js"></script>
   <script>
     function call(name, ...args) {
@@ -245,56 +318,146 @@
       }
     }
 
-    // Thrust button
+    // --- Floating attitude stick + JET button ---
+    // The stick's DIRECTION is the commanded nose direction (push up = nose
+    // up, push left = nose left, pull down = nose down — a PD controller in
+    // the game rotates the ship the short way around). Deflection magnitude
+    // scales the rotation authority: a small nudge trims, the rim flips
+    // hard. HOLDING the stick — even dead-centre — also fires the main
+    // engine (one-handed flight: touch = burn + point). The JET button
+    // (bottom-left) is an alternative thrust-only control; either source
+    // keeps the engine lit, tracked by the two flags below.
+    //
+    // FLOATING: any touch on the canvas in the lower STICK_ZONE of the
+    // screen spawns the stick centred under the finger; on release it parks
+    // back bottom-right as a translucent ghost. Handlers live on the
+    // DOCUMENT in the capture phase so the touch is swallowed before the
+    // canvas sees it (miniquad synthesizes mouse events from canvas touches,
+    // and mouse-down = thrust). Mouse events are left alone — desktop
+    // click-to-thrust still works everywhere. The JET button is its own
+    // element, so the document handler ignores its touches (target check).
+    // NOTE: mq_js_bundle.js declares a global `const canvas` — redeclaring
+    // any of its globals here is a SyntaxError that kills this whole script
+    // (no wasm load). Hence the distinct name.
+    const gameCanvas = document.getElementById("glcanvas");
+    const stickBase = document.getElementById("stick-base");
+    const stickKnob = document.getElementById("stick-knob");
+    const STICK_TRAVEL = 60;   // px from center = full deflection
+    const STICK_DZ = 0.15;     // radial dead-zone, rescaled so 1 is reachable
+    const STICK_ZONE = 0.55;   // touches below 55% of viewport height grab the stick
+    let stickId = null;        // active touch identifier (null = parked)
+    let stickCX = 0, stickCY = 0; // stick centre = where the touch landed
+
+    function stickApply(dx, dy) {
+      const len = Math.hypot(dx, dy);
+      if (len > STICK_TRAVEL) {          // clamp knob to the travel circle
+        dx *= STICK_TRAVEL / len;
+        dy *= STICK_TRAVEL / len;
+      }
+      stickKnob.style.transform = `translate(${dx}px, ${dy}px)`;
+      // Radial dead-zone on the magnitude, rescaled so the rim reaches 1;
+      // the steer vector keeps the raw direction (screen convention: y down).
+      const m = Math.min(len / STICK_TRAVEL, 1);
+      const eff = m < STICK_DZ ? 0 : (m - STICK_DZ) / (1 - STICK_DZ);
+      if (eff > 0 && len > 0) {
+        call("set_touch_steer", (dx / len) * eff, (dy / len) * eff);
+      } else {
+        call("set_touch_steer", 0, 0);
+      }
+    }
+
+    function stickRelease() {
+      stickId = null;
+      stickBase.classList.remove("active");
+      // Clear the inline spawn position → the CSS right/bottom parking
+      // spot takes over again (left/top win over right/bottom while set).
+      stickBase.style.left = "";
+      stickBase.style.top = "";
+      stickKnob.style.transform = "translate(0, 0)";
+      call("set_touch_steer", 0, 0);
+      call("set_touch_stick_held", 0);
+    }
+
+    document.addEventListener("touchstart", e => {
+      if (e.target !== gameCanvas) return; // buttons/overlays handle their own
+      let zoneTouch = false;
+      for (const t of Array.from(e.changedTouches)) {
+        if (t.clientY < window.innerHeight * STICK_ZONE) continue;
+        zoneTouch = true;
+        if (stickId === null) {
+          stickId = t.identifier;
+          stickCX = t.clientX;
+          stickCY = t.clientY;
+          const r = stickBase.offsetWidth / 2;
+          stickBase.style.left = (stickCX - r) + "px";
+          stickBase.style.top = (stickCY - r) + "px";
+          stickBase.classList.add("active");
+          stickApply(0, 0);
+          // Holding the stick lights the main engine, but through the
+          // game-side gating (flick grace + flip settle) — separate export.
+          call("set_touch_stick_held", 1);
+        }
+      }
+      // Swallow every canvas touch in the zone (extra fingers included) so
+      // miniquad can't turn any of them into a mouse-down (= full thrust).
+      if (zoneTouch) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, { capture: true, passive: false });
+
+    document.addEventListener("touchmove", e => {
+      if (stickId === null) return;
+      let ours = false;
+      for (const t of Array.from(e.changedTouches)) {
+        if (t.identifier === stickId) {
+          stickApply(t.clientX - stickCX, t.clientY - stickCY);
+          ours = true;
+        }
+      }
+      if (ours) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, { capture: true, passive: false });
+
+    function stickTouchEnd(e) {
+      if (stickId === null) return;
+      for (const t of Array.from(e.changedTouches)) {
+        if (t.identifier === stickId) {
+          e.preventDefault();
+          e.stopPropagation();
+          stickRelease();
+        }
+      }
+    }
+    document.addEventListener("touchend", stickTouchEnd, { capture: true, passive: false });
+    document.addEventListener("touchcancel", stickTouchEnd, { capture: true, passive: false });
+
+    // JET button: hold = main engine at full power. Its own element, so the
+    // stick's document-level handlers never see these touches. Mouse
+    // handlers included for desktop/touch-laptop parity.
     const thrustBtn = document.getElementById("thrust-btn");
-    thrustBtn.addEventListener("touchstart", e => {
+    function thrustOn(e) {
       e.preventDefault();
+      e.stopPropagation();
       thrustBtn.classList.add("active");
       call("set_touch_thrust", 1);
-    }, { passive: false });
-    thrustBtn.addEventListener("touchend", () => {
-      thrustBtn.classList.remove("active");
-      call("set_touch_thrust", 0);
-    });
-    thrustBtn.addEventListener("touchcancel", () => {
-      thrustBtn.classList.remove("active");
-      call("set_touch_thrust", 0);
-    });
-
-    // Torque knob
-    const torqueTrack = document.getElementById("torque-track");
-    const torqueKnob = document.getElementById("torque-knob");
-    const MAX_DRAG = 60; // px from center = full torque
-
-    torqueTrack.addEventListener("touchstart", e => {
-      e.preventDefault();
-      torqueTrack.classList.add("active");
-    }, { passive: false });
-
-    torqueTrack.addEventListener("touchmove", e => {
-      e.preventDefault();
-      // targetTouches, not touches: e.touches[0] is the FIRST touch on the
-      // whole page — usually the thrust finger — which slammed torque hard
-      // left whenever thrust was held while steering.
-      const touch = e.targetTouches[0];
-      if (!touch) return;
-      const rect = torqueTrack.getBoundingClientRect();
-      const cx = rect.left + rect.width / 2;
-      const dx = touch.clientX - cx;
-      const clamped = Math.max(-MAX_DRAG, Math.min(MAX_DRAG, dx));
-      const normalized = clamped / MAX_DRAG;
-      torqueKnob.style.transform = `translateX(${clamped}px)`;
-      call("set_touch_torque", normalized);
-    }, { passive: false });
-
-    function releaseTorque(e) {
-      if (e.targetTouches.length > 0) return; // another finger still on the track
-      torqueTrack.classList.remove("active");
-      torqueKnob.style.transform = "translateX(0)";
-      call("set_touch_torque", 0);
     }
-    torqueTrack.addEventListener("touchend", releaseTorque);
-    torqueTrack.addEventListener("touchcancel", releaseTorque);
+    function thrustOff() {
+      thrustBtn.classList.remove("active");
+      call("set_touch_thrust", 0);
+    }
+    thrustBtn.addEventListener("touchstart", thrustOn, { passive: false });
+    thrustBtn.addEventListener("touchend", e => {
+      if (e.targetTouches.length === 0) thrustOff();
+    });
+    thrustBtn.addEventListener("touchcancel", e => {
+      if (e.targetTouches.length === 0) thrustOff();
+    });
+    thrustBtn.addEventListener("mousedown", thrustOn);
+    thrustBtn.addEventListener("mouseup", thrustOff);
+    thrustBtn.addEventListener("mouseleave", thrustOff);
 
     // --- Bluetooth / USB game controller (Web Gamepad API) ---
     // A controller paired with the device shows up in navigator.getGamepads().
@@ -422,7 +585,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "a3d811c";
+    const wasmRev = "e278b99";
     load("./rapier-test.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // --- Stale-cache detection ---
@@ -465,6 +628,47 @@
       e.stopPropagation();
       freshReload();
     }, { passive: false });
+
+    // Velocity-vector toggle: forwarded to the game, persisted per device.
+    // stopPropagation (but no preventDefault — that would kill the checkbox's
+    // click) so tapping the row doesn't close the overlay.
+    const velToggle = document.getElementById("vel-toggle");
+    const velRow = document.getElementById("vel-toggle-row");
+    velToggle.checked = localStorage.getItem("pegasus_show_vel") === "1";
+    function applyVelSetting() {
+      call("set_show_velocity", velToggle.checked ? 1 : 0);
+    }
+    velToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_show_vel", velToggle.checked ? "1" : "0");
+      applyVelSetting();
+    });
+    ["mousedown", "click", "touchstart"].forEach(ev =>
+      velRow.addEventListener(ev, e => e.stopPropagation()));
+    // The WASM exports aren't ready immediately; apply the saved value once
+    // they are (same pattern as the safe-area probe).
+    const velTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_show_velocity) {
+        applyVelSetting();
+        clearInterval(velTimer);
+      }
+    }, 200);
+
+    // JET button visibility toggle: hidden by default (the stick-hold engine
+    // covers one-handed play); pure client-side — no wasm export involved,
+    // so the saved value applies immediately.
+    const jetToggle = document.getElementById("jet-toggle");
+    const jetRow = document.getElementById("jet-toggle-row");
+    jetToggle.checked = localStorage.getItem("pegasus_jet_btn") === "1";
+    function applyJetSetting() {
+      thrustBtn.style.display = jetToggle.checked ? "" : "none";
+    }
+    jetToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_jet_btn", jetToggle.checked ? "1" : "0");
+      applyJetSetting();
+    });
+    ["mousedown", "click", "touchstart"].forEach(ev =>
+      jetRow.addEventListener(ev, e => e.stopPropagation()));
+    applyJetSetting();
 
     // Manual reload button in the info overlay (stopPropagation so the tap
     // doesn't just close the overlay).
