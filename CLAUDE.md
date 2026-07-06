@@ -454,13 +454,48 @@ red) directly under the fuel bar.
 On destruction: 70 explosion particles (`kind 3`, ~1.1 s life), the wreck is
 parked (`set_gravity_scale(0)`, velocities zeroed) so the camera holds still,
 input is dead (`crashed` gates thrust/RCS and ship rendering), and a "CRASHED"
-banner shows. After `CRASH_RESPAWN = 1.5 s` the ship respawns at `RESET_X`
-(gravity restored). Anything that teleports or zeroes velocity (reset,
-respawn) must also snap `prev_vel` — otherwise the velocity jump reads as an
-impact — and `prev_ship` (render interpolation). Spawn/reset place the ship
-**standing on the floor** (`stand_y(x)` = floor + 0.78, feet at 0.73):
-dropping it from `cave_center` reached ~5.5 m/s at touchdown, which tripped
-the crash threshold and looped spawn → crash → respawn forever.
+banner shows. After `CRASH_DIALOG_DELAY = 1.5 s` the **crash dialog** takes
+over (see below); respawning at `RESET_X` happens from its FLY AGAIN action
+(or the R key, which works from any mode). Anything that teleports or zeroes
+velocity (reset, respawn) must also snap `prev_vel` — otherwise the velocity
+jump reads as an impact — and `prev_ship` (render interpolation). Spawn/reset
+place the ship **standing on the floor** (`stand_y(x)` = floor + 0.78, feet at
+0.73): dropping it from `cave_center` reached ~5.5 m/s at touchdown, which
+tripped the crash threshold and looped spawn → crash → respawn forever.
+
+## Crash dialog & instant replay
+
+A `Mode` enum (`Flying` / `CrashDialog` / `Replay`) sits above the crash flag:
+`Flying` covers normal play *and* the 1.5 s wreck/explosion phase; the other
+two **pause physics** (the stepping loop is gated on `Flying` and drains
+`phys_accum`, so no catch-up burst fires on resume; the wreck stays parked).
+
+- **Recording**: every physics step while alive (`crash_timer <= 0`) pushes a
+  `ReplayFrame` (pose, velocity, `glow`, RCS puff side `last_rcs`) into a
+  `VecDeque` ring buffer capped at `REPLAY_MAX_SECS = 15 s` × 120 Hz. The
+  impact itself is captured (crash detection runs after the stepping loop).
+  Reset/respawn clears the buffer. This is **visual-state playback** — the
+  planned cross-platform-deterministic Rapier replay (record inputs, re-run
+  the sim; also enables sharing others' runs) can replace the recording source
+  behind the same dialog/playback UI.
+- **Crash dialog**: dimmed backdrop, in-canvas buttons **FLY AGAIN [R]** /
+  **WATCH REPLAY [ENTER]** drawn at `sh*0.36`. **Keep dialog hit targets above
+  the lower 45% of the screen**: the JS floating-stick handler swallows canvas
+  touches in that zone (capture phase, `preventDefault`) before miniquad can
+  synthesize mouse events, so buttons there are untappable on mobile. Clicks
+  route through `mouse_position()`/`is_mouse_button_pressed` (touch taps
+  arrive as synthesized mouse events). FLY AGAIN sets `do_reset`, consumed by
+  the same reset block as the R key. WATCH REPLAY is a no-op unless the buffer
+  has ≥ 2 frames.
+- **Playback**: `replay_t` advances `get_frame_time()/PHYSICS_DT` frames and
+  lerps between recorded steps (`lerp_angle` for the seam-safe heading, unit
+  tested). The lerped frame **overrides `cam_x`/`cam_y`/`angle`/`ship_vx/vy`
+  and `glow`** before the `lp`/`ld` closures are built, so the sliding windows,
+  flame, radial light, engine volume, exhaust particles (recorded glow stands
+  in for the throttle) and RCS puffs (recorded side) all replay for free. HUD
+  shows a pulsing REPLAY banner + progress bar; tap/click skips back to the
+  dialog, R skips straight to respawn. At the end the explosion is re-fired
+  (`boom_burst` + boom sound) and the dialog returns.
 
 ## Physics notes
 
@@ -488,7 +523,7 @@ Each is built `ColliderBuilder::new(SharedShape::capsule(a, b, r)).restitution(0
 - **Always open a PR** after pushing a feature branch — standing instruction
   from the owner (no need to ask first). The PR also produces a phone-testable
   preview deployment at `pr-<n>/`.
-- Development branch: `claude/replicate-pr-review-deployment-gjw4x0` (current); previous: `claude/vertical-wrapping-caves-csv79r`
+- Development branch: `claude/crash-replay-dialog-qmvtn8` (current); previous: `claude/replicate-pr-review-deployment-gjw4x0`
 - Merges to `main` via rebase PRs using the GitHub MCP tools (`mcp__github__create_pull_request`, `mcp__github__merge_pull_request`).
 - Branch consistently diverges from main after merges — always `git fetch origin main && git rebase origin/main && git push --force-with-lease` before creating a PR to avoid merge conflicts.
 - The wasm binary (`pegasus.wasm`) is **not tracked** (gitignored) — deploy builds it from source, and for local play you build it into the repo root per the README. It previously lived in git and conflicted on every rebase; don't re-add it.
