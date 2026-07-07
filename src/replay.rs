@@ -36,6 +36,29 @@ pub struct InputState {
     pub stick_held: u8, // 0/1 (drives the thrust-gating state machine)
 }
 
+impl InputState {
+    // Quantize the frame's resolved controls. The LIVE sim consumes the
+    // dequantized values of exactly this struct (not the raw floats), so a
+    // resim of the recorded stream sees bit-identical inputs.
+    pub fn from_controls(throttle: f32, rot: i8, steer_x: f32, steer_y: f32, held: bool) -> Self {
+        InputState {
+            throttle: (throttle.clamp(0.0, 1.0) * 255.0).round() as u8,
+            rot,
+            steer_x: (steer_x.clamp(-1.0, 1.0) * 127.0).round() as i8,
+            steer_y: (steer_y.clamp(-1.0, 1.0) * 127.0).round() as i8,
+            stick_held: held as u8,
+        }
+    }
+
+    pub fn throttle_f32(&self) -> f32 {
+        self.throttle as f32 / 255.0
+    }
+
+    pub fn steer_f32(&self) -> (f32, f32) {
+        (self.steer_x as f32 / 127.0, self.steer_y as f32 / 127.0)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct InputEvent {
     pub tick: u32, // input takes effect from this tick's step
