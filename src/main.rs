@@ -178,11 +178,16 @@ const CRASH_DV_HARD: f32 = 6.0;
 // Seconds from crash to the crash dialog (fly again / watch replay) — long
 // enough for the explosion to play out with the camera held still.
 const CRASH_DIALOG_DELAY: f32 = 1.5;
-// Instant replay: how many seconds of flight are retained (recorded once per
-// physics step). Sized to cover a whole spawn→crash run; runs longer than
-// this keep only their tail. 5 min ≈ 36k visual frames ≈ 1 MB in RAM. The
-// hybrid recording (src/replay.rs) trims to the same horizon.
+// Instant replay: how many seconds the dense VISUAL buffer retains (recorded
+// once per physics step, ~3.4 KB/s). Playback convenience only — nobody
+// watches beyond a few minutes, and it's the memory-hungry buffer (5 min ≈
+// 1 MB), so it keeps just the tail of very long runs.
 const REPLAY_MAX_SECS: f32 = 300.0;
+// The HYBRID recording is ~100× cheaper (~1 MB/hour worst case) and a future
+// highscore ghost needs the run from its spawn (t = 0 is the shared start
+// line), so its window is a memory safety net, not an expected limit — only
+// a parked-for-hours session ever hits it.
+const HYBRID_MAX_SECS: f32 = 3600.0;
 // Hull integrity: scraped off by survivable impacts, restored while parked on
 // a pad (alongside refueling) and by reset/respawn.
 const HULL_MAX: f32 = 100.0;
@@ -463,7 +468,7 @@ async fn main() {
         tick: 0, x, y: stand_y(x), angle: 0.0, vx: 0.0, vy: 0.0,
         angvel: 0.0, fuel: FUEL_MAX, hull: HULL_MAX, glow: 0.0,
     };
-    let mut recorder = Recording::new(sim_params(), (REPLAY_MAX_SECS / PHYSICS_DT) as u32);
+    let mut recorder = Recording::new(sim_params(), (HYBRID_MAX_SECS / PHYSICS_DT) as u32);
     recorder.push_keyframe(spawn_keyframe(0.0));
     let mut last_input = InputState::default(); // controls in effect, quantized per frame
     let mut blob_sizes: Option<(usize, usize)> = None; // (raw, deflated) at last crash
@@ -1672,7 +1677,7 @@ async fn main() {
             replay_t = 0.0;
             last_rcs = 0;
             glow = 0.0;
-            recorder = Recording::new(sim_params(), (REPLAY_MAX_SECS / PHYSICS_DT) as u32);
+            recorder = Recording::new(sim_params(), (HYBRID_MAX_SECS / PHYSICS_DT) as u32);
             recorder.push_keyframe(spawn_keyframe(RESET_X));
             last_input = InputState::default();
             blob_sizes = None;
