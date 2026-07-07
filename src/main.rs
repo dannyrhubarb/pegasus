@@ -1,20 +1,21 @@
 use macroquad::audio::{load_sound_from_bytes, play_sound, set_sound_volume, PlaySoundParams};
 use macroquad::prelude::*;
 use macroquad::rand::gen_range;
-use rapier2d::prelude::*;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 mod audio;
 mod render;
 mod replay;
 mod ship_mesh;
+mod sim;
 mod world;
 
 use audio::*;
 use render::*;
 use replay::*;
 use ship_mesh::*;
+use sim::*;
 use world::*;
 
 struct Particle {
@@ -151,30 +152,11 @@ fn window_conf() -> Conf {
 }
 
 const SCALE: f32 = 80.0;
-// How many segments to keep loaded on each side of the ship
-const HALF_WINDOW: i64 = 80;
-// Physics-shaping constants, hoisted so the replay params header serializes
-// the exact values the sim runs with (see sim_params()).
-const GRAVITY_Y: f32 = -1.62;
-const THRUST_FORCE: f32 = 8.0;     // main engine at full throttle
-const LINEAR_DAMPING: f32 = 0.2;
-const ANGULAR_DAMPING: f32 = 3.0;
-// Side RCS booster force, applied at the nozzle (see the controls section);
-// tuned so the ~0.30 x-lever yields roughly ±1.0 of torque.
-const RCS_FORCE: f32 = 3.3;
 // Render scale for the ship mesh relative to the raw SWF coordinates
 const SHIP_SCALE: f32 = 1.5;
-// Physics runs on a fixed timestep (accumulator in the main loop) so handling
-// is identical on every display refresh rate; rendering interpolates the ship
-// between the last two steps.
-const PHYSICS_DT: f32 = 1.0 / 120.0;
-// Impacts are read from the frame-to-frame velocity change (collision
-// impulse); gravity/thrust change v by < 0.3 m/s per frame, so anything above
-// CRASH_DV_SOFT is a real hit. Damage is graduated: below SOFT is free,
-// SOFT..HARD scrapes the hull proportionally (full bar at HARD), and HARD —
-// or a scrape that empties the hull — destroys the ship.
-const CRASH_DV_SOFT: f32 = 2.5;
-const CRASH_DV_HARD: f32 = 6.0;
+// All physics-shaping constants (PHYSICS_DT, thrust/RCS forces, crash
+// thresholds, fuel/hull numbers, PD gains, window size) live in src/sim.rs —
+// the deterministic simulation core — and are re-exported via `use sim::*`.
 // Seconds from crash to the crash dialog (fly again / watch replay) — long
 // enough for the explosion to play out with the camera held still.
 const CRASH_DIALOG_DELAY: f32 = 1.5;
@@ -188,19 +170,9 @@ const REPLAY_MAX_SECS: f32 = 300.0;
 // line), so its window is a memory safety net, not an expected limit — only
 // a parked-for-hours session ever hits it.
 const HYBRID_MAX_SECS: f32 = 3600.0;
-// Hull integrity: scraped off by survivable impacts, restored while parked on
-// a pad (alongside refueling) and by reset/respawn.
-const HULL_MAX: f32 = 100.0;
-const HULL_REPAIR_PER_S: f32 = 20.0;
-// Touch heading control: the stick commands a nose DIRECTION; a PD controller
-// torques the ship toward it (shortest way). Authority scales with deflection.
-// Tuned snappy: strong spring (KP), high torque ceiling, damping raised with
-// them so the nose stops crisply instead of ringing. The torque ceiling is
-// what sets the 180°-flip time (the spring saturates it for most of the
-// swing) — 6.0 flips roughly twice as fast as the earlier 3.5.
-const HEADING_KP: f32 = 14.0;
-const HEADING_KD: f32 = 2.2;
-const HEADING_TORQUE_MAX: f32 = 6.0;
+// A run shorter than this doesn't replace the ghost on reset — R-spam
+// shouldn't wipe a good previous run.
+const GHOST_MIN_SECS: f32 = 2.0;
 // Stick-hold engine gating (one-handed scheme): a quick flick shorter than
 // DELAY never lights the engine, thrust then ramps to full over RAMP, and a
 // commanded flip past FLIP_GATE keeps the engine cold until the nose settles
@@ -209,33 +181,6 @@ const STICK_THRUST_DELAY: f32 = 0.12;
 const STICK_THRUST_RAMP: f32 = 0.18;
 const FLIP_GATE_RAD: f32 = 1.6;  // ~92°
 const FLIP_DONE_RAD: f32 = 0.35; // ~20°
-// Fuel: the main engine burns a full tank in ~28 s of continuous thrust; the
-// RCS sips. An empty tank kills engine and RCS until reset/respawn refills it.
-const FUEL_MAX: f32 = 100.0;
-const FUEL_BURN_MAIN: f32 = 3.5; // units/s while the main engine fires
-const FUEL_BURN_RCS: f32 = 1.2;  // units/s while an RCS nozzle fires
-
-// The exact simulation constants this build runs with, serialized into every
-// replay blob so a recording can be re-run under the rules it was flown with.
-fn sim_params() -> SimParams {
-    SimParams {
-        dt: PHYSICS_DT,
-        gravity_y: GRAVITY_Y,
-        thrust_force: THRUST_FORCE,
-        linear_damping: LINEAR_DAMPING,
-        angular_damping: ANGULAR_DAMPING,
-        rcs_force: RCS_FORCE,
-        heading_kp: HEADING_KP,
-        heading_kd: HEADING_KD,
-        heading_torque_max: HEADING_TORQUE_MAX,
-        fuel_max: FUEL_MAX,
-        fuel_burn_main: FUEL_BURN_MAIN,
-        fuel_burn_rcs: FUEL_BURN_RCS,
-        crash_dv_soft: CRASH_DV_SOFT,
-        crash_dv_hard: CRASH_DV_HARD,
-        hull_max: HULL_MAX,
-    }
-}
 
 #[macroquad::main(window_conf)]
 async fn main() {
@@ -247,153 +192,10 @@ async fn main() {
     // shows on screen, so keep it a single message.
     std::panic::set_hook(Box::new(|info| error!("{}", info)));
 
-    let mut rigid_body_set = RigidBodySet::new();
-    let mut collider_set = ColliderSet::new();
-
-    // Sliding 2D window of cave wall colliders, keyed by (layer, segment idx).
-    // Value holds that segment's colliders (empty where a shaft opening removes
-    // both walls). Filled by the window-sync code on the first frame.
-    let mut cave: HashMap<(i64, i64), Vec<ColliderHandle>> = HashMap::new();
-
-    // Loaded vertical shafts, keyed by (slot, gap): the shaft for slot `s`
-    // connecting layer `gap`'s ceiling to layer `gap + 1`'s floor.
-    struct Shaft {
-        handles: Vec<ColliderHandle>,
-        walls: [Vec<Vec2>; 2], // left / right wall polylines, world space
-    }
-    let mut shafts: HashMap<(i64, i64), Shaft> = HashMap::new();
-
-    let spawn_shaft = |s: i64, gap: i64, collider_set: &mut ColliderSet,
-                           shafts: &mut HashMap<(i64, i64), Shaft>| {
-        let walls = [shaft_wall_pts(s, gap, 0), shaft_wall_pts(s, gap, 1)];
-        let mut handles = Vec::new();
-        for pts in &walls {
-            for w in pts.windows(2) {
-                handles.push(collider_set.insert(
-                    ColliderBuilder::segment(point![w[0].x, w[0].y], point![w[1].x, w[1].y])
-                        .friction(0.0)
-                        .build(),
-                ));
-            }
-        }
-        shafts.insert((s, gap), Shaft { handles, walls });
-    };
-
-    // Loaded obstacles, keyed by (slot index, layer). Each carries its collider
-    // handle plus the hull vertices (local space) used for rendering.
-    struct Obstacle {
-        handle: ColliderHandle,
-        cx: f32,
-        cy: f32,
-        rot: f32,
-        verts: Vec<Vec2>,
-    }
-    let mut obstacles: HashMap<(i64, i64), Obstacle> = HashMap::new();
-
-    // Insert the obstacle for slot `k` in cave layer `layer` (if any).
-    let spawn_obstacle = |k: i64, layer: i64, collider_set: &mut ColliderSet,
-                              obstacles: &mut HashMap<(i64, i64), Obstacle>| {
-        let Some(spec) = obstacle_spec(k) else { return };
-        let Some(builder) = ColliderBuilder::convex_hull(&spec.pts) else { return };
-        let cy = spec.cy + layer as f32 * V_PERIOD;
-        let handle = collider_set.insert(
-            builder
-                .translation(vector![spec.cx, cy])
-                .rotation(spec.rot)
-                .friction(0.6)
-                .restitution(0.2)
-                .build(),
-        );
-        // Read the actual hull vertices back so rendering matches the collider.
-        let verts = collider_set[handle]
-            .shape()
-            .as_convex_polygon()
-            .map(|cp| cp.points().iter().map(|p| vec2(p.x, p.y)).collect())
-            .unwrap_or_else(|| spec.pts.iter().map(|p| vec2(p.x, p.y)).collect());
-        obstacles.insert((k, layer), Obstacle {
-            handle,
-            cx: spec.cx,
-            cy,
-            rot: spec.rot,
-            verts,
-        });
-    };
-
-    // Loaded landing pads, keyed by (slot index, layer) like obstacles.
-    struct Pad {
-        handle: ColliderHandle,
-        cx: f32,
-        y: f32, // deck top (collider line), layer offset applied
-    }
-    let mut pads: HashMap<(i64, i64), Pad> = HashMap::new();
-
-    let spawn_pad = |p: i64, layer: i64, collider_set: &mut ColliderSet,
-                         pads: &mut HashMap<(i64, i64), Pad>| {
-        let Some(spec) = pad_spec(p) else { return };
-        let y = spec.y + layer as f32 * V_PERIOD;
-        // High friction, no restitution: the ship should settle, not skate.
-        let handle = collider_set.insert(
-            ColliderBuilder::segment(
-                point![spec.cx - PAD_HALF_W, y],
-                point![spec.cx + PAD_HALF_W, y],
-            )
-            .friction(0.9)
-            .build(),
-        );
-        pads.insert((p, layer), Pad { handle, cx: spec.cx, y });
-    };
-
-    // Ship starts at cave centre
-    let box_body = RigidBodyBuilder::dynamic()
-        .translation(vector![0.0, stand_y(0.0)])
-        .angular_damping(ANGULAR_DAMPING)
-        // A whisper of drag: imperceptible at landing speeds but it caps how
-        // much momentum can pile up on a long burn or free-fall.
-        .linear_damping(LINEAR_DAMPING)
-        .ccd_enabled(true)
-        .build();
-    let box_handle = rigid_body_set.insert(box_body);
-    // Compound collider of three capsules (stadium shapes) tracing the 1.5× scaled
-    // lander: a rounded fuselage + two splayed leg-pods. Capsules are the closest
-    // primitive Rapier offers to an ellipse, so they hug the rounded hull tighter
-    // than boxes and slide off rocks without corners catching. Endpoints are in
-    // scaled world units (ship-local frame).
-    // Fuselage: vertical capsule, rounded nose to mid-hull.
-    collider_set.insert_with_parent(
-        ColliderBuilder::new(SharedShape::capsule(
-            point![0.0, 0.42], point![0.0, -0.08], 0.26))
-            .restitution(0.2).build(),
-        box_handle, &mut rigid_body_set,
-    );
-    // Left leg pod: capsule angled out to the foot.
-    collider_set.insert_with_parent(
-        ColliderBuilder::new(SharedShape::capsule(
-            point![-0.26, -0.30], point![-0.33, -0.64], 0.09))
-            .restitution(0.2).build(),
-        box_handle, &mut rigid_body_set,
-    );
-    // Right leg pod, mirrored.
-    collider_set.insert_with_parent(
-        ColliderBuilder::new(SharedShape::capsule(
-            point![0.26, -0.30], point![0.33, -0.64], 0.09))
-            .restitution(0.2).build(),
-        box_handle, &mut rigid_body_set,
-    );
-
-    let gravity = vector![0.0, GRAVITY_Y];
-    let integration_params = IntegrationParameters {
-        dt: PHYSICS_DT,
-        num_solver_iterations: std::num::NonZeroUsize::new(8).unwrap(),
-        ..Default::default()
-    };
-    let mut physics_pipeline = PhysicsPipeline::new();
-    let mut island_manager = IslandManager::new();
-    let mut broad_phase = DefaultBroadPhase::new();
-    let mut narrow_phase = NarrowPhase::new();
-    let mut impulse_joint_set = ImpulseJointSet::new();
-    let mut multibody_joint_set = MultibodyJointSet::new();
-    let mut ccd_solver = CCDSolver::new();
-    let mut query_pipeline = QueryPipeline::new();
+    // The deterministic simulation core: Rapier world, ship, sliding collider
+    // windows, fuel/hull/score — everything tick-driven (src/sim.rs). The
+    // loop below only supplies per-tick InputStates and reads state back.
+    let mut sim = Sim::new();
 
     // Normalized [0,1) star field — scaled to the current screen size each frame so
     // it fills the whole viewport in any orientation. (Storing absolute pixel coords
@@ -448,9 +250,8 @@ async fn main() {
     let mut phys_accum = 0.0f32;
     // Ship state at the previous physics step, for render interpolation.
     let mut prev_ship = (0.0f32, stand_y(0.0), 0.0f32); // x, y, angle
-    // Crash state: velocity last frame (impact = big dv) and the wreck timer
-    // (> 0 → crashed: input dead, ship hidden, respawn when it hits 0).
-    let mut prev_vel = (0.0f32, 0.0f32);
+    // Wreck timer (> 0 → crashed: input dead, ship hidden; hands over to the
+    // crash dialog when it hits 0). Impact detection itself lives in the sim.
     let mut crash_timer = 0.0f32;
     let mut mode = Mode::Flying;
     // Instant-replay ring buffer (one frame per physics step) and the
@@ -464,14 +265,17 @@ async fn main() {
     // input change-events + 1 Hz keyframes + params header. In memory only
     // for now; serialized + deflated at the crash to measure what shipping
     // it would cost (shown on the WATCH REPLAY button).
-    let spawn_keyframe = |x: f32| Keyframe {
-        tick: 0, x, y: stand_y(x), angle: 0.0, vx: 0.0, vy: 0.0,
-        angvel: 0.0, fuel: FUEL_MAX, hull: HULL_MAX, glow: 0.0,
-    };
     let mut recorder = Recording::new(sim_params(), (HYBRID_MAX_SECS / PHYSICS_DT) as u32);
-    recorder.push_keyframe(spawn_keyframe(0.0));
-    let mut last_input = InputState::default(); // controls in effect, quantized per frame
+    recorder.push_keyframe(sim.keyframe(0, 0.0));
     let mut blob_sizes: Option<(usize, usize)> = None; // (raw, deflated) at last crash
+
+    // Ghost of the LAST run: on reset the ended run's visual buffer is kept
+    // and replayed alongside live flight on the same clock (ticks since
+    // spawn) as a translucent silhouette. If the previous run outlived the
+    // visual buffer's window, ghost_first_tick > 0 and the ghost only
+    // appears once the current run reaches that tick.
+    let mut ghost: Vec<ReplayFrame> = Vec::new();
+    let mut ghost_first_tick: u32 = 0;
 
     // Debris burst at (x, y) — fired at the real crash and again when the
     // replay reaches its end.
@@ -489,77 +293,125 @@ async fn main() {
             });
         }
     };
-    let mut fuel = FUEL_MAX;
-    let mut hull = HULL_MAX;
     let mut shake = 0.0f32; // impact screen-shake intensity, 0..1, decays fast
     let mut stick_thrust_t = 0.0f32; // seconds the stick-hold engine has been eligible
     let mut flip_settling = false;   // big flip commanded: engine cold until nose settles
-    // Landing pads: score, first-visit set, and how long the ship has been
-    // settled on the current pad (landing counts at PAD_LAND_TIME).
-    let mut score = 0u32;
-    let mut visited_pads: HashSet<(i64, i64)> = HashSet::new();
-    let mut land_timer = 0.0f32;
     let mut pad_msg_timer = 0.0f32; // "+100" flash after a first landing
 
     loop {
-        // Fixed-timestep accumulator: the cap bounds catch-up work after a
-        // hitch (same role as the old per-frame dt cap of 0.05 s). Physics
-        // only runs while flying — the crash dialog and the replay pause the
-        // sim (the wreck is parked anyway) and drain the accumulator so no
-        // catch-up burst fires on resume.
+        // --- Gather this frame's control command ---
+        // Device sampling plus the stick-hold gating machine. This is input
+        // GENERATION (allowed to be frame-based); the quantized InputState it
+        // produces is what the sim consumes per tick AND what the recorder
+        // stores, so live play and resim see bit-identical inputs.
+        let stick_held = TOUCH_STICK_HELD.load(Ordering::Relaxed) != 0;
+        let steer_x = f32::from_bits(TOUCH_STEER_X.load(Ordering::Relaxed));
+        let steer_y = f32::from_bits(TOUCH_STEER_Y.load(Ordering::Relaxed));
+        let steer_mag = (steer_x * steer_x + steer_y * steer_y).sqrt().min(1.0);
+        // Heading error to the commanded nose direction (0 when centred),
+        // for the flip gate. Uses the true body angle.
+        let heading_err = if steer_mag > 0.0 {
+            let target = (-steer_x).atan2(-steer_y);
+            let mut e = target - sim.ship_pose().2;
+            if e > std::f32::consts::PI { e -= std::f32::consts::TAU; }
+            if e < -std::f32::consts::PI { e += std::f32::consts::TAU; }
+            e
+        } else {
+            0.0
+        };
+        if stick_held && heading_err.abs() > FLIP_GATE_RAD {
+            flip_settling = true;
+        }
+        if !stick_held || heading_err.abs() < FLIP_DONE_RAD {
+            flip_settling = false;
+        }
+        if stick_held && !flip_settling {
+            stick_thrust_t += get_frame_time();
+        } else {
+            stick_thrust_t = 0.0;
+        }
+        let stick_throttle =
+            ((stick_thrust_t - STICK_THRUST_DELAY) / STICK_THRUST_RAMP).clamp(0.0, 1.0);
+        let mut throttle_cmd = f32::from_bits(TOUCH_THRUST.load(Ordering::Relaxed))
+            .clamp(0.0, 1.0)
+            .max(stick_throttle);
+        if is_mouse_button_down(MouseButton::Left)
+            || is_key_down(KeyCode::Down)
+            || PAD_THRUST.load(Ordering::Relaxed) != 0
+        {
+            throttle_cmd = 1.0;
+        }
+        // Manual rate rotation: keyboard keys and the gamepad's analog stick.
+        let pad_torque = f32::from_bits(PAD_TORQUE.load(Ordering::Relaxed)).clamp(-1.0, 1.0);
+        let rot: i8 = if is_key_down(KeyCode::Left) || pad_torque < -0.1 {
+            -1
+        } else if is_key_down(KeyCode::Right) || pad_torque > 0.1 {
+            1
+        } else {
+            0
+        };
+        // Inputs are commands — the fuel gate lives in the sim. A dead ship
+        // (or a paused mode) commands nothing.
+        let input = if mode == Mode::Flying && crash_timer <= 0.0 {
+            InputState::from_controls(throttle_cmd, rot, steer_x, steer_y, stick_held)
+        } else {
+            InputState::default()
+        };
+
+        // --- Fixed timestep ---
+        // The cap bounds catch-up work after a hitch. Physics only runs
+        // while flying — the crash dialog and the replay pause the sim (the
+        // wreck is parked anyway) and drain the accumulator so no catch-up
+        // burst fires on resume. Tick events are aggregated for the
+        // frame-level cosmetics below.
+        let mut frame_impact: Option<Impact> = None;
+        let mut frame_landed = false;
+        let mut frame_scored = false;
+        let mut frame_heading_torque = 0.0f32;
         if mode == Mode::Flying {
             phys_accum = (phys_accum + get_frame_time()).min(0.05);
             while phys_accum >= PHYSICS_DT {
-                {
-                    let body = &rigid_body_set[box_handle];
-                    prev_ship = (body.translation().x, body.translation().y, body.rotation().angle());
-                }
-                physics_pipeline.step(
-                    &gravity,
-                    &integration_params,
-                    &mut island_manager,
-                    &mut broad_phase,
-                    &mut narrow_phase,
-                    &mut rigid_body_set,
-                    &mut collider_set,
-                    &mut impulse_joint_set,
-                    &mut multibody_joint_set,
-                    &mut ccd_solver,
-                    Some(&mut query_pipeline),
-                    &(),
-                    &(),
-                );
+                prev_ship = sim.ship_pose();
+                let was_crashed = sim.crashed;
+                let rep = sim.tick(input);
                 phys_accum -= PHYSICS_DT;
-                // Record the step for the instant replay (stops at the moment
-                // of destruction — crash_timer flips positive the same frame,
-                // after this loop, so the impact itself IS captured).
-                if crash_timer <= 0.0 {
-                    if replay_buf.len() >= replay_cap {
-                        replay_buf.pop_front();
+                if was_crashed {
+                    continue; // parked wreck: nothing to record or report
+                }
+                let destroyed = rep.impact.as_ref().is_some_and(|i| i.destroyed);
+                // Visual replay frame. A destroying impact parks the wreck
+                // inside tick(), so that frame takes the report's pre-park
+                // pose/velocity.
+                let vframe = if let Some(imp) = rep.impact.as_ref().filter(|i| i.destroyed) {
+                    ReplayFrame {
+                        x: imp.x, y: imp.y, angle: imp.angle,
+                        vx: imp.vx, vy: imp.vy, glow, rcs: last_rcs,
                     }
-                    let b = &rigid_body_set[box_handle];
-                    replay_buf.push_back(ReplayFrame {
-                        x: b.translation().x,
-                        y: b.translation().y,
-                        angle: b.rotation().angle(),
-                        vx: b.linvel().x,
-                        vy: b.linvel().y,
-                        glow,
-                        rcs: last_rcs,
-                    });
-                    // Hybrid recording: the input in effect for this step
-                    // (an event only when it changed) + periodic keyframes.
-                    if recorder.record_tick(last_input) {
-                        recorder.push_keyframe(Keyframe {
-                            tick: recorder.ticks(),
-                            x: b.translation().x,
-                            y: b.translation().y,
-                            angle: b.rotation().angle(),
-                            vx: b.linvel().x,
-                            vy: b.linvel().y,
-                            angvel: b.angvel(),
-                            fuel, hull, glow,
-                        });
+                } else {
+                    let (x, y, angle) = sim.ship_pose();
+                    let (vx, vy) = sim.ship_vel();
+                    ReplayFrame { x, y, angle, vx, vy, glow, rcs: last_rcs }
+                };
+                if replay_buf.len() >= replay_cap {
+                    replay_buf.pop_front();
+                }
+                replay_buf.push_back(vframe);
+                // Hybrid recording: the input in effect for this step (an
+                // event only when it changed) + periodic keyframes. The
+                // destruction tick skips its periodic keyframe — the
+                // terminal one below carries the impact state instead.
+                if recorder.record_tick(input) && !destroyed {
+                    recorder.push_keyframe(sim.keyframe(recorder.ticks(), glow));
+                }
+                frame_heading_torque = rep.heading_torque;
+                frame_landed = rep.landed;
+                frame_scored |= rep.scored;
+                if let Some(imp) = rep.impact {
+                    let replace = frame_impact
+                        .as_ref()
+                        .is_none_or(|o| imp.destroyed || (!o.destroyed && imp.dv > o.dv));
+                    if replace {
+                        frame_impact = Some(imp);
                     }
                 }
             }
@@ -567,76 +419,49 @@ async fn main() {
             phys_accum = 0.0;
         }
 
-        // --- Impact / crash detection ---
-        // A collision shows up as a large velocity change across the frame's
-        // physics steps. Graduated: dv in SOFT..HARD scrapes the hull
-        // (proportionally, full bar at HARD); dv past HARD — or a scrape the
-        // hull can't absorb — destroys the ship.
-        if mode == Mode::Flying {
-            let (wx, wy, vx, vy) = {
-                let b = &rigid_body_set[box_handle];
-                (b.translation().x, b.translation().y, b.linvel().x, b.linvel().y)
-            };
-            if crash_timer <= 0.0 {
-                let (dvx, dvy) = (vx - prev_vel.0, vy - prev_vel.1);
-                let dv = (dvx * dvx + dvy * dvy).sqrt();
-                if dv > CRASH_DV_SOFT {
-                    let damage =
-                        (dv - CRASH_DV_SOFT) / (CRASH_DV_HARD - CRASH_DV_SOFT) * HULL_MAX;
-                    hull -= damage;
-                    shake = (shake + damage / HULL_MAX + 0.25).min(1.0);
-                    if dv > CRASH_DV_HARD || hull <= 0.0 {
-                        hull = 0.0;
-                        crash_timer = CRASH_DIALOG_DELAY;
-                        // Debris burst at the crash site.
-                        boom_burst(wx, wy, &mut particles);
-                        if let Some(s) = &boom_snd {
-                            play_sound(s, PlaySoundParams { looped: false, volume: 0.9 });
-                        }
-                        // Freeze the shareable recording at the impact (the
-                        // body still holds the post-impact pose/velocity —
-                        // the wreck is parked just below) and measure what
-                        // shipping it would cost, raw and deflated.
-                        {
-                            let b = &rigid_body_set[box_handle];
-                            recorder.finalize(Keyframe {
-                                tick: recorder.ticks(),
-                                x: wx, y: wy,
-                                angle: b.rotation().angle(),
-                                vx, vy,
-                                angvel: b.angvel(),
-                                fuel, hull, glow,
-                            });
-                        }
-                        let blob = recorder.serialize(BUILD_ID.load(Ordering::Relaxed));
-                        blob_sizes = Some((blob.len(), compress(&blob).len()));
-                        // Park the wreck where it died so the camera holds still.
-                        let rb = rigid_body_set.get_mut(box_handle).unwrap();
-                        rb.set_linvel(vector![0.0, 0.0], true);
-                        rb.set_angvel(0.0, true);
-                        rb.set_gravity_scale(0.0, true);
-                    } else {
-                        // Survivable scrape: a spray of sparks + a quiet thud,
-                        // scaled to the damage taken. The ship keeps flying.
-                        for _ in 0..(6 + (damage * 0.3) as i32) {
-                            let ang = gen_range(0.0f32, std::f32::consts::TAU);
-                            let spd = gen_range(0.8f32, 4.0);
-                            particles.push(Particle {
-                                x: wx + gen_range(-0.25f32, 0.25),
-                                y: wy + gen_range(-0.25f32, 0.25),
-                                vx: vx * 0.3 + ang.cos() * spd,
-                                vy: vy * 0.3 + ang.sin() * spd + 1.0,
-                                life: gen_range(0.25f32, 0.55),
-                                kind: 3,
-                            });
-                        }
-                        if let Some(s) = &boom_snd {
-                            play_sound(s, PlaySoundParams { looped: false, volume: 0.25 });
-                        }
-                    }
+        // --- Crash flow & impact cosmetics (from the ticks' reports) ---
+        // Detection and hull bookkeeping happen inside sim.tick(); this only
+        // turns the strongest impact of the frame into effects and, on
+        // destruction, freezes the shareable recording.
+        if let Some(imp) = &frame_impact {
+            shake = (shake + imp.damage / HULL_MAX + 0.25).min(1.0);
+            if imp.destroyed {
+                crash_timer = CRASH_DIALOG_DELAY;
+                // Debris burst at the crash site.
+                boom_burst(imp.x, imp.y, &mut particles);
+                if let Some(s) = &boom_snd {
+                    play_sound(s, PlaySoundParams { looped: false, volume: 0.9 });
+                }
+                // Terminal keyframe with the impact pose/velocity (the wreck
+                // is already parked and zeroed), then measure what shipping
+                // the blob would cost, raw and deflated.
+                recorder.finalize(Keyframe {
+                    tick: recorder.ticks(),
+                    x: imp.x, y: imp.y, angle: imp.angle,
+                    vx: imp.vx, vy: imp.vy, angvel: imp.angvel,
+                    fuel: sim.fuel, hull: sim.hull, glow,
+                });
+                let blob = recorder.serialize(BUILD_ID.load(Ordering::Relaxed));
+                blob_sizes = Some((blob.len(), compress(&blob).len()));
+            } else {
+                // Survivable scrape: a spray of sparks + a quiet thud,
+                // scaled to the damage taken. The ship keeps flying.
+                for _ in 0..(6 + (imp.damage * 0.3) as i32) {
+                    let ang = gen_range(0.0f32, std::f32::consts::TAU);
+                    let spd = gen_range(0.8f32, 4.0);
+                    particles.push(Particle {
+                        x: imp.x + gen_range(-0.25f32, 0.25),
+                        y: imp.y + gen_range(-0.25f32, 0.25),
+                        vx: imp.vx * 0.3 + ang.cos() * spd,
+                        vy: imp.vy * 0.3 + ang.sin() * spd + 1.0,
+                        life: gen_range(0.25f32, 0.55),
+                        kind: 3,
+                    });
+                }
+                if let Some(s) = &boom_snd {
+                    play_sound(s, PlaySoundParams { looped: false, volume: 0.25 });
                 }
             }
-            prev_vel = (vx, vy);
         }
         // Wreck timer → once the explosion has played out, hand over to the
         // crash dialog (fly again / watch replay). Respawn happens from there.
@@ -697,22 +522,18 @@ async fn main() {
         let safe_left = f32::from_bits(SAFE_AREA_LEFT.load(Ordering::Relaxed)).min(24.0) * dpi;
 
         let (mut cam_x, mut cam_y, mut angle, mut ship_vx, mut ship_vy) = {
-            let body = &rigid_body_set[box_handle];
-            let p = body.translation();
-            let v = body.linvel();
+            let (bx, by, ba) = sim.ship_pose();
+            let (vx, vy) = sim.ship_vel();
             // Interpolate between the last two physics steps so rendering
             // stays smooth when the frame rate and PHYSICS_DT don't divide
             // evenly (e.g. 144 Hz display over a 120 Hz simulation).
             let alpha = (phys_accum / PHYSICS_DT).clamp(0.0, 1.0);
             let (px, py, pa) = prev_ship;
-            let mut da = body.rotation().angle() - pa;
-            if da > std::f32::consts::PI { da -= std::f32::consts::TAU; }
-            if da < -std::f32::consts::PI { da += std::f32::consts::TAU; }
             (
-                px + (p.x - px) * alpha,
-                py + (p.y - py) * alpha,
-                pa + da * alpha,
-                v.x, v.y,
+                px + (bx - px) * alpha,
+                py + (by - py) * alpha,
+                lerp_angle(pa, ba, alpha),
+                vx, vy,
             )
         };
 
@@ -764,6 +585,31 @@ async fn main() {
             ship_vy = f.vy;
         }
 
+        // Ghost of the last run: where the previous run's ship was at this
+        // many ticks after ITS spawn. Same fractional-tick lerp as the
+        // replay; None once the ghost reaches its crash (it "dies" there),
+        // before its buffer starts (ring-capped long run), or outside Flying.
+        let ghost_pose: Option<(f32, f32, f32)> =
+            if mode == Mode::Flying && !crashed && !ghost.is_empty() {
+                let t_now =
+                    recorder.ticks() as f32 + (phys_accum / PHYSICS_DT).clamp(0.0, 1.0);
+                let gt = t_now - ghost_first_tick as f32;
+                let idx = gt.floor() as usize;
+                if gt >= 0.0 && idx + 1 < ghost.len() {
+                    let ft = gt - idx as f32;
+                    let (a, b) = (ghost[idx], ghost[idx + 1]);
+                    Some((
+                        a.x + (b.x - a.x) * ft,
+                        a.y + (b.y - a.y) * ft,
+                        lerp_angle(a.angle, b.angle, ft),
+                    ))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
         // Local-to-world helpers (position and direction)
         let lp = |lx: f32, ly: f32| -> (f32, f32) {
             (cam_x + lx * angle.cos() - ly * angle.sin(),
@@ -774,58 +620,12 @@ async fn main() {
              lx * angle.sin() + ly * angle.cos())
         };
 
-        // Main-engine throttle (0..1), read early so lighting can use it.
-        // JET button / keyboard / mouse / pad = immediate full power. HOLDING
-        // the attitude stick also thrusts, but gated so steering stays cheap:
-        // a flick shorter than STICK_THRUST_DELAY never lights the engine,
-        // thrust then ramps in over STICK_THRUST_RAMP, and a commanded flip
-        // past FLIP_GATE_RAD keeps it cold until the nose settles within
-        // FLIP_DONE_RAD (the gate resets the ramp, so post-flip thrust also
-        // fades in). Dead while crashed or dry.
-        let stick_held = TOUCH_STICK_HELD.load(Ordering::Relaxed) != 0;
-        let steer_x = f32::from_bits(TOUCH_STEER_X.load(Ordering::Relaxed));
-        let steer_y = f32::from_bits(TOUCH_STEER_Y.load(Ordering::Relaxed));
-        let steer_mag = (steer_x * steer_x + steer_y * steer_y).sqrt().min(1.0);
-        // Heading error to the commanded nose direction (0 when centred).
-        // Physics already stepped this frame, so this is the same angle the
-        // heading controller below acts on.
-        let heading_err = if steer_mag > 0.0 {
-            let target = (-steer_x).atan2(-steer_y);
-            let mut e = target - rigid_body_set[box_handle].rotation().angle();
-            if e > std::f32::consts::PI { e -= std::f32::consts::TAU; }
-            if e < -std::f32::consts::PI { e += std::f32::consts::TAU; }
-            e
-        } else {
-            0.0
-        };
-        if stick_held && heading_err.abs() > FLIP_GATE_RAD {
-            flip_settling = true;
-        }
-        if !stick_held || heading_err.abs() < FLIP_DONE_RAD {
-            flip_settling = false;
-        }
-        if stick_held && !flip_settling {
-            stick_thrust_t += get_frame_time();
-        } else {
-            stick_thrust_t = 0.0;
-        }
-        let stick_throttle =
-            ((stick_thrust_t - STICK_THRUST_DELAY) / STICK_THRUST_RAMP).clamp(0.0, 1.0);
-        let mut throttle = f32::from_bits(TOUCH_THRUST.load(Ordering::Relaxed))
-            .clamp(0.0, 1.0)
-            .max(stick_throttle);
-        if is_mouse_button_down(MouseButton::Left)
-            || is_key_down(KeyCode::Down)
-            || PAD_THRUST.load(Ordering::Relaxed) != 0
-        {
-            throttle = 1.0;
-        }
-        if crashed || mode != Mode::Flying || fuel <= 0.0 {
-            throttle = 0.0;
-        }
-        let thrusting_now = throttle > 0.0;
-        glow += (throttle - glow) * 0.12;
-        // During playback the engine visuals/sound follow the recording.
+        // Engine glow follows the fuel-gated command (the command itself was
+        // gathered at the top of the frame; the sim applies the same gate,
+        // so visuals track what the engine actually does). During playback
+        // the recording overrides it.
+        let throttle_fx = if sim.fuel > 0.0 { input.throttle_f32() } else { 0.0 };
+        glow += (throttle_fx - glow) * 0.12;
         if let Some(f) = replay_frame {
             glow = f.glow;
         }
@@ -833,137 +633,23 @@ async fn main() {
             set_sound_volume(s, glow * 0.6);
         }
 
-        // --- Slide the cave window (2D: segments in x, layers in y) ---
+        // Column/layer ranges for the wall meshes below. Rendering derives
+        // its own ranges from the camera (which tracks the replayed pose in
+        // playback); the collider windows are the sim's business and follow
+        // the true body position inside sim.tick().
         let ship_seg = (cam_x / SEG_LEN).floor() as i64;
         let want_left  = ship_seg - HALF_WINDOW;
         let want_right = ship_seg + HALF_WINDOW;
         let ship_layer = (cam_y / V_PERIOD).round() as i64;
         let (lay_lo, lay_hi) = (ship_layer - 1, ship_layer + 1);
 
-        cave.retain(|&(layer, idx), handles| {
-            if layer < lay_lo || layer > lay_hi || idx < want_left || idx > want_right {
-                for h in handles.drain(..) {
-                    collider_set.remove(h, &mut island_manager, &mut rigid_body_set, false);
-                }
-                false
-            } else {
-                true
-            }
-        });
-        for layer in lay_lo..=lay_hi {
-            for idx in want_left..=want_right {
-                cave.entry((layer, idx))
-                    .or_insert_with(|| insert_seg(idx, layer, &mut collider_set));
-            }
+        // Landing state for the banners: detection/refuel/score happen per
+        // tick in the sim; here we just flash the "+100" on a first visit.
+        let landed = frame_landed;
+        if frame_scored {
+            pad_msg_timer = 1.8;
         }
-
-        // --- Slide the shaft window ---
-        // Shafts for the gap below and above the ship's layer cover everything
-        // reachable within half a vertical period.
-        let s_lo = want_left.div_euclid(SHAFT_SPACING_SEGS) - 1;
-        let s_hi = want_right.div_euclid(SHAFT_SPACING_SEGS) + 1;
-        shafts.retain(|&(s, gap), sh| {
-            if s < s_lo || s > s_hi || gap < ship_layer - 1 || gap > ship_layer {
-                for h in sh.handles.drain(..) {
-                    collider_set.remove(h, &mut island_manager, &mut rigid_body_set, false);
-                }
-                false
-            } else {
-                true
-            }
-        });
-        for s in s_lo..=s_hi {
-            for gap in [ship_layer - 1, ship_layer] {
-                if !shafts.contains_key(&(s, gap)) {
-                    spawn_shaft(s, gap, &mut collider_set, &mut shafts);
-                }
-            }
-        }
-
-        // --- Slide the obstacle window (mirrors the wall window) ---
-        let win_left_x  = want_left as f32 * SEG_LEN;
-        let win_right_x = (want_right + 1) as f32 * SEG_LEN;
-        // Slot index covers position jitter (±3 m) with a margin.
-        let k_left  = ((win_left_x  - 3.0) / OBSTACLE_SPACING).floor() as i64;
-        let k_right = ((win_right_x + 3.0) / OBSTACLE_SPACING).ceil()  as i64;
-
-        // Evict obstacles whose slot or layer fell outside the window.
-        obstacles.retain(|&(k, layer), ob| {
-            if k < k_left || k > k_right || layer < lay_lo || layer > lay_hi {
-                collider_set.remove(ob.handle, &mut island_manager, &mut rigid_body_set, false);
-                false
-            } else {
-                true
-            }
-        });
-        // Load any newly-in-range obstacles.
-        for layer in lay_lo..=lay_hi {
-            for k in k_left..=k_right {
-                if !obstacles.contains_key(&(k, layer)) {
-                    spawn_obstacle(k, layer, &mut collider_set, &mut obstacles);
-                }
-            }
-        }
-
-        // --- Slide the pad window (same shape; ±20 m position jitter) ---
-        let p_left  = ((win_left_x  - 20.0) / PAD_SPACING).floor() as i64;
-        let p_right = ((win_right_x + 20.0) / PAD_SPACING).ceil()  as i64;
-        pads.retain(|&(p, layer), pad| {
-            if p < p_left || p > p_right || layer < lay_lo || layer > lay_hi {
-                collider_set.remove(pad.handle, &mut island_manager, &mut rigid_body_set, false);
-                false
-            } else {
-                true
-            }
-        });
-        for layer in lay_lo..=lay_hi {
-            for p in p_left..=p_right {
-                if !pads.contains_key(&(p, layer)) {
-                    spawn_pad(p, layer, &mut collider_set, &mut pads);
-                }
-            }
-        }
-
-        // --- Landing detection ---
-        // A landing = resting on a pad deck: slow, upright, feet on the deck
-        // (leg capsules bottom out 0.73 below the body origin), held for
-        // PAD_LAND_TIME. First visit scores; parked ships refuel.
-        let frame_dt = get_frame_time();
-        let mut on_pad: Option<(i64, i64)> = None;
-        if mode == Mode::Flying && !crashed {
-            let b = &rigid_body_set[box_handle];
-            let (bx, by) = (b.translation().x, b.translation().y);
-            let v = b.linvel();
-            let settled = b.rotation().angle().abs() < 0.30
-                && v.x.abs() < 1.0
-                && v.y.abs() < 1.0
-                && b.angvel().abs() < 0.5;
-            if settled {
-                on_pad = pads.iter().find_map(|(&key, pad)| {
-                    let feet = by - 0.73;
-                    ((bx - pad.cx).abs() <= PAD_HALF_W && (feet - pad.y).abs() < 0.3)
-                        .then_some(key)
-                });
-            }
-        }
-        let landed = if let Some(key) = on_pad {
-            land_timer += frame_dt;
-            if land_timer >= PAD_LAND_TIME {
-                if visited_pads.insert(key) {
-                    score += PAD_POINTS;
-                    pad_msg_timer = 1.8;
-                }
-                fuel = (fuel + PAD_REFUEL_PER_S * frame_dt).min(FUEL_MAX);
-                hull = (hull + HULL_REPAIR_PER_S * frame_dt).min(HULL_MAX);
-                true
-            } else {
-                false
-            }
-        } else {
-            land_timer = 0.0;
-            false
-        };
-        pad_msg_timer = (pad_msg_timer - frame_dt).max(0.0);
+        pad_msg_timer = (pad_msg_timer - get_frame_time()).max(0.0);
 
         // --- Draw ---
         clear_background(Color::from_rgba(8, 8, 18, 255));
@@ -1092,7 +778,7 @@ async fn main() {
         // recede horizontally into the rock, rows run along y. Col 0 sits exactly
         // on the wall polyline (= the colliders), and a solid fill extends past
         // the deepest col to blend into the inter-layer rock fill.
-        for (&(s, _gap), shaft) in shafts.iter() {
+        for (&(s, _gap), shaft) in sim.shafts.iter() {
             for side in [0u8, 1u8] {
                 let pts = &shaft.walls[side as usize];
                 let dir = if side == 0 { -1.0f32 } else { 1.0 };
@@ -1160,13 +846,9 @@ async fn main() {
         // deterministic per-facet brightness plus a fake top-light gradient, so
         // boulders read as low-poly rocks with brighter tops.
         let bevel = 16.0 * dpi; // obstacle bevel width, tuned in CSS px
-        // Sorted keys, not HashMap order: adjacent boulders can overlap, and
-        // map iteration order changes as the window slides, which would flip
-        // their z-order mid-flight.
-        let mut obstacle_keys: Vec<(i64, i64)> = obstacles.keys().copied().collect();
-        obstacle_keys.sort_unstable();
-        for &(k, layer) in &obstacle_keys {
-            let ob = &obstacles[&(k, layer)];
+        // BTreeMap iteration is key-ordered, so adjacent overlapping boulders
+        // keep a stable z-order as the window slides.
+        for (&(k, _layer), ob) in sim.obstacles.iter() {
             let (c, s) = (ob.rot.cos(), ob.rot.sin());
             let poly: Vec<Vec2> = ob.verts.iter().map(|p| {
                 let wx = ob.cx + p.x * c - p.y * s;
@@ -1234,7 +916,7 @@ async fn main() {
         // Landing pads — man-made metal, drawn with the default material so
         // the deck and beacons stay readable in the dark. Deck top = the
         // collider line (alignment rule); legs drop to the floor curve.
-        for (&pad_key, pad) in pads.iter() {
+        for (&pad_key, pad) in sim.pads.iter() {
             let pad_layer = pad_key.1;
             let top_mid = w2s(pad.cx, pad.y, sh, cam_x, cam_y);
             if top_mid.x < -margin || top_mid.x > sw + margin
@@ -1258,7 +940,7 @@ async fn main() {
                     Color::from_rgba(60, 68, 82, 255));
             }
             // Beacons: blinking green until first landing, then steady blue.
-            let visited = visited_pads.contains(&pad_key);
+            let visited = sim.visited_pads.contains(&pad_key);
             let bc = if visited {
                 Color::from_rgba(110, 140, 200, 200)
             } else if (get_time() * 5.0).sin() > 0.0 {
@@ -1295,6 +977,28 @@ async fn main() {
                 sh, cam_x, cam_y,
             )
         };
+
+        // Ghost of the last run — a translucent silhouette racing the same
+        // spawn clock, drawn behind the player ship. No flame/particles: a
+        // quiet presence, not a second ship fighting for attention.
+        if let Some((gx, gy, ga)) = ghost_pose {
+            let gs = w2s(gx, gy, sh, cam_x, cam_y);
+            if gs.x > -120.0 && gs.x < sw + 120.0 && gs.y > -120.0 && gs.y < sh + 120.0 {
+                let g_rot = |lx: f32, ly: f32| -> Vec2 {
+                    let sx = lx * SHIP_SCALE;
+                    let sy = ly * SHIP_SCALE;
+                    w2s(
+                        gx + sx * ga.cos() - sy * ga.sin(),
+                        gy + sx * ga.sin() + sy * ga.cos(),
+                        sh, cam_x, cam_y,
+                    )
+                };
+                let gc = Color::from_rgba(150, 190, 255, 70);
+                for t in SHIP_TRIS.iter() {
+                    draw_triangle(g_rot(t[0], t[1]), g_rot(t[2], t[3]), g_rot(t[4], t[5]), gc);
+                }
+            }
+        }
 
         // The ship renders while flying (unless it's a wreck) and during the
         // replay (where cam/angle/glow carry the recorded pose); the crash
@@ -1385,7 +1089,7 @@ async fn main() {
         let cave_x = cam_x.rem_euclid(PERIOD);
         let hud_fs = 36.0 * ui;
         let hud_y = safe_top + 252.0 * ui; // below the fuel + hull gauges
-        let hud = format!("score={}  x={:.0}  lvl={}  {:.0}m/{}m   [R] reset   FPS: {:.0}", score, cam_x, ship_layer, cave_x, PERIOD as i32, smooth_fps);
+        let hud = format!("score={}  x={:.0}  lvl={}  {:.0}m/{}m   [R] reset   FPS: {:.0}", sim.score, cam_x, ship_layer, cave_x, PERIOD as i32, smooth_fps);
         draw_text(&hud, safe_left + 10.0 * ui, hud_y, hud_fs, WHITE);
         // Speed readout in the same danger color as the velocity arrow.
         let hud_w = measure_text(&hud, None, hud_fs as u16, 1.0).width;
@@ -1479,7 +1183,7 @@ async fn main() {
             let dims = measure_text(msg, None, fs as u16, 1.0);
             draw_text(msg, (sw - dims.width) / 2.0, sh * 0.42, fs,
                 Color::from_rgba(255, 90, 60, 255));
-        } else if fuel <= 0.0 {
+        } else if sim.fuel <= 0.0 {
             let msg = "OUT OF FUEL — [R] RESET";
             let fs = 48.0 * ui;
             let dims = measure_text(msg, None, fs as u16, 1.0);
@@ -1492,98 +1196,32 @@ async fn main() {
             let alpha = (pad_msg_timer / 1.8 * 255.0) as u8;
             draw_text(&msg, (sw - dims.width) / 2.0, sh * 0.38, fs,
                 Color::from_rgba(120, 255, 160, alpha));
-        } else if landed && (fuel < FUEL_MAX || hull < HULL_MAX) {
-            let msg = if fuel < FUEL_MAX { "REFUELING" } else { "REPAIRING" };
+        } else if landed && (sim.fuel < FUEL_MAX || sim.hull < HULL_MAX) {
+            let msg = if sim.fuel < FUEL_MAX { "REFUELING" } else { "REPAIRING" };
             let fs = 36.0 * ui;
             let dims = measure_text(msg, None, fs as u16, 1.0);
             draw_text(msg, (sw - dims.width) / 2.0, sh * 0.38, fs,
                 Color::from_rgba(120, 220, 160, 200));
         }
 
-        // Controls
-        let rb = rigid_body_set.get_mut(box_handle).unwrap();
-        rb.reset_forces(true);
-        rb.reset_torques(true);
-        if thrusting_now {
-            let a = rb.rotation().angle();
-            let f = THRUST_FORCE * throttle;
-            rb.add_force(vector![-a.sin() * f, a.cos() * f], true);
-        }
-        // Manual rate rotation: keyboard keys and the gamepad's analog stick.
-        let pad_torque = f32::from_bits(PAD_TORQUE.load(Ordering::Relaxed)).clamp(-1.0, 1.0);
-        let rcs_ok = mode == Mode::Flying && !crashed && fuel > 0.0;
-        let rotating_left  = rcs_ok && (is_key_down(KeyCode::Left)  || pad_torque < -0.1);
-        let rotating_right = rcs_ok && (is_key_down(KeyCode::Right) || pad_torque >  0.1);
-        // Rotate by firing a side RCS booster: apply the force *at the nozzle*
-        // (off-center) instead of a pure couple, so the ship pivots about where
-        // the boosters actually push. Nozzles exhaust downward (-Y local) → the
-        // reaction force is +Y local at x = ∓0.30: left nozzle → clockwise,
-        // right nozzle → counter-clockwise. RCS_FORCE (module const) is tuned
-        // so the x-lever (~0.30) yields roughly the previous ±1.0 pure torque.
-        let fire_rcs = |rb: &mut RigidBody, side: f32, mag: f32| {
-            let (px, py) = lp(0.30 * side, -0.71);
-            let (fx, fy) = ld(0.0, mag);
-            rb.add_force_at_point(vector![fx, fy], point![px, py], true);
-        };
-        if rotating_left {
-            fire_rcs(rb, -1.0, RCS_FORCE);
-        } else if rotating_right {
-            fire_rcs(rb, 1.0, RCS_FORCE);
-        }
-
-        // Touch heading control: the stick's direction is the commanded nose
-        // direction; a PD controller torques the ship toward it the short way
-        // around, with authority scaled by deflection so a small nudge trims
-        // and full deflection flips hard. Manual rotation (keys/pad) wins
-        // while held. Applied as a pure torque (convention-safe: err > 0
-        // always means "target is counter-clockwise of the nose in world
-        // space", and positive torque rotates counter-clockwise).
-        // steer_mag / heading_err come from the throttle block above (screen
-        // y grows downward, so stick (x, y) commands world nose (x, -y); the
-        // nose at angle a points (-sin a, cos a) → target = atan2(-x, -y)).
-        let mut heading_torque = 0.0f32;
-        if rcs_ok && steer_mag > 0.0 && !rotating_left && !rotating_right {
-            heading_torque = (heading_err * HEADING_KP - rb.angvel() * HEADING_KD)
-                .clamp(-HEADING_TORQUE_MAX, HEADING_TORQUE_MAX) * steer_mag;
-            rb.add_torque(heading_torque, true);
-        }
-
         // --- Particle emission ---
+        // (Forces, fuel burn and the heading controller all run per tick in
+        // the sim; this section is purely cosmetic.)
         let dt = get_frame_time();
 
-        // Which RCS nozzle is puffing: live flags while flying, the recorded
-        // side during playback. `last_rcs` feeds the replay recorder.
+        // Which RCS nozzle is puffing: live command + the sim's last applied
+        // heading torque while flying, the recorded side during playback.
+        // `last_rcs` feeds the visual replay recorder.
         let (puff_left, puff_right) = if let Some(f) = replay_frame {
             (f.rcs < 0, f.rcs > 0)
         } else {
-            (rotating_left || heading_torque < -0.4,
-             rotating_right || heading_torque > 0.4)
+            let rcs_live = sim.fuel > 0.0 && mode == Mode::Flying && !crashed;
+            (rcs_live && (input.rot < 0 || frame_heading_torque < -0.4),
+             rcs_live && (input.rot > 0 || frame_heading_torque > 0.4))
         };
         if mode == Mode::Flying {
             last_rcs = if puff_left { -1 } else if puff_right { 1 } else { 0 };
-            // Resolved controls for the hybrid recorder (quantized). These
-            // drive the physics steps of the NEXT frame, which is exactly
-            // when record_tick stores them.
-            last_input = InputState {
-                throttle: (throttle * 255.0).round() as u8,
-                rot: if rotating_left { -1 } else if rotating_right { 1 } else { 0 },
-                steer_x: (steer_x.clamp(-1.0, 1.0) * 127.0).round() as i8,
-                steer_y: (steer_y.clamp(-1.0, 1.0) * 127.0).round() as i8,
-                stick_held: stick_held as u8,
-            };
         }
-
-        // Burn fuel for whatever fired this frame (main burn scales with throttle).
-        if thrusting_now {
-            fuel -= FUEL_BURN_MAIN * throttle * dt;
-        }
-        if rotating_left || rotating_right {
-            fuel -= FUEL_BURN_RCS * dt;
-        } else if heading_torque != 0.0 {
-            // Heading control sips proportionally to the torque it commands.
-            fuel -= FUEL_BURN_RCS * (heading_torque.abs() / HEADING_TORQUE_MAX) * dt;
-        }
-        fuel = fuel.max(0.0);
 
         // Main thruster: exhaust exits local -Y (out the bottom), up to 8
         // particles/frame — count and exhaust speed scale with the throttle.
@@ -1592,7 +1230,7 @@ async fn main() {
         let exhaust = match replay_frame {
             Some(f) if f.glow > 0.05 => f.glow,
             Some(_) => 0.0,
-            None => throttle,
+            None => throttle_fx,
         };
         if exhaust > 0.0 {
             for _ in 0..(8.0 * exhaust).ceil() as i32 {
@@ -1657,29 +1295,26 @@ async fn main() {
         // Reset / respawn: R key, gamepad Start/Y, or the dialog's FLY AGAIN
         // button. Also the escape hatch out of the dialog and the replay.
         if is_key_pressed(KeyCode::R) || PAD_RESET.swap(0, Ordering::Relaxed) != 0 || do_reset {
-            let rb = rigid_body_set.get_mut(box_handle).unwrap();
-            rb.set_gravity_scale(1.0, true); // in case we reset out of a crash
-            rb.set_translation(vector![RESET_X, stand_y(RESET_X)], true);
-            rb.set_linvel(vector![0.0, 0.0], true);
-            rb.set_angvel(0.0, true);
-            rb.set_rotation(Rotation::new(0.0), true);
-            // Snap the interpolation + crash state too, or the camera lerps
-            // across the teleport and the velocity jump reads as an impact.
+            sim.reset(RESET_X);
+            // Snap the interpolation too, or the camera lerps across the
+            // teleport for a frame.
             prev_ship = (RESET_X, stand_y(RESET_X), 0.0);
-            prev_vel = (0.0, 0.0);
             crash_timer = 0.0;
-            fuel = FUEL_MAX;
-            hull = HULL_MAX;
             shake = 0.0;
             mode = Mode::Flying;
+            // The ended run becomes the ghost for the next one — unless it
+            // was a blink-and-gone attempt (keep the previous ghost then).
+            if replay_buf.len() >= (GHOST_MIN_SECS / PHYSICS_DT) as usize {
+                ghost_first_tick = recorder.ticks().saturating_sub(replay_buf.len() as u32);
+                ghost = replay_buf.drain(..).collect();
+            }
             // A fresh attempt records a fresh replay (both formats).
             replay_buf.clear();
             replay_t = 0.0;
             last_rcs = 0;
             glow = 0.0;
             recorder = Recording::new(sim_params(), (HYBRID_MAX_SECS / PHYSICS_DT) as u32);
-            recorder.push_keyframe(spawn_keyframe(RESET_X));
-            last_input = InputState::default();
+            recorder.push_keyframe(sim.keyframe(0, 0.0));
             blob_sizes = None;
         }
 
@@ -1761,14 +1396,14 @@ async fn main() {
 
         // Pad markers on the minimap: bright line at deck height, green until
         // visited, blue-grey after.
-        for (&pad_key, pad) in pads.iter() {
+        for (&pad_key, pad) in sim.pads.iter() {
             if (pad.cx - cam_x).abs() > MM_HALF_X + 5.0 || (pad.y - cam_y).abs() > MM_HALF_Y + 5.0 {
                 continue;
             }
             let y = to_mm_y(pad.y).clamp(mm_oy, mm_oy + mm_h);
             let x0 = to_mm_x(pad.cx - PAD_HALF_W).clamp(mm_ox, mm_ox + mm_w);
             let x1 = to_mm_x(pad.cx + PAD_HALF_W).clamp(mm_ox, mm_ox + mm_w);
-            let c = if visited_pads.contains(&pad_key) {
+            let c = if sim.visited_pads.contains(&pad_key) {
                 Color::from_rgba(110, 140, 200, 220)
             } else {
                 Color::from_rgba(90, 240, 130, 255)
@@ -1778,7 +1413,7 @@ async fn main() {
 
         // Obstacle shapes on the minimap — actual polygon, not just a dot.
         // All loaded layers; the y window filters to what's actually in view.
-        for ob in obstacles.values() {
+        for ob in sim.obstacles.values() {
             if (ob.cx - cam_x).abs() > MM_HALF_X + 6.0 || (ob.cy - cam_y).abs() > MM_HALF_Y + 6.0 {
                 continue;
             }
@@ -1816,13 +1451,22 @@ async fn main() {
         // Ship dot — map centre
         draw_circle(mm_cx, mm_cy, 3.0 * ui, YELLOW);
 
+        // Ghost dot — the last run's position, when it's inside the window.
+        if let Some((gx, gy, _)) = ghost_pose
+            && (gx - cam_x).abs() < MM_HALF_X
+            && (gy - cam_y).abs() < MM_HALF_Y
+        {
+            draw_circle(to_mm_x(gx), to_mm_y(gy), 2.5 * ui,
+                Color::from_rgba(150, 190, 255, 180));
+        }
+
         // Border
         draw_rectangle_lines(mm_ox, mm_oy, mm_w, mm_h, 1.0, Color::from_rgba(255, 255, 255, 120));
 
         // Fuel gauge — slim bar directly under the minimap.
         let fg_y = mm_oy + mm_h + 8.0 * ui;
         let fg_h = 14.0 * ui;
-        let frac = fuel / FUEL_MAX;
+        let frac = sim.fuel / FUEL_MAX;
         let fg_col = if frac > 0.5 {
             Color::from_rgba(90, 200, 120, 255)
         } else if frac > 0.25 {
@@ -1836,7 +1480,7 @@ async fn main() {
 
         // Hull gauge — same slim bar directly under the fuel gauge.
         let hg_y = fg_y + fg_h + 6.0 * ui;
-        let hfrac = hull / HULL_MAX;
+        let hfrac = sim.hull / HULL_MAX;
         let hg_col = if hfrac > 0.5 {
             Color::from_rgba(150, 175, 215, 255)
         } else if hfrac > 0.25 {
