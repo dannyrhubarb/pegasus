@@ -139,7 +139,7 @@ impl Recording {
             self.last_input = Some(input);
         }
         self.ticks += 1;
-        self.ticks % KEYFRAME_EVERY == 0
+        self.ticks.is_multiple_of(KEYFRAME_EVERY)
     }
 
     pub fn push_keyframe(&mut self, kf: Keyframe) {
@@ -175,10 +175,10 @@ impl Recording {
             .last()
             .map(|e| e.input);
         self.events.retain(|e| e.tick >= start);
-        if let Some(input) = effective {
-            if self.events.first().map(|e| e.tick) != Some(start) {
-                self.events.insert(0, InputEvent { tick: start, input });
-            }
+        if let Some(input) = effective
+            && self.events.first().map(|e| e.tick) != Some(start)
+        {
+            self.events.insert(0, InputEvent { tick: start, input });
         }
     }
 
