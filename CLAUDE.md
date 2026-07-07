@@ -514,7 +514,11 @@ leave the device (sharing/ghosts/leaderboards), in memory only for now:
   the deploy revision to a u32 and pushes it via the `set_build_id` export
   (0 = local dev). Bump `REPLAY_FORMAT_VERSION` when the layout changes.
 - Trimming keeps the retained window **starting at a keyframe** with the
-  effective input re-seeded there, so it stays replayable after the ring cap.
+  effective input re-seeded there, so it stays replayable after the cap.
+  The hybrid window is `HYBRID_MAX_SECS = 60 min` (~1 MB/h worst case) — a
+  memory safety net, NOT the visual buffer's 5 min: a highscore ghost needs
+  the run from its spawn, so the hybrid recording must not lose t = 0 on
+  normal-length runs.
 - On destruction the blob is serialized (+ `compress` = `miniz_oxide` deflate,
   the repo's only new dependency) and the WATCH REPLAY button hint shows both
   sizes: `[ENTER] · <raw> → <deflated>`.
