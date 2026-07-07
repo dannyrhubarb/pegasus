@@ -45,7 +45,8 @@ push-retry loop for concurrent deploys):
   event regardless.
 
 ## Project structure
-- `src/main.rs` — input exports/atomics, window conf, the whole game loop (physics, window sliding, drawing, HUD, minimap), and the unit tests
+- `src/main.rs` — input exports/atomics, window conf, the frame loop (input gathering + stick gating, camera, drawing, HUD, minimap, crash dialog/replay/ghost cosmetics), and unit tests
+- `src/sim.rs` — **the deterministic simulation core**: `Sim` owns all Rapier state, the sliding collider windows (BTreeMaps) and ship systems (fuel/hull/score/landing/crash), advanced ONLY by `tick(InputState) -> TickReport` at `PHYSICS_DT`; plus `resim(&Recording)` and all physics constants. Same inputs + same start keyframe → bit-identical trajectory (unit-tested). **Any new gameplay force/effect must go through `tick`** — frame-level physics mutation would break replay determinism.
 - `src/world.rs` — deterministic world generation: cave curves, shafts, obstacles, pads, `stand_y`, `Rng`/`hash_u32`, and their constants (`SEG_LEN`, `RESET_X`, `PERIOD`, `V_PERIOD`, …)
 - `src/render.rs` — radial light shader sources, faceted wall/shaft lattice (`lattice_point`, `shaft_lattice`, `facet_shade`), `draw_flat_mesh`
 - `src/ship_mesh.rs` — `SHIP_TRIS` / `SHIP_DETAILS` data tables extracted from the Flash SWF
@@ -312,15 +313,17 @@ just grows; nothing teleports. HUD shows the current layer as `lvl=N`
   Near the ends deep cols are additionally pulled *along* the shaft (`end_pull`)
   so corner facets turn into the junction wedge instead of poking into the cave.
 
-### Loading (main loop)
-- Cave segments: `HashMap<(layer, idx), Vec<ColliderHandle>>` — 2D sliding
+### Loading (`Sim::sync_window`, src/sim.rs)
+- Cave segments: `BTreeMap<(layer, idx), Vec<ColliderHandle>>` — 2D sliding
   window, layers `ship_layer ± 1` × segments `want_left..=want_right`
-  (`retain` + `entry().or_insert_with()` each frame; empty Vec = opening).
-- Shafts: `HashMap<(slot, gap), Shaft>` for gaps `{ship_layer-1, ship_layer}` —
+  (`retain` + `entry().or_insert_with()`; empty Vec = opening). BTreeMap, not
+  HashMap: ordered ops keep Rapier handle assignment deterministic (resim).
+- Shafts: `BTreeMap<(slot, gap), Shaft>` for gaps `{ship_layer-1, ship_layer}` —
   covers everything reachable within half a period. `Shaft` stores collider
-  handles + both wall polylines for rendering.
-- There is no startup seeding — the first frame's physics tick runs with no
-  colliders (harmless) and the window sync fills everything before drawing.
+  handles + both wall polylines for rendering (pub, read by main's draw code).
+- The sync runs inside `Sim::tick` (and `restore`), keyed off the TRUE body
+  position, only when the ship's (segment, layer) changes — so spawn/reset
+  seed the window immediately and resim performs the identical op sequence.
 
 ### Rendering
 Same faceted treatment as the cave walls rotated 90° (rows along y, depth cols
@@ -374,10 +377,12 @@ zoomed-out view of the real geometry, not a schematic. Obstacles are drawn as
 their actual polygon shape (triangle fan + outline), filtered by the y window.
 
 ### Storage
-`HashMap<(i64, i64), Obstacle>` keyed by (slot index, layer) — every layer gets
-an identical copy of each obstacle at `cy + layer * V_PERIOD` (the y-wrap).
-Load/evict each frame in sync with the wall window (`k_left` / `k_right` derived
-from `want_left` / `want_right`, layers `ship_layer ± 1`).
+`BTreeMap<(i64, i64), Obstacle>` in `Sim`, keyed by (slot index, layer) — every
+layer gets an identical copy of each obstacle at `cy + layer * V_PERIOD` (the
+y-wrap). Loaded/evicted by `Sim::sync_window` together with the wall window
+(`k_left` / `k_right` derived from `want_left` / `want_right`, layers
+`ship_layer ± 1`). Key-ordered iteration also gives boulders a stable z-order
+in the renderer for free.
 
 ## Color / rendering alignment rule
 
@@ -419,7 +424,7 @@ max floor over the span + 0.1 (the segment collider, friction 0.9, never dips
 into rock). A slot is skipped if `hw < 5`, within 8 m of a shaft opening, or a
 boulder (checked via `obstacle_spec`) would overlap the deck — roughly every
 other slot survives. Pads replicate per layer like obstacles
-(`HashMap<(slot, layer), Pad>`, same sliding window).
+(`BTreeMap<(slot, layer), Pad>` in `Sim`, same sliding window).
 
 **Landing** = settled on a deck (|angle| < 0.3, |v| < 1 m/s, |ω| < 0.5, feet —
 0.73 below origin — within 0.3 of deck top) for `PAD_LAND_TIME = 0.8 s`. First
@@ -434,10 +439,13 @@ exactly on the collider line (alignment rule).
 
 ## Impacts, hull damage, crash & respawn
 
-Impacts are detected from the **frame-to-frame velocity change**: after the
-physics substeps, `|v − prev_vel|` above a threshold means a collision impulse
-(thrust/gravity change v by < 0.3 m/s per frame) — no Rapier contact-event
-plumbing needed. Damage is **graduated**, not binary:
+Impacts are detected inside `Sim::tick` from the **per-tick velocity
+change**: `|v − prev_vel|` above a threshold means a collision impulse (an
+impulse resolves within one tick; thrust/gravity move v by < 0.05 m/s per
+tick) — no Rapier contact-event plumbing needed. The tick returns an
+`Impact` report (with the pre-park pose/velocity — a destroying impact parks
+the wreck inside the tick) that main turns into sparks/thud/shake or the
+full crash flow. Damage is **graduated**, not binary:
 - dv ≤ `CRASH_DV_SOFT (2.5 m/s)`: free.
 - `CRASH_DV_SOFT`..`CRASH_DV_HARD (6 m/s)`: survivable scrape — hull damage
   proportional to dv (full `HULL_MAX = 100` bar exactly at HARD), a small
@@ -456,12 +464,13 @@ parked (`set_gravity_scale(0)`, velocities zeroed) so the camera holds still,
 input is dead (`crashed` gates thrust/RCS and ship rendering), and a "CRASHED"
 banner shows. After `CRASH_DIALOG_DELAY = 1.5 s` the **crash dialog** takes
 over (see below); respawning at `RESET_X` happens from its FLY AGAIN action
-(or the R key, which works from any mode). Anything that teleports or zeroes
-velocity (reset, respawn) must also snap `prev_vel` — otherwise the velocity
-jump reads as an impact — and `prev_ship` (render interpolation). Spawn/reset
-place the ship **standing on the floor** (`stand_y(x)` = floor + 0.78, feet at
-0.73): dropping it from `cave_center` reached ~5.5 m/s at touchdown, which
-tripped the crash threshold and looped spawn → crash → respawn forever.
+(or the R key, which works from any mode). `Sim::restore` snaps its internal
+`prev_vel` on any teleport (otherwise the velocity jump reads as an impact);
+main must still snap `prev_ship` (render interpolation) after `sim.reset`.
+Spawn/reset place the ship **standing on the floor** (`stand_y(x)` = floor +
+0.78, feet at 0.73): dropping it from `cave_center` reached ~5.5 m/s at
+touchdown, which tripped the crash threshold and looped spawn → crash →
+respawn forever.
 
 ## Crash dialog & instant replay
 
@@ -522,12 +531,37 @@ leave the device (sharing/ghosts/leaderboards), in memory only for now:
 - On destruction the blob is serialized (+ `compress` = `miniz_oxide` deflate,
   the repo's only new dependency) and the WATCH REPLAY button hint shows both
   sizes: `[ENTER] · <raw> → <deflated>`.
-- **Playback still uses the dense visual buffer** — re-simming the input
-  stream needs the fixed-timestep input refactor (controls are currently
-  sampled per render frame and forces persist across substeps), which is the
-  next step toward deterministic replay. `Recording::deserialize` exists and
-  is round-trip tested but is `#[allow(dead_code)]` until blobs actually
-  leave the device.
+- **Playback still uses the dense visual buffer**, but the input stream is
+  now genuinely re-simulable: `sim::resim(&Recording)` re-runs the events
+  through a fresh `Sim` and reproduces the recorded keyframes **bit-exactly**
+  (unit test `resim_reproduces_a_scripted_flight_bit_exactly`; `glow` is
+  render-side and excluded). Guarantee is per-binary — a build/params change
+  is what the header fields + keyframe fallback are for. `resim` and
+  `Recording::deserialize` are `#[allow(dead_code)]` until playback switches
+  over / blobs leave the device.
+
+### Determinism rules (the re-sim refactor, 2026-07)
+Live play and resim must perform IDENTICAL operation sequences:
+- All forces/fuel/damage/landing run per tick inside `Sim::tick` from the
+  quantized `InputState` (never from raw device floats — quantize first via
+  `InputState::from_controls`, then both the sim and recorder consume it).
+- Collider windows: BTreeMap (ordered ops → same Rapier handle assignment),
+  keyed off the TRUE body position (not the interpolated/shaken camera),
+  synced inside `tick()` only when the ship's (segment, layer) key changes.
+- Impact detection is per-tick dv (thresholds unchanged — an impulse lands
+  within one tick; gravity/thrust move v < 0.05 m/s per tick).
+- `Date`-like nondeterminism (macroquad `gen_range`) is allowed ONLY in
+  cosmetics (particles, shake); nothing in `sim.rs` may use it.
+
+### Ghost of the last run
+On reset the ended run's visual buffer (if ≥ `GHOST_MIN_SECS = 2 s`) becomes
+`ghost`; during flight a translucent hull silhouette (`SHIP_TRIS`, no
+flame/details) is drawn at `ghost[ticks since spawn]` — same fractional-tick
+lerp as the replay, same spawn clock (`recorder.ticks()`), so it races you
+from the shared start line and vanishes at its own crash tick. A pale-blue
+dot mirrors it on the minimap. If the previous run outlived the visual
+buffer window, `ghost_first_tick > 0` delays its appearance accordingly.
+Hidden during the dialog/replay and while the current ship is a wreck.
 
 ## Physics notes
 
@@ -535,12 +569,14 @@ The body has `angular_damping(3.0)` and `linear_damping(0.2)` (see Thrust /
 glow system for why the linear term exists).
 
 **Fixed timestep**: physics steps at `PHYSICS_DT = 1/120 s` through an
-accumulator in the main loop (catch-up capped at 0.05 s per frame), so handling
-is identical on 60/120/144 Hz displays. Rendering interpolates the ship between
-the last two physics states (`prev_ship` + `alpha = accum/PHYSICS_DT`); anything
-that teleports the body (reset/respawn) must also snap `prev_ship` or the camera
-lerps across the jump for a frame. Forces set in the controls section persist
-across all substeps of the following frame (reset each frame via `reset_forces`).
+accumulator in the main loop (catch-up capped at 0.05 s per frame). Each step
+is one `Sim::tick(InputState)` — forces/torques are recomputed **per tick**
+from the frame's quantized input (constant within a frame), so handling is
+identical on 60/120/144 Hz displays *and* the sim is a pure function of the
+input stream (see the determinism rules in the replay section). Rendering
+interpolates the ship between the last two physics states (`prev_ship` +
+`alpha = accum/PHYSICS_DT`); anything that teleports the body (reset/respawn)
+must also snap `prev_ship` or the camera lerps across the jump for a frame.
 
 The ship uses a **compound collider** of three **capsules** (stadium shapes) parented to the same rigid body, tracing the lander silhouette of the 1.5× scaled visual. Capsules are the closest primitive Rapier offers to an ellipse — they hug the rounded hull tighter than boxes and slide off rocks without corners catching. Endpoints are in scaled world units (ship-local frame):
 - **Fuselage**: `capsule((0, +0.42), (0, −0.08), r=0.26)` — rounded nose down to mid-hull.

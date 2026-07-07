@@ -4,8 +4,22 @@ Every knob that shapes how the ship *feels* to fly, where it lives, what
 happens when you turn it, and some ready-made recipes. Written for future
 tuning sessions and as the checklist for an eventual in-game settings pane.
 
-All Rust constants are in `src/main.rs` (top of the file) unless noted;
-JS constants are in the inline script in `index.html`.
+Physics-affecting constants (PD gains, forces, damping, fuel, crash
+thresholds) live in `src/sim.rs`; input-generation knobs (stick gating,
+dead-zones) stay in `src/main.rs`. JS constants are in the inline script in
+`index.html`.
+
+**Control loop rate (2026-07 re-sim refactor):** forces, the PD controller
+and fuel burn are now recomputed **every physics tick (120 Hz)** from a
+quantized per-tick `InputState`, instead of once per render frame with the
+forces persisting across substeps. Handling is therefore identical on every
+display refresh rate (previously a 60 Hz display held each torque twice as
+long as a 120 Hz one), and the damper acts on the freshest spin rate — the
+same `HEADING_KD` stops fractionally crisper than before. Inputs are
+quantized (throttle u8, stick i8×2) before BOTH the sim and the replay
+recorder see them, so recorded runs re-simulate bit-exactly; tuning knobs
+are unaffected, but any new control path must route through `InputState` or
+replays will silently desync from live play.
 
 ## 1. The touch scheme in one paragraph
 
