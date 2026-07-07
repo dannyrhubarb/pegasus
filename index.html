@@ -634,6 +634,20 @@
     const wasmRev = "__GIT_REVISION__";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
+    // Stamp the deploy revision into the game (first 8 hex chars of the git
+    // hash → u32) so serialized replay blobs record which build flew them.
+    // 0 = local dev build. Exports aren't ready immediately; retry like the
+    // velocity-toggle probe below.
+    const buildId = wasmRev.startsWith("__")
+      ? 0
+      : (parseInt(wasmRev.slice(0, 8), 16) || 0) >>> 0;
+    const buildIdTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_build_id) {
+        wasm_exports.set_build_id(buildId);
+        clearInterval(buildIdTimer);
+      }
+    }, 200);
+
     // --- Stale-cache detection ---
     // GitHub Pages caches index.html for ~10 minutes, so right after a deploy
     // this page (and the ?v= it carries) can be the PREVIOUS build. Compare

@@ -7,11 +7,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 mod audio;
 mod render;
+mod replay;
 mod ship_mesh;
 mod world;
 
 use audio::*;
 use render::*;
+use replay::*;
 use ship_mesh::*;
 use world::*;
 
@@ -118,6 +120,16 @@ pub extern "C" fn set_show_velocity(on: i32) {
     SHOW_VEL.store(on as u32, Ordering::Relaxed);
 }
 
+// Deploy git revision (first 8 hex chars parsed to a u32 by index.html),
+// stamped into serialized replay blobs so a future re-sim/verifier knows
+// which build flew the run. 0 = local dev build.
+static BUILD_ID: AtomicU32 = AtomicU32::new(0);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_build_id(id: u32) {
+    BUILD_ID.store(id, Ordering::Relaxed);
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn set_safe_area(top: f32, left: f32) {
     SAFE_AREA_TOP.store(top.to_bits(), Ordering::Relaxed);
@@ -141,6 +153,15 @@ fn window_conf() -> Conf {
 const SCALE: f32 = 80.0;
 // How many segments to keep loaded on each side of the ship
 const HALF_WINDOW: i64 = 80;
+// Physics-shaping constants, hoisted so the replay params header serializes
+// the exact values the sim runs with (see sim_params()).
+const GRAVITY_Y: f32 = -1.62;
+const THRUST_FORCE: f32 = 8.0;     // main engine at full throttle
+const LINEAR_DAMPING: f32 = 0.2;
+const ANGULAR_DAMPING: f32 = 3.0;
+// Side RCS booster force, applied at the nozzle (see the controls section);
+// tuned so the ~0.30 x-lever yields roughly ±1.0 of torque.
+const RCS_FORCE: f32 = 3.3;
 // Render scale for the ship mesh relative to the raw SWF coordinates
 const SHIP_SCALE: f32 = 1.5;
 // Physics runs on a fixed timestep (accumulator in the main loop) so handling
@@ -157,10 +178,11 @@ const CRASH_DV_HARD: f32 = 6.0;
 // Seconds from crash to the crash dialog (fly again / watch replay) — long
 // enough for the explosion to play out with the camera held still.
 const CRASH_DIALOG_DELAY: f32 = 1.5;
-// Instant replay: how many seconds of flight the ring buffer keeps (recorded
-// once per physics step, so the buffer holds REPLAY_MAX_SECS / PHYSICS_DT
-// frames). Recording stops at the moment of destruction.
-const REPLAY_MAX_SECS: f32 = 15.0;
+// Instant replay: how many seconds of flight are retained (recorded once per
+// physics step). Sized to cover a whole spawn→crash run; runs longer than
+// this keep only their tail. 5 min ≈ 36k visual frames ≈ 1 MB in RAM. The
+// hybrid recording (src/replay.rs) trims to the same horizon.
+const REPLAY_MAX_SECS: f32 = 300.0;
 // Hull integrity: scraped off by survivable impacts, restored while parked on
 // a pad (alongside refueling) and by reset/respawn.
 const HULL_MAX: f32 = 100.0;
@@ -187,6 +209,28 @@ const FLIP_DONE_RAD: f32 = 0.35; // ~20°
 const FUEL_MAX: f32 = 100.0;
 const FUEL_BURN_MAIN: f32 = 3.5; // units/s while the main engine fires
 const FUEL_BURN_RCS: f32 = 1.2;  // units/s while an RCS nozzle fires
+
+// The exact simulation constants this build runs with, serialized into every
+// replay blob so a recording can be re-run under the rules it was flown with.
+fn sim_params() -> SimParams {
+    SimParams {
+        dt: PHYSICS_DT,
+        gravity_y: GRAVITY_Y,
+        thrust_force: THRUST_FORCE,
+        linear_damping: LINEAR_DAMPING,
+        angular_damping: ANGULAR_DAMPING,
+        rcs_force: RCS_FORCE,
+        heading_kp: HEADING_KP,
+        heading_kd: HEADING_KD,
+        heading_torque_max: HEADING_TORQUE_MAX,
+        fuel_max: FUEL_MAX,
+        fuel_burn_main: FUEL_BURN_MAIN,
+        fuel_burn_rcs: FUEL_BURN_RCS,
+        crash_dv_soft: CRASH_DV_SOFT,
+        crash_dv_hard: CRASH_DV_HARD,
+        hull_max: HULL_MAX,
+    }
+}
 
 #[macroquad::main(window_conf)]
 async fn main() {
@@ -297,10 +341,10 @@ async fn main() {
     // Ship starts at cave centre
     let box_body = RigidBodyBuilder::dynamic()
         .translation(vector![0.0, stand_y(0.0)])
-        .angular_damping(3.0)
+        .angular_damping(ANGULAR_DAMPING)
         // A whisper of drag: imperceptible at landing speeds but it caps how
         // much momentum can pile up on a long burn or free-fall.
-        .linear_damping(0.2)
+        .linear_damping(LINEAR_DAMPING)
         .ccd_enabled(true)
         .build();
     let box_handle = rigid_body_set.insert(box_body);
@@ -331,7 +375,7 @@ async fn main() {
         box_handle, &mut rigid_body_set,
     );
 
-    let gravity = vector![0.0, -1.62];
+    let gravity = vector![0.0, GRAVITY_Y];
     let integration_params = IntegrationParameters {
         dt: PHYSICS_DT,
         num_solver_iterations: std::num::NonZeroUsize::new(8).unwrap(),
@@ -411,6 +455,19 @@ async fn main() {
     let mut replay_t = 0.0f32;
     let mut last_rcs: i8 = 0; // RCS puff side of the previous frame, recorded per step
 
+    // Hybrid recording (src/replay.rs): the shareable spawn→crash replay —
+    // input change-events + 1 Hz keyframes + params header. In memory only
+    // for now; serialized + deflated at the crash to measure what shipping
+    // it would cost (shown on the WATCH REPLAY button).
+    let spawn_keyframe = |x: f32| Keyframe {
+        tick: 0, x, y: stand_y(x), angle: 0.0, vx: 0.0, vy: 0.0,
+        angvel: 0.0, fuel: FUEL_MAX, hull: HULL_MAX, glow: 0.0,
+    };
+    let mut recorder = Recording::new(sim_params(), (REPLAY_MAX_SECS / PHYSICS_DT) as u32);
+    recorder.push_keyframe(spawn_keyframe(0.0));
+    let mut last_input = InputState::default(); // controls in effect, quantized per frame
+    let mut blob_sizes: Option<(usize, usize)> = None; // (raw, deflated) at last crash
+
     // Debris burst at (x, y) — fired at the real crash and again when the
     // replay reaches its end.
     let boom_burst = |x: f32, y: f32, particles: &mut Vec<Particle>| {
@@ -485,6 +542,20 @@ async fn main() {
                         glow,
                         rcs: last_rcs,
                     });
+                    // Hybrid recording: the input in effect for this step
+                    // (an event only when it changed) + periodic keyframes.
+                    if recorder.record_tick(last_input) {
+                        recorder.push_keyframe(Keyframe {
+                            tick: recorder.ticks(),
+                            x: b.translation().x,
+                            y: b.translation().y,
+                            angle: b.rotation().angle(),
+                            vx: b.linvel().x,
+                            vy: b.linvel().y,
+                            angvel: b.angvel(),
+                            fuel, hull, glow,
+                        });
+                    }
                 }
             }
         } else {
@@ -517,6 +588,23 @@ async fn main() {
                         if let Some(s) = &boom_snd {
                             play_sound(s, PlaySoundParams { looped: false, volume: 0.9 });
                         }
+                        // Freeze the shareable recording at the impact (the
+                        // body still holds the post-impact pose/velocity —
+                        // the wreck is parked just below) and measure what
+                        // shipping it would cost, raw and deflated.
+                        {
+                            let b = &rigid_body_set[box_handle];
+                            recorder.finalize(Keyframe {
+                                tick: recorder.ticks(),
+                                x: wx, y: wy,
+                                angle: b.rotation().angle(),
+                                vx, vy,
+                                angvel: b.angvel(),
+                                fuel, hull, glow,
+                            });
+                        }
+                        let blob = recorder.serialize(BUILD_ID.load(Ordering::Relaxed));
+                        blob_sizes = Some((blob.len(), compress(&blob).len()));
                         // Park the wreck where it died so the camera holds still.
                         let rb = rigid_body_set.get_mut(box_handle).unwrap();
                         rb.set_linvel(vector![0.0, 0.0], true);
@@ -1343,7 +1431,15 @@ async fn main() {
             if button(sw / 2.0 - bw - gap / 2.0, "FLY AGAIN", "[R]") {
                 do_reset = true;
             }
-            let replay_clicked = button(sw / 2.0 + gap / 2.0, "WATCH REPLAY", "[ENTER]");
+            // Hint shows what shipping this run's hybrid replay blob would
+            // cost: serialized size raw → deflated.
+            let replay_hint = match blob_sizes {
+                Some((raw, packed)) => {
+                    format!("[ENTER] · {} → {}", fmt_size(raw), fmt_size(packed))
+                }
+                None => "[ENTER]".to_string(),
+            };
+            let replay_clicked = button(sw / 2.0 + gap / 2.0, "WATCH REPLAY", &replay_hint);
             if (replay_clicked || is_key_pressed(KeyCode::Enter)) && replay_buf.len() >= 2 {
                 mode = Mode::Replay;
                 replay_t = 0.0;
@@ -1405,7 +1501,7 @@ async fn main() {
         rb.reset_torques(true);
         if thrusting_now {
             let a = rb.rotation().angle();
-            let f = 8.0 * throttle;
+            let f = THRUST_FORCE * throttle;
             rb.add_force(vector![-a.sin() * f, a.cos() * f], true);
         }
         // Manual rate rotation: keyboard keys and the gamepad's analog stick.
@@ -1417,9 +1513,8 @@ async fn main() {
         // (off-center) instead of a pure couple, so the ship pivots about where
         // the boosters actually push. Nozzles exhaust downward (-Y local) → the
         // reaction force is +Y local at x = ∓0.30: left nozzle → clockwise,
-        // right nozzle → counter-clockwise. RCS_FORCE is tuned so the x-lever
-        // (~0.30) yields roughly the previous ±1.0 pure torque.
-        const RCS_FORCE: f32 = 3.3;
+        // right nozzle → counter-clockwise. RCS_FORCE (module const) is tuned
+        // so the x-lever (~0.30) yields roughly the previous ±1.0 pure torque.
         let fire_rcs = |rb: &mut RigidBody, side: f32, mag: f32| {
             let (px, py) = lp(0.30 * side, -0.71);
             let (fx, fy) = ld(0.0, mag);
@@ -1461,6 +1556,16 @@ async fn main() {
         };
         if mode == Mode::Flying {
             last_rcs = if puff_left { -1 } else if puff_right { 1 } else { 0 };
+            // Resolved controls for the hybrid recorder (quantized). These
+            // drive the physics steps of the NEXT frame, which is exactly
+            // when record_tick stores them.
+            last_input = InputState {
+                throttle: (throttle * 255.0).round() as u8,
+                rot: if rotating_left { -1 } else if rotating_right { 1 } else { 0 },
+                steer_x: (steer_x.clamp(-1.0, 1.0) * 127.0).round() as i8,
+                steer_y: (steer_y.clamp(-1.0, 1.0) * 127.0).round() as i8,
+                stick_held: stick_held as u8,
+            };
         }
 
         // Burn fuel for whatever fired this frame (main burn scales with throttle).
@@ -1562,11 +1667,15 @@ async fn main() {
             hull = HULL_MAX;
             shake = 0.0;
             mode = Mode::Flying;
-            // A fresh attempt records a fresh replay.
+            // A fresh attempt records a fresh replay (both formats).
             replay_buf.clear();
             replay_t = 0.0;
             last_rcs = 0;
             glow = 0.0;
+            recorder = Recording::new(sim_params(), (REPLAY_MAX_SECS / PHYSICS_DT) as u32);
+            recorder.push_keyframe(spawn_keyframe(RESET_X));
+            last_input = InputState::default();
+            blob_sizes = None;
         }
 
         // --- Minimap (ship always centred; pans in BOTH axes) ---
