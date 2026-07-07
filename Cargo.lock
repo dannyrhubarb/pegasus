@@ -543,6 +543,7 @@ name = "pegasus"
 version = "0.1.0"
 dependencies = [
  "macroquad",
+ "miniz_oxide",
  "rapier2d",
 ]
 

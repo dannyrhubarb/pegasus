@@ -472,12 +472,11 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
 
 - **Recording**: every physics step while alive (`crash_timer <= 0`) pushes a
   `ReplayFrame` (pose, velocity, `glow`, RCS puff side `last_rcs`) into a
-  `VecDeque` ring buffer capped at `REPLAY_MAX_SECS = 15 s` × 120 Hz. The
+  `VecDeque` ring buffer capped at `REPLAY_MAX_SECS = 300 s` × 120 Hz (≈1 MB
+  — sized to cover a whole spawn→crash run; longer runs keep the tail). The
   impact itself is captured (crash detection runs after the stepping loop).
-  Reset/respawn clears the buffer. This is **visual-state playback** — the
-  planned cross-platform-deterministic Rapier replay (record inputs, re-run
-  the sim; also enables sharing others' runs) can replace the recording source
-  behind the same dialog/playback UI.
+  Reset/respawn clears the buffer. This dense buffer is the **visual
+  playback** path; the shareable format is the hybrid recording below.
 - **Crash dialog**: dimmed backdrop, in-canvas buttons **FLY AGAIN [R]** /
   **WATCH REPLAY [ENTER]** drawn at `sh*0.36`. **Keep dialog hit targets above
   the lower 45% of the screen**: the JS floating-stick handler swallows canvas
@@ -496,6 +495,35 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   shows a pulsing REPLAY banner + progress bar; tap/click skips back to the
   dialog, R skips straight to respawn. At the end the explosion is re-fired
   (`boom_burst` + boom sound) and the dialog returns.
+
+### Hybrid recording (`src/replay.rs`) — the shareable format
+Alongside the dense visual buffer, a `Recording` captures the same spawn→crash
+run as **inputs + params + keyframes** — the transport format for replays that
+leave the device (sharing/ghosts/leaderboards), in memory only for now:
+- **Input change-events**: the *resolved* controls per physics step
+  (`InputState`: throttle u8, rate command i8, stick vector 2×i8, stick-held),
+  pushed only on change — `last_input` is captured next to `last_rcs` in the
+  controls section and recorded by `record_tick` in the stepping loop.
+- **Keyframes** every `KEYFRAME_EVERY = 120` ticks (1 Hz): full sim state
+  (pose, velocities, fuel, hull, glow) for future drift detection / seeking /
+  fallback playback, plus a terminal keyframe at the impact (`finalize`).
+- **Header**: `SimParams` — every physics constant, built by `sim_params()`
+  from the (now module-level) consts `GRAVITY_Y`, `THRUST_FORCE`,
+  `LINEAR_DAMPING`, `ANGULAR_DAMPING`, `RCS_FORCE`, PD gains, fuel/crash/hull
+  numbers — and a **build id**: index.html parses the first 8 hex chars of
+  the deploy revision to a u32 and pushes it via the `set_build_id` export
+  (0 = local dev). Bump `REPLAY_FORMAT_VERSION` when the layout changes.
+- Trimming keeps the retained window **starting at a keyframe** with the
+  effective input re-seeded there, so it stays replayable after the ring cap.
+- On destruction the blob is serialized (+ `compress` = `miniz_oxide` deflate,
+  the repo's only new dependency) and the WATCH REPLAY button hint shows both
+  sizes: `[ENTER] · <raw> → <deflated>`.
+- **Playback still uses the dense visual buffer** — re-simming the input
+  stream needs the fixed-timestep input refactor (controls are currently
+  sampled per render frame and forces persist across substeps), which is the
+  next step toward deterministic replay. `Recording::deserialize` exists and
+  is round-trip tested but is `#[allow(dead_code)]` until blobs actually
+  leave the device.
 
 ## Physics notes
 
