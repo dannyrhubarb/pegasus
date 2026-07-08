@@ -27,10 +27,9 @@ Holding the floating stick fires the main engine and its direction commands
 the nose direction; a PD controller (spring + damper) torques the ship the
 short way to that angle. Two gates keep steering cheap: a *flick grace*
 (short touches never thrust) and a *flip settle* (commanding a >92° turn
-keeps the engine cold until the nose is nearly there). The JET button
-(hidden behind a settings toggle) is an ungated thrust-only alternative.
-Keyboard/gamepad use direct rate rotation and override the PD controller
-while held.
+keeps the engine cold until the nose is nearly there). Holding the stick is
+the only touch thrust control (the old JET button is gone). Keyboard/gamepad
+use direct rate rotation and override the PD controller while held.
 
 ## 2. Heading controller (how the nose chases the stick)
 
@@ -63,14 +62,17 @@ The gate resets the ramp, so a post-flip burn always fades in. If flips get
 faster (higher `TORQUE_MAX`), consider tightening `FLIP_DONE_RAD` so the
 relight doesn't happen mid-swing.
 
-## 4. Stick geometry (JS, `index.html`)
+## 4. Stick geometry (Rust, `src/main.rs` — the stick is in-canvas now)
 
 | Knob | Now | What it is | Notes |
 |------|-----|------------|-------|
-| `STICK_TRAVEL` | 60 px | Deflection for full authority | Bigger = finer control, more thumb travel |
+| `STICK_TRAVEL` | 60 (CSS px) | Deflection for full authority | Bigger = finer control, more thumb travel |
 | `STICK_DZ` | 0.15 | Radial dead-zone (fraction of travel, rescaled) | Below it: thrust-only hold, no heading command. Bigger = easier "just burn straight"; smaller = twitchier |
 | `STICK_ZONE` | 0.55 | Touches below this fraction of viewport height grab the stick | Lower value = bigger grab area (0.55 → lower 45%) |
-| `#stick-base` CSS size | 170 px | Visual only — input math uses `STICK_TRAVEL` | Keep roughly `2×(TRAVEL + knob radius)` so visuals match feel |
+| `STICK_RADIUS` / `STICK_KNOB_R` | 85 / 32 (CSS px) | Visual only — input math uses `STICK_TRAVEL` | Keep `RADIUS ≈ TRAVEL + KNOB_R` so visuals match feel |
+
+(Values are CSS px, multiplied by `dpi` at draw/hit-test time — same rule as
+every other pixel constant.)
 
 ## 5. Engine & airframe (the "how heavy does it feel" set)
 
@@ -107,22 +109,22 @@ burn is per-second of throttle, so TWR changes also change effective range.
 
 **Purist / no assists** — closest to the original Flash game on touch:
 not a knob set — route the stick back to rate control (torque = stick x,
-like the keyboard path) and re-enable the JET button by default. Keep this
-in mind as a *scheme*, not a tuning, for the controller-picker below.
+like the keyboard path). Keep this in mind as a *scheme*, not a tuning, for
+the controller-picker below.
 
 ## 8. Toward a settings / controller pane
 
-The plumbing pattern already exists and has three working examples
-(velocity-vector, JET-button, and invert-stick toggles) in `index.html`:
+The plumbing pattern already exists, with two working examples
+(velocity-vector and invert-stick toggles) in `index.html`:
 
 1. Checkbox/slider in the info overlay (`stopPropagation`, **no**
    `preventDefault` — that kills checkbox clicks).
 2. Persist in `localStorage` (`pegasus_*` keys).
-3. If the game needs the value: a wasm export (`set_*`) + an atomic, with a
-   short `setInterval` retry until `wasm_exports` is ready (see
-   `applyVelSetting`). Pure-visual settings skip the export (see
-   `applyJetSetting`), and settings that only remap input can live entirely
-   in JS (see the `invertStick` flag consumed in `stickApply`).
+3. Forward to the game via a wasm export (`set_*`) + an atomic, with a short
+   `setInterval` retry until `wasm_exports` is ready (see `applyVelSetting` /
+   `applyInvSetting`). Now that the stick is in-canvas, input-remapping
+   settings (like invert) go through this same export path rather than living
+   in JS.
 
 For live tuning without rebuilds, add one export per knob group, e.g.
 `set_heading_gains(kp, kd, tmax)` and `set_stick_gates(delay, ramp, gate,

@@ -189,45 +189,37 @@ impl ResimPlayer {
     fn progress(&self) -> f32 {
         (self.tick - self.first_tick) as f32 / (self.end_tick - self.first_tick).max(1) as f32
     }
+
+    // The input currently driving the re-sim (for the replay's stick widget).
+    fn current_input(&self) -> InputState {
+        self.input
+    }
 }
 
-// Touch throttle is ANALOG (f32 bits, 0..1): the on-screen JET button sends
-// 1.0/0.0 today, but the export stays analog. The stick supplies a STEER
-// VECTOR (f32 bits each, screen convention: x right, y down, magnitude ≤ 1):
-// its direction is the commanded nose direction, (0,0) = released.
-static TOUCH_THRUST: AtomicU32 = AtomicU32::new(0);
-static TOUCH_STEER_X: AtomicU32 = AtomicU32::new(0);
-static TOUCH_STEER_Y: AtomicU32 = AtomicU32::new(0);
-// Stick contact (0/1): holding the stick fires the main engine too, but
-// through the flick-grace / flip-settle gating in the main loop — hence a
-// separate flag instead of driving TOUCH_THRUST directly.
-static TOUCH_STICK_HELD: AtomicU32 = AtomicU32::new(0);
-// Gamepad state lives on its own atomics (not the touch ones) so a connected-but-
-// idle controller never stomps an active touch input, and vice versa. The two
-// sources are combined in the main loop.
+// The attitude stick is now read directly from macroquad's touch API inside
+// the game (see the TouchStick gatherer in the loop) — no touch atoms/exports.
+// Gamepad state lives on its own atomics so a connected-but-idle controller
+// never stomps touch input; the two sources are combined in the main loop.
 static PAD_THRUST: AtomicU32 = AtomicU32::new(0);
 static PAD_TORQUE: AtomicU32 = AtomicU32::new(0);
 static PAD_RESET: AtomicU32 = AtomicU32::new(0);
 static SAFE_AREA_TOP: AtomicU32 = AtomicU32::new(0);
 static SAFE_AREA_LEFT: AtomicU32 = AtomicU32::new(0);
+// Bottom/right insets (CSS px). Bottom folds in the floating browser
+// toolbar (see index.html); used to keep the parked stick tappable.
+static SAFE_AREA_BOTTOM: AtomicU32 = AtomicU32::new(0);
+static SAFE_AREA_RIGHT: AtomicU32 = AtomicU32::new(0);
 // Velocity-vector arrow (off by default) — toggled from the info overlay's
 // checkbox, persisted in localStorage on the web side.
 static SHOW_VEL: AtomicU32 = AtomicU32::new(0);
+// "Invert stick": negate the commanded nose direction (push down = nose up,
+// like pulling back on a flight stick). Set from the info-overlay checkbox,
+// persisted in localStorage; the knob visual still follows the finger.
+static INVERT_STICK: AtomicU32 = AtomicU32::new(0);
 
 #[unsafe(no_mangle)]
-pub extern "C" fn set_touch_thrust(value: f32) {
-    TOUCH_THRUST.store(value.to_bits(), Ordering::Relaxed);
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn set_touch_steer(x: f32, y: f32) {
-    TOUCH_STEER_X.store(x.to_bits(), Ordering::Relaxed);
-    TOUCH_STEER_Y.store(y.to_bits(), Ordering::Relaxed);
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn set_touch_stick_held(held: i32) {
-    TOUCH_STICK_HELD.store(held as u32, Ordering::Relaxed);
+pub extern "C" fn set_invert_stick(on: i32) {
+    INVERT_STICK.store(on as u32, Ordering::Relaxed);
 }
 
 // --- Bluetooth / USB game controller bridge (Web Gamepad API, see index.html) ---
@@ -264,9 +256,11 @@ pub extern "C" fn set_build_id(id: u32) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn set_safe_area(top: f32, left: f32) {
+pub extern "C" fn set_safe_area(top: f32, left: f32, bottom: f32, right: f32) {
     SAFE_AREA_TOP.store(top.to_bits(), Ordering::Relaxed);
     SAFE_AREA_LEFT.store(left.to_bits(), Ordering::Relaxed);
+    SAFE_AREA_BOTTOM.store(bottom.to_bits(), Ordering::Relaxed);
+    SAFE_AREA_RIGHT.store(right.to_bits(), Ordering::Relaxed);
 }
 
 fn window_conf() -> Conf {
@@ -309,6 +303,95 @@ const STICK_THRUST_RAMP: f32 = 0.18;
 const FLIP_GATE_RAD: f32 = 1.6;  // ~92°
 const FLIP_DONE_RAD: f32 = 0.35; // ~20°
 
+// --- In-canvas floating attitude stick (ported from index.html) ---
+// All positions/sizes are in LOGICAL px — the space `screen_width()` and
+// `mouse_position()` report (both = raw / dpi_scale). NOTE: macroquad's
+// `touches()` returns RAW physical px (it does NOT divide by dpi like
+// mouse_position does), so touch positions are divided by dpi in the gather
+// before reaching this struct. A touch in the lower STICK_ZONE spawns the
+// stick under the finger; release parks it bottom-right. Deflection
+// direction = commanded nose direction (screen convention, y down); STICK_DZ
+// is a radial dead-zone rescaled so the rim still reaches 1. Holding the
+// stick — even centred — lights the main engine through the flick/flip gating.
+const STICK_TRAVEL: f32 = 60.0;  // logical px from centre = full deflection
+const STICK_DZ: f32 = 0.15;      // radial dead-zone (rescaled)
+const STICK_ZONE: f32 = 0.55;    // touches below this fraction of height grab the stick
+const STICK_RADIUS: f32 = 85.0;  // logical px, ring radius (matches the old 170px element)
+const STICK_KNOB_R: f32 = 32.0;  // logical px, knob radius
+
+// The floating stick's live state, tracked across frames (all logical px).
+// `id` = the claimed touch (None = parked).
+struct TouchStick {
+    id: Option<u64>,
+    center: Vec2,     // where the finger landed
+    knob: Vec2,       // knob offset from centre, clamped to travel
+    steer: Vec2,      // commanded nose vector (screen convention), 0 = centred
+    held: bool,
+}
+
+impl TouchStick {
+    fn new() -> Self {
+        TouchStick { id: None, center: Vec2::ZERO, knob: Vec2::ZERO, steer: Vec2::ZERO, held: false }
+    }
+
+    fn release(&mut self) {
+        self.id = None;
+        self.knob = Vec2::ZERO;
+        self.steer = Vec2::ZERO;
+        self.held = false;
+    }
+
+    // Recompute knob offset + steer vector from a finger position (logical px).
+    fn apply(&mut self, pos: Vec2, invert: bool) {
+        let mut d = pos - self.center;
+        let len = d.length();
+        if len > STICK_TRAVEL {
+            d *= STICK_TRAVEL / len;
+        }
+        self.knob = d;
+        let m = (len / STICK_TRAVEL).min(1.0);
+        let eff = if m < STICK_DZ { 0.0 } else { (m - STICK_DZ) / (1.0 - STICK_DZ) };
+        self.steer = if eff > 0.0 && len > 0.0 {
+            let dir = d / d.length();
+            let flip = if invert { -1.0 } else { 1.0 };
+            dir * eff * flip
+        } else {
+            Vec2::ZERO
+        };
+    }
+}
+
+// Draw the floating stick (logical px), matching the original HTML element:
+// a soft translucent filled base disc, faint ▲◀▶▼ hint arrows, a ring, and a
+// big soft knob. Parked (not held) the whole thing is dimmed to ~0.45; held
+// it goes full-opacity with amber ring + knob (engine lit). All alphas mirror
+// the old CSS (`background .08`, `border .35→.7`, `knob .45→.85`).
+fn draw_stick(center: Vec2, knob: Vec2, held: bool) {
+    let (mul, accent) = if held { (1.0, (255u8, 200u8, 0u8)) } else { (0.45, (255, 255, 255)) };
+    let a = |alpha: f32| (alpha * mul * 255.0) as u8;
+    // draw_circle/_lines default to 20 sides, which reads polygonal at this
+    // radius (~255 physical px), so the ring/base/knob use draw_poly with a
+    // high side count for a smooth curve.
+    const SIDES: u8 = 64;
+    // Soft filled base — this disc is what makes it read round, not hollow.
+    draw_poly(center.x, center.y, SIDES, STICK_RADIUS, 0.0, Color::from_rgba(255, 255, 255, a(0.08)));
+    // Directional hint arrows (static, faint), 12 px in from the rim.
+    let hint = Color::from_rgba(255, 255, 255, a(0.30));
+    let s = 9.0; // arrow half-size
+    let r = STICK_RADIUS - 14.0;
+    let tri = |tip: Vec2, base_a: Vec2, base_b: Vec2| draw_triangle(tip, base_a, base_b, hint);
+    tri(vec2(center.x, center.y - r), vec2(center.x - s, center.y - r + s), vec2(center.x + s, center.y - r + s)); // up
+    tri(vec2(center.x, center.y + r), vec2(center.x - s, center.y + r - s), vec2(center.x + s, center.y + r - s)); // down
+    tri(vec2(center.x - r, center.y), vec2(center.x - r + s, center.y - s), vec2(center.x - r + s, center.y + s)); // left
+    tri(vec2(center.x + r, center.y), vec2(center.x + r - s, center.y - s), vec2(center.x + r - s, center.y + s)); // right
+    // Ring border.
+    draw_poly_lines(center.x, center.y, SIDES, STICK_RADIUS, 0.0, 2.5,
+        Color::from_rgba(accent.0, accent.1, accent.2, a(if held { 0.7 } else { 0.35 })));
+    // Big soft knob.
+    draw_poly(center.x + knob.x, center.y + knob.y, SIDES, STICK_KNOB_R, 0.0,
+        Color::from_rgba(accent.0, accent.1, accent.2, a(if held { 0.85 } else { 0.45 })));
+}
+
 #[macroquad::main(window_conf)]
 async fn main() {
     // Panic hook: log the human-readable panic ("panicked at src/…:line: msg")
@@ -318,6 +401,13 @@ async fn main() {
     // on iOS Safari — this line is what the boot guard's console.error mirror
     // shows on screen, so keep it a single message.
     std::panic::set_hook(Box::new(|info| error!("{}", info)));
+
+    // Touch is a first-class input now (the attitude stick lives in-canvas),
+    // so stop miniquad synthesizing mouse events from touches — otherwise a
+    // canvas tap would fire mouse-down = full thrust. In-canvas UI taps
+    // (crash dialog, replay skip) are hit-tested via a pointer abstraction
+    // that unifies real mouse clicks with fresh touches (see the loop).
+    simulate_mouse_with_touch(false);
 
     // The deterministic simulation core: Rapier world, ship, sliding collider
     // windows, fuel/hull/score — everything tick-driven (src/sim.rs). The
@@ -423,16 +513,61 @@ async fn main() {
     let mut stick_thrust_t = 0.0f32; // seconds the stick-hold engine has been eligible
     let mut flip_settling = false;   // big flip commanded: engine cold until nose settles
     let mut pad_msg_timer = 0.0f32; // "+100" flash after a first landing
+    let mut stick = TouchStick::new();
 
     loop {
-        // --- Gather this frame's control command ---
+        // --- Gather this frame's touch input (mobile) ---
         // Device sampling plus the stick-hold gating machine. This is input
         // GENERATION (allowed to be frame-based); the quantized InputState it
         // produces is what the sim consumes per tick AND what the recorder
         // stores, so live play and resim see bit-identical inputs.
-        let stick_held = TOUCH_STICK_HELD.load(Ordering::Relaxed) != 0;
-        let steer_x = f32::from_bits(TOUCH_STEER_X.load(Ordering::Relaxed));
-        let steer_y = f32::from_bits(TOUCH_STEER_Y.load(Ordering::Relaxed));
+        //
+        // The floating stick claims one touch in the lower STICK_ZONE while
+        // flying; every OTHER fresh touch (upper zone, or any zone during the
+        // dialog/replay) becomes a `ui_tap` for in-canvas button hit-testing.
+        // `touches()` reports RAW physical px, so divide by dpi to reach the
+        // LOGICAL space that `screen_*()`, `mouse_position()` and all drawing
+        // use; a real mouse press is already in that space.
+        let touch_dpi = screen_dpi_scale();
+        let tpos = |t: &Touch| t.position / touch_dpi;
+        let sh_now = screen_height();
+        let invert = INVERT_STICK.load(Ordering::Relaxed) != 0;
+        let stick_active = matches!(mode, Mode::Flying) && crash_timer <= 0.0;
+        let mut ui_tap: Option<Vec2> = None;
+        // Keep following / release the claimed stick touch.
+        if let Some(id) = stick.id {
+            match touches().iter().find(|t| t.id == id) {
+                Some(t) if !matches!(t.phase, TouchPhase::Ended | TouchPhase::Cancelled) => {
+                    stick.apply(tpos(t), invert);
+                }
+                _ => stick.release(),
+            }
+        }
+        if !stick_active {
+            stick.release();
+        }
+        for t in touches() {
+            if t.phase != TouchPhase::Started {
+                continue;
+            }
+            let p = tpos(&t);
+            if stick_active && p.y > sh_now * STICK_ZONE && stick.id.is_none() {
+                stick.id = Some(t.id);
+                stick.center = p;
+                stick.held = true;
+                stick.apply(p, invert);
+            } else if Some(t.id) != stick.id {
+                ui_tap = Some(p); // tap for the crash dialog / replay skip
+            }
+        }
+        // Desktop mouse press is also a UI tap (already logical px).
+        if is_mouse_button_pressed(MouseButton::Left) {
+            let (mx, my) = mouse_position();
+            ui_tap = Some(vec2(mx, my));
+        }
+
+        let stick_held = stick.held;
+        let (steer_x, steer_y) = (stick.steer.x, stick.steer.y);
         let steer_mag = (steer_x * steer_x + steer_y * steer_y).sqrt().min(1.0);
         // Heading error to the commanded nose direction (0 when centred),
         // for the flip gate. Uses the true body angle.
@@ -458,9 +593,7 @@ async fn main() {
         }
         let stick_throttle =
             ((stick_thrust_t - STICK_THRUST_DELAY) / STICK_THRUST_RAMP).clamp(0.0, 1.0);
-        let mut throttle_cmd = f32::from_bits(TOUCH_THRUST.load(Ordering::Relaxed))
-            .clamp(0.0, 1.0)
-            .max(stick_throttle);
+        let mut throttle_cmd = stick_throttle;
         if is_mouse_button_down(MouseButton::Left)
             || is_key_down(KeyCode::Down)
             || PAD_THRUST.load(Ordering::Relaxed) != 0
@@ -631,14 +764,20 @@ async fn main() {
         // across portrait/landscape — `sw` alone grew the minimap on rotation.
         let ui = (sw.min(sh) / dpi / 980.0).min(1.0) * dpi;
 
-        // Safe-area insets (notch / status bar), supplied by JS via env(safe-area-inset-*)
-        // in CSS pixels → converted to physical pixels here. The top inset is
-        // honoured in full (the notch/island sits at the top in portrait); the
-        // LEFT inset is capped — in landscape the island sits mid-edge, not in
-        // the top corner, and the full ~47-59 px inset shoved the minimap far
-        // into the screen when only the rounded bezel corner actually matters.
-        let safe_top = f32::from_bits(SAFE_AREA_TOP.load(Ordering::Relaxed)) * dpi;
-        let safe_left = f32::from_bits(SAFE_AREA_LEFT.load(Ordering::Relaxed)).min(24.0) * dpi;
+        // Safe-area insets (notch / status bar / home indicator / browser
+        // toolbar), supplied by JS via env(safe-area-inset-*) in CSS px.
+        // CSS px == the LOGICAL space everything is drawn in (macroquad's
+        // screen_width() is physical/dpi), so these are used AS-IS — NOT
+        // ×dpi. (The old ×dpi was a latent bug masked by insets being ~0 in
+        // browser-chrome mode; it surfaced as a minimap shoved 3× too low in
+        // fullscreen, where the notch inset is real.) The top inset is
+        // honoured in full; the LEFT inset is capped — in landscape the
+        // island sits mid-edge, not in the corner, and the full ~47-59 px
+        // inset shoved the minimap far in when only the bezel corner matters.
+        let safe_top = f32::from_bits(SAFE_AREA_TOP.load(Ordering::Relaxed));
+        let safe_left = f32::from_bits(SAFE_AREA_LEFT.load(Ordering::Relaxed)).min(24.0);
+        let safe_bottom = f32::from_bits(SAFE_AREA_BOTTOM.load(Ordering::Relaxed));
+        let safe_right = f32::from_bits(SAFE_AREA_RIGHT.load(Ordering::Relaxed));
 
         let (mut cam_x, mut cam_y, mut angle, mut ship_vx, mut ship_vy) = {
             let (bx, by, ba) = sim.ship_pose();
@@ -1201,6 +1340,26 @@ async fn main() {
         draw_text(format!("  v={speed:.1}"),
             safe_left + 10.0 * ui + hud_w, hud_y, hud_fs, speed_col);
 
+        // In-canvas floating attitude stick (mobile). Spawned under the
+        // finger while held (amber = engine lit); parked bottom-right as a
+        // translucent ghost otherwise. Only while flying — the dialog/replay
+        // draw their own UI. Parked position uses the safe-area insets we
+        // already have (approx bottom/right from the top/left-derived margins).
+        // Parked stick home (bottom-right), clear of the home indicator /
+        // browser toolbar via the bottom+right safe insets. Also where the
+        // replay draws the stick, animated by the recorded input.
+        let stick_park = vec2(
+            sw - safe_right - STICK_RADIUS - 24.0,
+            sh - safe_bottom - STICK_RADIUS - 28.0,
+        );
+        if matches!(mode, Mode::Flying) && !crashed {
+            if stick.id.is_some() {
+                draw_stick(stick.center, stick.knob, stick.held);
+            } else {
+                draw_stick(stick_park, Vec2::ZERO, false);
+            }
+        }
+
         // Crash dialog / replay overlay / status banners. `do_reset` is
         // consumed by the reset block below (same path as the R key).
         let mut do_reset = false;
@@ -1213,19 +1372,19 @@ async fn main() {
             draw_text(msg, (sw - dims.width) / 2.0, sh * 0.30, fs,
                 Color::from_rgba(255, 90, 60, 255));
 
-            // Two buttons side by side, kept ABOVE the touch-stick zone: the
-            // JS stick handler swallows canvas touches in the lower 45% of
-            // the viewport before miniquad sees them, so buttons there would
-            // be untappable on mobile.
+            // Two buttons side by side. The in-canvas stick only claims
+            // touches while flying, so during the dialog the whole screen is
+            // tappable — a `ui_tap` (fresh touch or mouse press, physical px)
+            // inside a button rect fires it.
             let bw = 300.0 * ui;
             let bh = 84.0 * ui;
             let gap = 28.0 * ui;
             let by = sh * 0.36;
-            let (mx, my) = mouse_position();
-            let click = is_mouse_button_pressed(MouseButton::Left);
             let button = |x: f32, label: &str, hint: &str| -> bool {
-                let hover = mx >= x && mx <= x + bw && my >= by && my <= by + bh;
-                let bg = if hover {
+                let hit = ui_tap.is_some_and(|p| {
+                    p.x >= x && p.x <= x + bw && p.y >= by && p.y <= by + bh
+                });
+                let bg = if hit {
                     Color::from_rgba(60, 80, 120, 235)
                 } else {
                     Color::from_rgba(28, 38, 58, 235)
@@ -1240,7 +1399,7 @@ async fn main() {
                 let hd = measure_text(hint, None, hfs as u16, 1.0);
                 draw_text(hint, x + (bw - hd.width) / 2.0, by + bh * 0.82, hfs,
                     Color::from_rgba(170, 180, 200, 255));
-                hover && click
+                hit
             };
             if button(sw / 2.0 - bw - gap / 2.0, "FLY AGAIN", "[R]") {
                 do_reset = true;
@@ -1295,7 +1454,15 @@ async fn main() {
             let vd = measure_text(&vt, None, vfs as u16, 1.0);
             draw_text(&vt, (sw - vd.width) / 2.0, py + 24.0 * ui, vfs,
                 Color::from_rgba(170, 180, 200, 170));
-            if is_mouse_button_pressed(MouseButton::Left) {
+            // Recorded-input display: the stick at its normal parked home,
+            // animated by the input driving the re-sim (knob at the recorded
+            // deflection, amber while held) — so a replay shows the pilot's
+            // hand exactly where the live stick sits. (Throttle meter: TODO,
+            // next commit — for both live play and replay, see #67.)
+            let inp = replay_player.as_ref().map(|p| p.current_input()).unwrap_or_default();
+            let (isx, isy) = inp.steer_f32();
+            draw_stick(stick_park, vec2(isx, isy) * STICK_TRAVEL, inp.stick_held != 0);
+            if ui_tap.is_some() {
                 replay_player = None;
                 mode = Mode::CrashDialog;
             }
