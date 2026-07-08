@@ -1,0 +1,9 @@
+# Pegasus level file — `key = value`, # comments, unknown keys ignored.
+# The original world, kept as the demo/experimentation level: pad-hopping
+# through the shafted caves. seed 0 reproduces the legacy cave bit-for-bit.
+name = The Caves
+scoring = pads
+shafts = on
+obstacles = on
+pad_spacing = 130
+seed = 0

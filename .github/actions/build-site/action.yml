@@ -45,6 +45,9 @@ runs:
         cp manifest.json site/
         cp icon-512.png icon-192.png icon-180.png site/
         cp mq_js_bundle.js site/
+        # Levels are runtime data (fetched by index.html) — new levels ship
+        # by editing levels/ + manifest.json, no wasm rebuild needed.
+        cp -r levels site/
         # Shrink the wasm (~30% on top of the size-tuned release profile).
         wasm-opt -Oz -o site/pegasus.wasm target/wasm32-unknown-unknown/release/pegasus.wasm
         # Inject the build's git revision and timestamp into the info overlay.

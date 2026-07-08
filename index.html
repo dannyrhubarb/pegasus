@@ -99,6 +99,26 @@
       color: #6c84ad;
       margin-top: 8px;
     }
+    /* Level picker: populated from levels/manifest.json at load; hidden when
+       the manifest can't be fetched (the game stays on its built-in level). */
+    #level-row {
+      display: none; /* shown once the manifest loads */
+      align-items: center;
+      gap: 10px;
+      font-size: clamp(16px, 3.5vw, 22px);
+      color: #dde9ff;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    #level-select {
+      font: 600 16px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: #dde9ff;
+      background: rgba(24, 40, 72, 0.8);
+      border: 1.5px solid rgba(140, 200, 255, 0.8);
+      border-radius: 10px;
+      padding: 8px 12px;
+      cursor: pointer;
+    }
     /* Settings rows: velocity-vector arrow + invert-stick toggle */
     #vel-toggle-row,
     #inv-toggle-row {
@@ -183,6 +203,10 @@
       <div class="info-label">Build time</div>
       <div class="info-value" id="build-time">__BUILD_TIME__</div>
     </div>
+    <label id="level-row">
+      Level
+      <select id="level-select"></select>
+    </label>
     <label id="vel-toggle-row">
       <input type="checkbox" id="vel-toggle">
       Velocity vector
@@ -540,6 +564,86 @@
         clearInterval(invTimer);
       }
     }, 200);
+
+    // --- Level picker ---
+    // Levels are DATA files (levels/*.level) fetched at runtime, so new
+    // levels deploy without recompiling the wasm. levels/manifest.json lists
+    // them in menu order; each file's `name =` line labels its <option>. The
+    // selected level's text is written into a wasm-side buffer
+    // (level_buf_ptr + load_level) and the game restarts on it. The choice
+    // persists in localStorage, as does the best distance per level file
+    // (mirrored from the get_best_dist export below). If the manifest can't
+    // be fetched the row stays hidden and the game keeps its built-in level.
+    const levelRow = document.getElementById("level-row");
+    const levelSelect = document.getElementById("level-select");
+    const levelTexts = {};        // file -> level text
+    let currentLevelFile = null;  // set once the level actually reached wasm
+
+    function pushLevel(file) {
+      const text = levelTexts[file];
+      if (text === undefined) return;
+      const push = () => {
+        if (typeof wasm_exports === "undefined" || !wasm_exports.load_level) return false;
+        const bytes = new TextEncoder().encode(text);
+        const ptr = wasm_exports.level_buf_ptr(bytes.length);
+        new Uint8Array(wasm_memory.buffer, ptr, bytes.length).set(bytes);
+        wasm_exports.load_level(bytes.length); // also clears the in-game best
+        const best = parseFloat(localStorage.getItem("pegasus_best_" + file) || "0");
+        if (best > 0) wasm_exports.set_best_dist(best);
+        currentLevelFile = file;
+        return true;
+      };
+      // Exports may not be ready yet (startup restore) — retry like the
+      // other setting probes.
+      if (!push()) {
+        const t = setInterval(() => { if (push()) clearInterval(t); }, 200);
+      }
+    }
+
+    fetch("levels/manifest.json?nocache=" + Date.now(), { cache: "no-store" })
+      .then(r => (r.ok ? r.json() : null))
+      .then(async m => {
+        if (!m || !Array.isArray(m.levels)) return;
+        for (const file of m.levels) {
+          try {
+            const r = await fetch("levels/" + file + "?nocache=" + Date.now(), { cache: "no-store" });
+            if (!r.ok) continue;
+            const text = await r.text();
+            levelTexts[file] = text;
+            const name = (text.match(/^\s*name\s*=\s*(.+)$/m) || [])[1] || file;
+            const opt = document.createElement("option");
+            opt.value = file;
+            opt.textContent = name.trim();
+            levelSelect.appendChild(opt);
+          } catch (e) { /* skip an unfetchable level */ }
+        }
+        if (!levelSelect.options.length) return;
+        levelRow.style.display = "flex";
+        const saved = localStorage.getItem("pegasus_level");
+        const start = levelTexts[saved] !== undefined ? saved : levelSelect.options[0].value;
+        levelSelect.value = start;
+        pushLevel(start);
+      })
+      .catch(() => {}); // local dev without a server: keep the built-in level
+
+    levelSelect.addEventListener("change", () => {
+      localStorage.setItem("pegasus_level", levelSelect.value);
+      pushLevel(levelSelect.value);
+    });
+    ["mousedown", "click", "touchstart"].forEach(ev =>
+      levelRow.addEventListener(ev, e => e.stopPropagation()));
+
+    // Mirror the in-game best distance into localStorage (keyed per level
+    // file), so the Distance high score survives reloads.
+    setInterval(() => {
+      if (!currentLevelFile) return;
+      if (typeof wasm_exports === "undefined" || !wasm_exports.get_best_dist) return;
+      const best = wasm_exports.get_best_dist();
+      const key = "pegasus_best_" + currentLevelFile;
+      if (best > parseFloat(localStorage.getItem(key) || "0")) {
+        localStorage.setItem(key, String(best));
+      }
+    }, 2000);
 
     // DEBUG (replay-drift investigation): show the download button once a run
     // has crashed (a recording blob is available), and download it on tap.
