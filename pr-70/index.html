@@ -177,11 +177,11 @@
     <h1>Pegasus — Moon Lander</h1>
     <div class="info-row">
       <div class="info-label">Build revision</div>
-      <div class="info-value" id="git-rev">1ec6704-pr-70</div>
+      <div class="info-value" id="git-rev">7fd4312-pr-70</div>
     </div>
     <div class="info-row">
       <div class="info-label">Build time</div>
-      <div class="info-value" id="build-time">2026-07-08 13:35 UTC</div>
+      <div class="info-value" id="build-time">2026-07-08 13:44 UTC</div>
     </div>
     <label id="vel-toggle-row">
       <input type="checkbox" id="vel-toggle">
@@ -362,9 +362,17 @@
       const tl = safeProbe.getBoundingClientRect();
       const br = safeProbeBR.getBoundingClientRect();
       const vv = window.visualViewport;
-      const obscuredBottom = vv
-        ? Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop))
-        : 0;
+      // The canvas is 100vh = the LARGE viewport (toolbar retracted); vh units
+      // don't shrink when the toolbar shows. visualViewport.height is the
+      // ACTUALLY visible height. Their difference is what the floating toolbar
+      // + home indicator hide at the bottom. (window.innerHeight is unreliable
+      // here — it often already equals visualViewport.height.)
+      let obscuredBottom = 0;
+      if (vv) {
+        const canvas = document.getElementById("glcanvas");
+        const ch = canvas ? canvas.getBoundingClientRect().height : window.innerHeight;
+        obscuredBottom = Math.max(0, Math.round(ch - vv.height - vv.offsetTop));
+      }
       const bottom = Math.max(br.height, obscuredBottom);
       call("set_safe_area", tl.height, tl.width, bottom, br.width);
     }
@@ -425,7 +433,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "1ec6704-pr-70";
+    const wasmRev = "7fd4312-pr-70";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
