@@ -1,7 +1,6 @@
 use macroquad::audio::{load_sound_from_bytes, play_sound, set_sound_volume, PlaySoundParams};
 use macroquad::prelude::*;
 use macroquad::rand::gen_range;
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 mod audio;
@@ -111,36 +110,56 @@ impl ResimPlayer {
         })
     }
 
+    // Re-simulate exactly one tick: apply due input events, tick the scratch
+    // sim, verify any keyframe passed (snap on real drift). Called from
+    // advance() on the wall clock for WATCH REPLAY, and once per LIVE tick
+    // for the lockstep ghost.
+    fn step_one(&mut self, rec: &Recording) {
+        if self.finished {
+            return;
+        }
+        self.prev_pose = self.sim.ship_pose();
+        while rec.events.get(self.event_idx).is_some_and(|e| e.tick <= self.tick) {
+            self.input = rec.events[self.event_idx].input;
+            self.event_idx += 1;
+        }
+        let rep = self.sim.tick(self.input);
+        self.tick += 1;
+        self.last_torque = rep.heading_torque;
+        // Keyframe verification + fallback.
+        while rec.keyframes.get(self.kf_idx).is_some_and(|k| k.tick <= self.tick) {
+            let kf = rec.keyframes[self.kf_idx];
+            if kf.tick == self.tick {
+                let (x, y, _) = self.sim.ship_pose();
+                self.drift = ((x - kf.x).powi(2) + (y - kf.y).powi(2)).sqrt();
+                if self.drift > SNAP_DRIFT_M {
+                    self.sim.restore(&kf);
+                    self.snapped = true;
+                }
+            }
+            self.kf_idx += 1;
+        }
+        if self.tick >= self.end_tick {
+            self.finished = true;
+        }
+    }
+
+    // Pose lerped between the last two re-simmed ticks. The lockstep ghost
+    // passes the live interpolation alpha, so it moves in perfect sync with
+    // the player ship.
+    fn lerped_pose(&self, alpha: f32) -> (f32, f32, f32) {
+        let (px, py, pa) = self.prev_pose;
+        let (x, y, a) = self.sim.ship_pose();
+        (px + (x - px) * alpha, py + (y - py) * alpha, lerp_angle(pa, a, alpha))
+    }
+
     // Advance by real time `dt`, re-simulating whole ticks and returning the
     // interpolated visual frame (the final pose once finished).
     fn advance(&mut self, rec: &Recording, dt: f32) -> ReplayFrame {
         self.accum = (self.accum + dt).min(0.05);
-        while self.accum >= PHYSICS_DT && self.tick < self.end_tick {
-            self.prev_pose = self.sim.ship_pose();
-            while rec.events.get(self.event_idx).is_some_and(|e| e.tick <= self.tick) {
-                self.input = rec.events[self.event_idx].input;
-                self.event_idx += 1;
-            }
-            let rep = self.sim.tick(self.input);
-            self.tick += 1;
+        while self.accum >= PHYSICS_DT && !self.finished {
+            self.step_one(rec);
             self.accum -= PHYSICS_DT;
-            self.last_torque = rep.heading_torque;
-            // Keyframe verification + fallback.
-            while rec.keyframes.get(self.kf_idx).is_some_and(|k| k.tick <= self.tick) {
-                let kf = rec.keyframes[self.kf_idx];
-                if kf.tick == self.tick {
-                    let (x, y, _) = self.sim.ship_pose();
-                    self.drift = ((x - kf.x).powi(2) + (y - kf.y).powi(2)).sqrt();
-                    if self.drift > SNAP_DRIFT_M {
-                        self.sim.restore(&kf);
-                        self.snapped = true;
-                    }
-                }
-                self.kf_idx += 1;
-            }
-        }
-        if self.tick >= self.end_tick {
-            self.finished = true;
         }
         // Engine glow follows the fuel-gated command, same smoothing as live.
         let throttle_fx = if self.sim.fuel > 0.0 { self.input.throttle_f32() } else { 0.0 };
@@ -273,15 +292,10 @@ const SHIP_SCALE: f32 = 1.5;
 // Seconds from crash to the crash dialog (fly again / watch replay) — long
 // enough for the explosion to play out with the camera held still.
 const CRASH_DIALOG_DELAY: f32 = 1.5;
-// Instant replay: how many seconds the dense VISUAL buffer retains (recorded
-// once per physics step, ~3.4 KB/s). Playback convenience only — nobody
-// watches beyond a few minutes, and it's the memory-hungry buffer (5 min ≈
-// 1 MB), so it keeps just the tail of very long runs.
-const REPLAY_MAX_SECS: f32 = 300.0;
-// The HYBRID recording is ~100× cheaper (~1 MB/hour worst case) and a future
-// highscore ghost needs the run from its spawn (t = 0 is the shared start
-// line), so its window is a memory safety net, not an expected limit — only
-// a parked-for-hours session ever hits it.
+// The hybrid recording is the ONLY replay store (~1 MB/hour worst case) and
+// a ghost needs the run from its spawn (t = 0 is the shared start line), so
+// its window is a memory safety net, not an expected limit — only a
+// parked-for-hours session ever hits it.
 const HYBRID_MAX_SECS: f32 = 3600.0;
 // A run shorter than this doesn't replace the ghost on reset — R-spam
 // shouldn't wipe a good previous run.
@@ -369,12 +383,9 @@ async fn main() {
     let mut mode = Mode::Flying;
     // Instant-replay ring buffer (one frame per physics step) and the
     // playback cursor, in fractional frame indices.
-    let replay_cap = (REPLAY_MAX_SECS / PHYSICS_DT) as usize;
-    let mut replay_buf: VecDeque<ReplayFrame> = VecDeque::with_capacity(replay_cap);
     // WATCH REPLAY playback: a scratch Sim re-simulating the hybrid
-    // recording's inputs (the visual buffer above only feeds the ghost now).
+    // recording's inputs on the wall clock.
     let mut replay_player: Option<ResimPlayer> = None;
-    let mut last_rcs: i8 = 0; // RCS puff side of the previous frame, recorded per step
 
     // Hybrid recording (src/replay.rs): the shareable spawn→crash replay —
     // input change-events + 1 Hz keyframes + params header. In memory only
@@ -384,13 +395,13 @@ async fn main() {
     recorder.push_keyframe(sim.keyframe(0, 0.0));
     let mut blob_sizes: Option<(usize, usize)> = None; // (raw, deflated) at last crash
 
-    // Ghost of the LAST run: on reset the ended run's visual buffer is kept
-    // and replayed alongside live flight on the same clock (ticks since
-    // spawn) as a translucent silhouette. If the previous run outlived the
-    // visual buffer's window, ghost_first_tick > 0 and the ghost only
-    // appears once the current run reaches that tick.
-    let mut ghost: Vec<ReplayFrame> = Vec::new();
-    let mut ghost_first_tick: u32 = 0;
+    // Ghost of the LAST run: on reset the ended run's hybrid Recording is
+    // adopted and RE-SIMULATED in lockstep with live play — one ghost tick
+    // per live tick, same spawn clock — drawn as a translucent silhouette.
+    // The hybrid recording is the single source of truth for both playback
+    // and the ghost; there is no separate visual buffer.
+    let mut ghost_rec: Option<Recording> = None;
+    let mut ghost_player: Option<ResimPlayer> = None;
 
     // Debris burst at (x, y) — fired at the real crash and again when the
     // replay reaches its end.
@@ -494,29 +505,22 @@ async fn main() {
                     continue; // parked wreck: nothing to record or report
                 }
                 let destroyed = rep.impact.as_ref().is_some_and(|i| i.destroyed);
-                // Visual replay frame. A destroying impact parks the wreck
-                // inside tick(), so that frame takes the report's pre-park
-                // pose/velocity.
-                let vframe = if let Some(imp) = rep.impact.as_ref().filter(|i| i.destroyed) {
-                    ReplayFrame {
-                        x: imp.x, y: imp.y, angle: imp.angle,
-                        vx: imp.vx, vy: imp.vy, glow, rcs: last_rcs,
-                    }
-                } else {
-                    let (x, y, angle) = sim.ship_pose();
-                    let (vx, vy) = sim.ship_vel();
-                    ReplayFrame { x, y, angle, vx, vy, glow, rcs: last_rcs }
-                };
-                if replay_buf.len() >= replay_cap {
-                    replay_buf.pop_front();
-                }
-                replay_buf.push_back(vframe);
                 // Hybrid recording: the input in effect for this step (an
                 // event only when it changed) + periodic keyframes. The
                 // destruction tick skips its periodic keyframe — the
                 // terminal one below carries the impact state instead.
                 if recorder.record_tick(input) && !destroyed {
                     recorder.push_keyframe(sim.keyframe(recorder.ticks(), glow));
+                }
+                // Ghost: re-simulate the previous run in LOCKSTEP — exactly
+                // one ghost tick per live tick, so both ships fly the same
+                // spawn clock. (A trimmed recording starts at tick > 0; the
+                // ghost then waits for the live run to reach it.)
+                if let (Some(p), Some(r)) = (ghost_player.as_mut(), ghost_rec.as_ref())
+                    && !p.finished
+                    && p.tick < recorder.ticks()
+                {
+                    p.step_one(r);
                 }
                 frame_heading_torque = rep.heading_torque;
                 frame_landed = rep.landed;
@@ -693,30 +697,18 @@ async fn main() {
             ship_vy = f.vy;
         }
 
-        // Ghost of the last run: where the previous run's ship was at this
-        // many ticks after ITS spawn. Same fractional-tick lerp as the
-        // replay; None once the ghost reaches its crash (it "dies" there),
-        // before its buffer starts (ring-capped long run), or outside Flying.
-        let ghost_pose: Option<(f32, f32, f32)> =
-            if mode == Mode::Flying && !crashed && !ghost.is_empty() {
-                let t_now =
-                    recorder.ticks() as f32 + (phys_accum / PHYSICS_DT).clamp(0.0, 1.0);
-                let gt = t_now - ghost_first_tick as f32;
-                let idx = gt.floor() as usize;
-                if gt >= 0.0 && idx + 1 < ghost.len() {
-                    let ft = gt - idx as f32;
-                    let (a, b) = (ghost[idx], ghost[idx + 1]);
-                    Some((
-                        a.x + (b.x - a.x) * ft,
-                        a.y + (b.y - a.y) * ft,
-                        lerp_angle(a.angle, b.angle, ft),
-                    ))
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+        // Ghost of the last run: the lockstep re-sim's pose, lerped with the
+        // SAME alpha as the live ship so both move in sync. None once the
+        // ghost reaches its crash (it "dies" there), before a trimmed
+        // recording's first keyframe, or outside live flight.
+        let ghost_pose: Option<(f32, f32, f32)> = match (&ghost_player, mode) {
+            (Some(p), Mode::Flying)
+                if !crashed && !p.finished && recorder.ticks() >= p.first_tick =>
+            {
+                Some(p.lerped_pose((phys_accum / PHYSICS_DT).clamp(0.0, 1.0)))
+            }
+            _ => None,
+        };
 
         // Local-to-world helpers (position and direction)
         let lp = |lx: f32, ly: f32| -> (f32, f32) {
@@ -1341,7 +1333,6 @@ async fn main() {
 
         // Which RCS nozzle is puffing: live command + the sim's last applied
         // heading torque while flying, the recorded side during playback.
-        // `last_rcs` feeds the visual replay recorder.
         let (puff_left, puff_right) = if let Some(f) = replay_frame {
             (f.rcs < 0, f.rcs > 0)
         } else {
@@ -1349,9 +1340,6 @@ async fn main() {
             (rcs_live && (input.rot < 0 || frame_heading_torque < -0.4),
              rcs_live && (input.rot > 0 || frame_heading_torque > 0.4))
         };
-        if mode == Mode::Flying {
-            last_rcs = if puff_left { -1 } else if puff_right { 1 } else { 0 };
-        }
 
         // Main thruster: exhaust exits local -Y (out the bottom), up to 8
         // particles/frame — count and exhaust speed scale with the throttle.
@@ -1434,18 +1422,20 @@ async fn main() {
             crash_timer = 0.0;
             shake = 0.0;
             mode = Mode::Flying;
-            // The ended run becomes the ghost for the next one — unless it
-            // was a blink-and-gone attempt (keep the previous ghost then).
-            if replay_buf.len() >= (GHOST_MIN_SECS / PHYSICS_DT) as usize {
-                ghost_first_tick = recorder.ticks().saturating_sub(replay_buf.len() as u32);
-                ghost = replay_buf.drain(..).collect();
+            // The ended run's recording becomes the ghost for the next one —
+            // unless it was a blink-and-gone attempt (keep the previous
+            // ghost then). The ghost player re-simulates it from its first
+            // keyframe, in lockstep with the new run.
+            let ended = std::mem::replace(
+                &mut recorder,
+                Recording::new(sim_params(), (HYBRID_MAX_SECS / PHYSICS_DT) as u32),
+            );
+            if ended.ticks() >= (GHOST_MIN_SECS / PHYSICS_DT) as u32 {
+                ghost_rec = Some(ended);
             }
-            // A fresh attempt records a fresh replay (both formats).
-            replay_buf.clear();
+            ghost_player = ghost_rec.as_ref().and_then(ResimPlayer::new);
             replay_player = None;
-            last_rcs = 0;
             glow = 0.0;
-            recorder = Recording::new(sim_params(), (HYBRID_MAX_SECS / PHYSICS_DT) as u32);
             recorder.push_keyframe(sim.keyframe(0, 0.0));
             blob_sizes = None;
         }
