@@ -21,7 +21,7 @@
 // One keyframe per second of sim time (physics runs at 120 Hz).
 pub const KEYFRAME_EVERY: u32 = 120;
 pub const REPLAY_MAGIC: [u8; 4] = *b"PGRP";
-pub const REPLAY_FORMAT_VERSION: u16 = 1;
+pub const REPLAY_FORMAT_VERSION: u16 = 2; // v2: LevelParams added to the header
 
 // Resolved control values in effect for a physics step, quantized for
 // storage. "Resolved" = after the input-combining logic (stick ramp gates,
@@ -102,6 +102,20 @@ pub struct SimParams {
     pub hull_max: f32,
 }
 
+// The world-shaping half of the header: everything a Level contributes to
+// physics (the cave/obstacle/pad generator parameters), so resim rebuilds
+// the exact world the run was flown in. The level NAME is cosmetic and
+// deliberately not part of this — two levels with equal params are the same
+// world. Conversions to/from `world::Level` live in world.rs.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct LevelParams {
+    pub scoring: u8, // 0 = pads, 1 = distance (display-only, kept for context)
+    pub shafts: u8,
+    pub obstacles: u8,
+    pub pad_spacing: f32,
+    pub seed: u32,
+}
+
 impl SimParams {
     const N_FIELDS: usize = 15;
 
@@ -130,6 +144,7 @@ impl SimParams {
 
 pub struct Recording {
     pub params: SimParams,
+    pub level: LevelParams,
     pub events: Vec<InputEvent>,
     pub keyframes: Vec<Keyframe>,
     ticks: u32,             // physics steps recorded so far
@@ -138,9 +153,10 @@ pub struct Recording {
 }
 
 impl Recording {
-    pub fn new(params: SimParams, max_ticks: u32) -> Self {
+    pub fn new(params: SimParams, level: LevelParams, max_ticks: u32) -> Self {
         Recording {
             params,
+            level,
             events: Vec::new(),
             keyframes: Vec::new(),
             ticks: 0,
@@ -206,19 +222,25 @@ impl Recording {
     }
 
     // --- Serialization (little-endian) ---
-    // Header: magic(4) version(2) build_id(4) params(15×4) ticks(4)
-    //         n_events(4) n_keyframes(4)                          = 82 B
+    // Header: magic(4) version(2) build_id(4) params(15×4)
+    //         level: scoring(1) shafts(1) obstacles(1) pad_spacing(4) seed(4)
+    //         ticks(4) n_events(4) n_keyframes(4)                 = 93 B
     // Event:  tick(4) throttle(1) rot(1) steer_x(1) steer_y(1) held(1) = 9 B
     // Keyframe: tick(4) + 9×f32                                       = 40 B
 
     pub fn serialize(&self, build_id: u32) -> Vec<u8> {
-        let mut out = Vec::with_capacity(82 + self.events.len() * 9 + self.keyframes.len() * 40);
+        let mut out = Vec::with_capacity(93 + self.events.len() * 9 + self.keyframes.len() * 40);
         out.extend_from_slice(&REPLAY_MAGIC);
         out.extend_from_slice(&REPLAY_FORMAT_VERSION.to_le_bytes());
         out.extend_from_slice(&build_id.to_le_bytes());
         for f in self.params.to_array() {
             out.extend_from_slice(&f.to_le_bytes());
         }
+        out.push(self.level.scoring);
+        out.push(self.level.shafts);
+        out.push(self.level.obstacles);
+        out.extend_from_slice(&self.level.pad_spacing.to_le_bytes());
+        out.extend_from_slice(&self.level.seed.to_le_bytes());
         out.extend_from_slice(&self.ticks.to_le_bytes());
         out.extend_from_slice(&(self.events.len() as u32).to_le_bytes());
         out.extend_from_slice(&(self.keyframes.len() as u32).to_le_bytes());
@@ -254,6 +276,13 @@ impl Recording {
             *f = r.f32()?;
         }
         let params = SimParams::from_array(a);
+        let level = LevelParams {
+            scoring: r.u8()?,
+            shafts: r.u8()?,
+            obstacles: r.u8()?,
+            pad_spacing: r.f32()?,
+            seed: r.u32()?,
+        };
         let ticks = r.u32()?;
         let n_events = r.u32()? as usize;
         let n_keyframes = r.u32()? as usize;
@@ -285,7 +314,7 @@ impl Recording {
         }
         let last_input = events.last().map(|e| e.input);
         Ok((
-            Recording { params, events, keyframes, ticks, last_input, max_ticks: u32::MAX },
+            Recording { params, level, events, keyframes, ticks, last_input, max_ticks: u32::MAX },
             build_id,
         ))
     }
@@ -346,6 +375,10 @@ mod tests {
         }
     }
 
+    fn lparams() -> LevelParams {
+        LevelParams { scoring: 0, shafts: 1, obstacles: 1, pad_spacing: 130.0, seed: 0 }
+    }
+
     fn kf(tick: u32) -> Keyframe {
         Keyframe {
             tick,
@@ -356,7 +389,7 @@ mod tests {
 
     #[test]
     fn events_are_deduplicated() {
-        let mut rec = Recording::new(params(), u32::MAX);
+        let mut rec = Recording::new(params(), lparams(), u32::MAX);
         let idle = InputState::default();
         let burn = InputState { throttle: 255, ..Default::default() };
         for _ in 0..50 {
@@ -375,7 +408,7 @@ mod tests {
 
     #[test]
     fn keyframes_come_due_every_second() {
-        let mut rec = Recording::new(params(), u32::MAX);
+        let mut rec = Recording::new(params(), lparams(), u32::MAX);
         rec.push_keyframe(kf(0));
         let mut due_at = Vec::new();
         for _ in 0..KEYFRAME_EVERY * 3 {
@@ -393,7 +426,7 @@ mod tests {
         // trim the window must start at a keyframe and carry a re-seeded
         // event stating the input in effect there.
         let burn = InputState { throttle: 255, ..Default::default() };
-        let mut rec = Recording::new(params(), 2 * KEYFRAME_EVERY);
+        let mut rec = Recording::new(params(), lparams(), 2 * KEYFRAME_EVERY);
         rec.push_keyframe(kf(0));
         for _ in 0..5 * KEYFRAME_EVERY {
             if rec.record_tick(burn) {
@@ -409,7 +442,7 @@ mod tests {
 
     #[test]
     fn finalize_skips_duplicate_tick() {
-        let mut rec = Recording::new(params(), u32::MAX);
+        let mut rec = Recording::new(params(), lparams(), u32::MAX);
         rec.push_keyframe(kf(0));
         rec.finalize(kf(0));
         assert_eq!(rec.keyframes.len(), 1);
@@ -419,7 +452,7 @@ mod tests {
 
     #[test]
     fn serialize_roundtrips() {
-        let mut rec = Recording::new(params(), u32::MAX);
+        let mut rec = Recording::new(params(), lparams(), u32::MAX);
         rec.push_keyframe(kf(0));
         let burn = InputState { throttle: 255, rot: -1, steer_x: 40, steer_y: -90, stick_held: 1 };
         for _ in 0..KEYFRAME_EVERY {
@@ -428,10 +461,11 @@ mod tests {
             }
         }
         let blob = rec.serialize(0xdeadbeef);
-        assert_eq!(blob.len(), 82 + rec.events.len() * 9 + rec.keyframes.len() * 40);
+        assert_eq!(blob.len(), 93 + rec.events.len() * 9 + rec.keyframes.len() * 40);
         let (back, build_id) = Recording::deserialize(&blob).expect("deserialize");
         assert_eq!(build_id, 0xdeadbeef);
         assert_eq!(back.params, rec.params);
+        assert_eq!(back.level, rec.level);
         assert_eq!(back.ticks(), rec.ticks());
         assert_eq!(back.events, rec.events);
         assert_eq!(back.keyframes, rec.keyframes);
@@ -441,7 +475,7 @@ mod tests {
     fn compression_shrinks_a_real_recording() {
         // A recording with periodic keyframes and sparse events should
         // deflate well (repetitive structure), and must decompress intact.
-        let mut rec = Recording::new(params(), u32::MAX);
+        let mut rec = Recording::new(params(), lparams(), u32::MAX);
         rec.push_keyframe(kf(0));
         for i in 0..60 * KEYFRAME_EVERY {
             let input = InputState {

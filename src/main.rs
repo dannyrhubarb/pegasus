@@ -89,7 +89,7 @@ impl ResimPlayer {
         if rec.ticks() <= k0.tick {
             return None;
         }
-        let mut s = sim::Sim::new();
+        let mut s = sim::Sim::new(world::Level::from_params(&rec.level));
         s.restore(&k0);
         let prev_pose = s.ship_pose();
         Some(ResimPlayer {
@@ -220,6 +220,48 @@ static INVERT_STICK: AtomicU32 = AtomicU32::new(0);
 #[unsafe(no_mangle)]
 pub extern "C" fn set_invert_stick(on: i32) {
     INVERT_STICK.store(on as u32, Ordering::Relaxed);
+}
+
+// Runtime level loading (levels are DATA, not code — levels/*.level files
+// fetched by index.html): JS asks for a buffer with level_buf_ptr(len),
+// writes the UTF-8 level text into wasm memory, then calls load_level(len).
+// The parsed level is applied by the main loop at the next frame boundary
+// as a full fresh-Sim restart (a level switch is a new run by definition).
+static LEVEL_BUF: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
+static PENDING_LEVEL: std::sync::Mutex<Option<world::Level>> = std::sync::Mutex::new(None);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn level_buf_ptr(len: u32) -> *const u8 {
+    let mut b = LEVEL_BUF.lock().unwrap();
+    b.clear();
+    b.resize(len as usize, 0);
+    b.as_ptr()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn load_level(len: u32) {
+    let b = LEVEL_BUF.lock().unwrap();
+    let end = (len as usize).min(b.len());
+    if let Ok(text) = std::str::from_utf8(&b[..end]) {
+        *PENDING_LEVEL.lock().unwrap() = Some(world::Level::parse(text));
+        BEST_DIST.store(0, Ordering::Relaxed);
+    }
+}
+
+// Best distance on the current level (the Distance-scoring high score).
+// The game raises it live; JS polls get_best_dist to mirror it into
+// localStorage (per level) and pushes the stored value back after each
+// level (re)load — load_level clears it so scores never leak across levels.
+static BEST_DIST: AtomicU32 = AtomicU32::new(0);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_best_dist(v: f32) {
+    BEST_DIST.store(v.max(0.0).to_bits(), Ordering::Relaxed);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn get_best_dist() -> f32 {
+    f32::from_bits(BEST_DIST.load(Ordering::Relaxed))
 }
 
 // The serialized recording blob of the last crashed run, exposed to JS so it
@@ -426,7 +468,10 @@ async fn main() {
     // The deterministic simulation core: Rapier world, ship, sliding collider
     // windows, fuel/hull/score — everything tick-driven (src/sim.rs). The
     // loop below only supplies per-tick InputStates and reads state back.
-    let mut sim = Sim::new();
+    // The startup level: the built-in demo world. index.html pushes the
+    // player's chosen level (fetched from levels/) as soon as the exports
+    // are live; the loop below applies it as a fresh start.
+    let mut sim = Sim::new(Level::demo());
 
     // Normalized [0,1) star field — scaled to the current screen size each frame so
     // it fills the whole viewport in any orientation. (Storing absolute pixel coords
@@ -480,7 +525,7 @@ async fn main() {
 
     let mut phys_accum = 0.0f32;
     // Ship state at the previous physics step, for render interpolation.
-    let mut prev_ship = (0.0f32, stand_y(0.0), 0.0f32); // x, y, angle
+    let mut prev_ship = (0.0f32, sim.level.stand_y(0.0), 0.0f32); // x, y, angle
     // Wreck timer (> 0 → crashed: input dead, ship hidden; hands over to the
     // crash dialog when it hits 0). Impact detection itself lives in the sim.
     let mut crash_timer = 0.0f32;
@@ -495,7 +540,8 @@ async fn main() {
     // input change-events + 1 Hz keyframes + params header. In memory only
     // for now; serialized + deflated at the crash to measure what shipping
     // it would cost (shown on the WATCH REPLAY button).
-    let mut recorder = Recording::new(sim_params(), (HYBRID_MAX_SECS / PHYSICS_DT) as u32);
+    let mut recorder = Recording::new(sim_params(), sim.level.to_params(),
+        (HYBRID_MAX_SECS / PHYSICS_DT) as u32);
     recorder.push_keyframe(sim.keyframe(0, 0.0));
     let mut blob_sizes: Option<(usize, usize)> = None; // (raw, deflated) at last crash
 
@@ -530,6 +576,28 @@ async fn main() {
     let mut stick = TouchStick::new();
 
     loop {
+        // Apply a level pushed from JS (startup restore or the overlay
+        // picker): a full fresh start in the new world. The ghost is
+        // dropped — it was flown on a different level.
+        if let Some(lvl) = PENDING_LEVEL.lock().unwrap().take()
+            && lvl != sim.level
+        {
+            sim = Sim::new(lvl);
+            prev_ship = (SPAWN_X, sim.level.stand_y(SPAWN_X), 0.0);
+            crash_timer = 0.0;
+            shake = 0.0;
+            phys_accum = 0.0;
+            mode = Mode::Flying;
+            recorder = Recording::new(sim_params(), sim.level.to_params(),
+                (HYBRID_MAX_SECS / PHYSICS_DT) as u32);
+            recorder.push_keyframe(sim.keyframe(0, 0.0));
+            ghost_rec = None;
+            ghost_player = None;
+            replay_player = None;
+            glow = 0.0;
+            blob_sizes = None;
+        }
+
         // --- Gather this frame's touch input (mobile) ---
         // Device sampling plus the stick-hold gating machine. This is input
         // GENERATION (allowed to be frame-based); the quantized InputState it
@@ -905,6 +973,12 @@ async fn main() {
         }
         pad_msg_timer = (pad_msg_timer - get_frame_time()).max(0.0);
 
+        // During replay playback the world (walls, pads, obstacles — and the
+        // run's fuel/hull/score below) renders from the SCRATCH sim: its
+        // windows and level follow the re-simmed run, while the main sim's
+        // stay parked at the wreck.
+        let world_sim = replay_player.as_ref().map_or(&sim, |p| &p.sim);
+
         // --- Draw ---
         clear_background(Color::from_rgba(8, 8, 18, 255));
 
@@ -970,7 +1044,7 @@ async fn main() {
                 let mut verts: Vec<Vertex> = Vec::new();
                 for col in col_lo..col_hi {
                     // Shaft opening: no wall here (the shaft's rock covers it).
-                    if seg_in_opening(col.div_euclid(SUBCOLS)) {
+                    if world_sim.level.seg_in_opening(col.div_euclid(SUBCOLS)) {
                         continue;
                     }
                     // Cull columns fully off-screen in x.
@@ -983,10 +1057,10 @@ async fn main() {
                     // Facet rows: each cell is two flat-shaded triangles.
                     if facets_visible {
                         for row in 0..N_ROWS - 1 {
-                            let w00 = lattice_point(col,     row,     side);
-                            let w10 = lattice_point(col + 1, row,     side);
-                            let w11 = lattice_point(col + 1, row + 1, side);
-                            let w01 = lattice_point(col,     row + 1, side);
+                            let w00 = lattice_point(&world_sim.level, col,     row,     side);
+                            let w10 = lattice_point(&world_sim.level, col + 1, row,     side);
+                            let w11 = lattice_point(&world_sim.level, col + 1, row + 1, side);
+                            let w01 = lattice_point(&world_sim.level, col,     row + 1, side);
                             let s00 = w2s(w00.x, w00.y + ly, sh, cam_x, cam_y);
                             let s10 = w2s(w10.x, w10.y + ly, sh, cam_x, cam_y);
                             let s11 = w2s(w11.x, w11.y + ly, sh, cam_x, cam_y);
@@ -1011,10 +1085,10 @@ async fn main() {
                     // ceiling and the next layer's floor (shared lattice points
                     // with both facet bands → no cracks).
                     if side == 0 && fill_visible {
-                        let wd0 = lattice_point(col,     N_ROWS - 1, 0);
-                        let wd1 = lattice_point(col + 1, N_ROWS - 1, 0);
-                        let wu0 = lattice_point(col,     N_ROWS - 1, 1);
-                        let wu1 = lattice_point(col + 1, N_ROWS - 1, 1);
+                        let wd0 = lattice_point(&world_sim.level, col,     N_ROWS - 1, 0);
+                        let wd1 = lattice_point(&world_sim.level, col + 1, N_ROWS - 1, 0);
+                        let wu0 = lattice_point(&world_sim.level, col,     N_ROWS - 1, 1);
+                        let wu1 = lattice_point(&world_sim.level, col + 1, N_ROWS - 1, 1);
                         let sd0 = w2s(wd0.x, wd0.y + ly, sh, cam_x, cam_y);
                         let sd1 = w2s(wd1.x, wd1.y + ly, sh, cam_x, cam_y);
                         let su0 = w2s(wu0.x, wu0.y + ly + V_PERIOD, sh, cam_x, cam_y);
@@ -1027,11 +1101,6 @@ async fn main() {
                 draw_flat_mesh(verts);
             }
         }
-
-        // During replay playback the world (and the run's fuel/hull/score
-        // below) renders from the SCRATCH sim — its windows follow the
-        // re-simmed ship, while the main sim's are parked at the wreck.
-        let world_sim = replay_player.as_ref().map_or(&sim, |p| &p.sim);
 
         // Vertical shaft walls — same faceted treatment rotated 90°: depth cols
         // recede horizontally into the rock, rows run along y. Col 0 sits exactly
@@ -1192,7 +1261,8 @@ async fn main() {
             // Legs at ±(hw − 0.5), from under the deck down to the floor.
             for side in [-1.0f32, 1.0] {
                 let lx = pad.cx + side * (PAD_HALF_W - 0.5);
-                let ground = pad_layer as f32 * V_PERIOD + cave_center(lx) - cave_half_width(lx);
+                let ground = pad_layer as f32 * V_PERIOD
+                    + world_sim.level.cave_center(lx) - world_sim.level.cave_half_width(lx);
                 let top = w2s(lx, pad.y, sh, cam_x, cam_y);
                 let bot = w2s(lx, ground.min(pad.y), sh, cam_x, cam_y);
                 draw_line(top.x, top.y + deck_h, bot.x, bot.y, 3.0 * dpi,
@@ -1348,7 +1418,21 @@ async fn main() {
         let cave_x = cam_x.rem_euclid(PERIOD);
         let hud_fs = 36.0 * ui;
         let hud_y = safe_top + 252.0 * ui; // below the fuel + hull gauges
-        let hud = format!("score={}  x={:.0}  lvl={}  {:.0}m/{}m   [R] reset   FPS: {:.0}", world_sim.score, cam_x, ship_layer, cave_x, PERIOD as i32, smooth_fps);
+        // Distance levels: the score IS the farthest |x| reached; raise the
+        // per-level best live (JS mirrors it into localStorage).
+        if sim.level.scoring == Scoring::Distance
+            && sim.max_dist > f32::from_bits(BEST_DIST.load(Ordering::Relaxed))
+        {
+            BEST_DIST.store(sim.max_dist.to_bits(), Ordering::Relaxed);
+        }
+        let hud = match world_sim.level.scoring {
+            Scoring::Distance => format!(
+                "dist={:.0}m  best={:.0}m  x={:.0}  lvl={}   [R] reset   FPS: {:.0}",
+                world_sim.max_dist, get_best_dist(), cam_x, ship_layer, smooth_fps),
+            Scoring::Pads => format!(
+                "score={}  x={:.0}  lvl={}  {:.0}m/{}m   [R] reset   FPS: {:.0}",
+                world_sim.score, cam_x, ship_layer, cave_x, PERIOD as i32, smooth_fps),
+        };
         draw_text(&hud, safe_left + 10.0 * ui, hud_y, hud_fs, WHITE);
         // Speed readout in the same danger color as the velocity arrow.
         let hud_w = measure_text(&hud, None, hud_fs as u16, 1.0).width;
@@ -1605,10 +1689,10 @@ async fn main() {
             // diverges → chaos amplifies → metres of replay drift (found
             // 2026-07 from a real downloaded replay). A fresh sim makes live
             // and resim identical operation sequences by construction.
-            sim = Sim::new();
+            sim = Sim::new(sim.level.clone());
             // Snap the interpolation too, or the camera lerps across the
             // teleport for a frame.
-            prev_ship = (SPAWN_X, stand_y(SPAWN_X), 0.0);
+            prev_ship = (SPAWN_X, sim.level.stand_y(SPAWN_X), 0.0);
             crash_timer = 0.0;
             shake = 0.0;
             mode = Mode::Flying;
@@ -1618,7 +1702,8 @@ async fn main() {
             // keyframe, in lockstep with the new run.
             let ended = std::mem::replace(
                 &mut recorder,
-                Recording::new(sim_params(), (HYBRID_MAX_SECS / PHYSICS_DT) as u32),
+                Recording::new(sim_params(), sim.level.to_params(),
+                    (HYBRID_MAX_SECS / PHYSICS_DT) as u32),
             );
             if ended.ticks() >= (GHOST_MIN_SECS / PHYSICS_DT) as u32 {
                 ghost_rec = Some(ended);
@@ -1655,8 +1740,8 @@ async fn main() {
         for i in 0..MM_SAMPLES {
             let x     = cam_x - MM_HALF_X + (i as f32 + 0.5) * (2.0 * MM_HALF_X) / MM_SAMPLES as f32;
             let col_x = mm_ox + i as f32 / MM_SAMPLES as f32 * mm_w;
-            let c  = cave_center(x);
-            let hw = cave_half_width(x);
+            let c  = world_sim.level.cave_center(x);
+            let hw = world_sim.level.cave_half_width(x);
             for layer in (ship_layer - 1)..=(ship_layer + 1) {
                 let ly = layer as f32 * V_PERIOD;
                 let top_s = to_mm_y(ly + c + hw).clamp(mm_oy, mm_oy + mm_h);
@@ -1677,20 +1762,24 @@ async fn main() {
         let gap_lo = ((cam_y - MM_HALF_Y - 10.0) / V_PERIOD).floor() as i64;
         let gap_hi = ((cam_y + MM_HALF_Y + 10.0) / V_PERIOD).floor() as i64;
         for s in s_mm_lo..=s_mm_hi {
-            let o = shaft_open_seg(s);
+            if !world_sim.level.shafts {
+                break;
+            }
+            let lv = &world_sim.level;
+            let o = lv.shaft_open_seg(s);
             let (xl, xr) = (o as f32 * SEG_LEN, (o + SHAFT_OPEN_SEGS) as f32 * SEG_LEN);
             if xr < cam_x - MM_HALF_X - 2.0 || xl > cam_x + MM_HALF_X + 2.0 {
                 continue;
             }
             // Per-side junction offsets within a layer (same as shaft_wall_pts).
-            let (jbl, jtl) = (cave_center(xl) + cave_half_width(xl), cave_center(xl) - cave_half_width(xl));
-            let (jbr, jtr) = (cave_center(xr) + cave_half_width(xr), cave_center(xr) - cave_half_width(xr));
+            let (jbl, jtl) = (lv.cave_center(xl) + lv.cave_half_width(xl), lv.cave_center(xl) - lv.cave_half_width(xl));
+            let (jbr, jtr) = (lv.cave_center(xr) + lv.cave_half_width(xr), lv.cave_center(xr) - lv.cave_half_width(xr));
             for gap in gap_lo..=gap_hi {
                 let (gy0, gy1) = (gap as f32 * V_PERIOD, (gap + 1) as f32 * V_PERIOD);
                 let mm_pt = |side: u8, t: f32| -> Vec2 {
                     let (y0, y1) = if side == 0 { (gy0 + jbl, gy1 + jtl) } else { (gy0 + jbr, gy1 + jtr) };
                     vec2(
-                        to_mm_x(shaft_wall_x(s, side, t)).clamp(mm_ox, mm_ox + mm_w),
+                        to_mm_x(world_sim.level.shaft_wall_x(s, side, t)).clamp(mm_ox, mm_ox + mm_w),
                         to_mm_y(y0 + (y1 - y0) * t).clamp(mm_oy, mm_oy + mm_h),
                     )
                 };
@@ -1815,8 +1904,24 @@ async fn main() {
 mod tests {
     use super::*;
 
-    // The whole world is pure functions of position/slot index. These tests
-    // pin the invariants the rendering and collision code rely on.
+    // The whole world is pure functions of (level, position/slot index).
+    // These tests pin the invariants the rendering and collision code rely
+    // on, evaluated on the DEMO level (seed 0 = the legacy cave, shafts and
+    // boulders on) — the wrappers below keep the call sites readable. Local
+    // fns shadow the glob-imported names, so e.g. `lattice_point` here is
+    // the demo-level curried form of render::lattice_point.
+    fn lvl() -> Level { Level::demo() }
+    fn cave_center(x: f32) -> f32 { lvl().cave_center(x) }
+    fn cave_half_width(x: f32) -> f32 { lvl().cave_half_width(x) }
+    fn stand_y(x: f32) -> f32 { lvl().stand_y(x) }
+    fn shaft_open_seg(s: i64) -> i64 { lvl().shaft_open_seg(s) }
+    fn seg_in_opening(idx: i64) -> bool { lvl().seg_in_opening(idx) }
+    fn shaft_wall_x(s: i64, side: u8, t: f32) -> f32 { lvl().shaft_wall_x(s, side, t) }
+    fn obstacle_spec(k: i64) -> Option<ObstacleSpec> { lvl().obstacle_spec(k) }
+    fn pad_spec(p: i64) -> Option<PadSpec> { lvl().pad_spec(p) }
+    fn lattice_point(col: i64, row: usize, side: u8) -> Vec2 {
+        render::lattice_point(&lvl(), col, row, side)
+    }
 
     #[test]
     fn cave_repeats_every_period() {
@@ -1965,8 +2070,8 @@ mod tests {
         // then drive the playback player at a fake 60 Hz frame clock: it
         // must reach the recording's end with zero keyframe drift and no
         // fallback snaps on this binary.
-        let mut s = Sim::new();
-        let mut rec = Recording::new(sim_params(), u32::MAX);
+        let mut s = Sim::new(lvl());
+        let mut rec = Recording::new(sim_params(), lvl().to_params(), u32::MAX);
         rec.push_keyframe(s.keyframe(0, 0.0));
         for t in 0..600u32 {
             let input = if t < 150 {
@@ -2015,8 +2120,8 @@ mod tests {
             let sy = -(f * 0.7).cos() * 0.6;
             InputState::from_controls(0.7, 0, sx, sy, true)
         };
-        let mut sim = Sim::new();
-        let mut rec = Recording::new(sim_params(), u32::MAX);
+        let mut sim = Sim::new(lvl());
+        let mut rec = Recording::new(sim_params(), lvl().to_params(), u32::MAX);
         rec.push_keyframe(sim.keyframe(0, 0.0));
         // Variable frame times cycling 40–90 fps, driving the accumulator.
         let frame_dts = [0.011f32, 0.025, 0.016, 0.009, 0.05, 0.02, 0.014];
@@ -2138,5 +2243,117 @@ mod tests {
             assert!(y - 0.73 >= floor - 1e-3);
             assert!(y - 0.73 <= floor + 1.5, "spawn at x={x} would drop and crash");
         }
+    }
+
+    // --- Level system -------------------------------------------------------
+
+    #[test]
+    fn shipped_level_files_parse_to_the_intended_worlds() {
+        // include_str! pins the ACTUAL data files that deploy, so a typo in
+        // levels/*.level fails the suite instead of silently falling back to
+        // demo defaults.
+        let caves = Level::parse(include_str!("../levels/caves.level"));
+        assert_eq!(caves, Level { name: "The Caves".to_string(), ..Level::demo() });
+
+        let expanse = Level::parse(include_str!("../levels/expanse.level"));
+        assert_eq!(expanse.name, "The Expanse");
+        assert_eq!(expanse.scoring, Scoring::Distance);
+        assert!(!expanse.shafts);
+        assert!(expanse.obstacles);
+        assert_eq!(expanse.seed, 0, "expanse must reuse the legacy cave shape");
+
+        let glide = Level::parse(include_str!("../levels/glide.level"));
+        assert_eq!(glide.name, "The Glide");
+        assert_eq!(glide.scoring, Scoring::Distance);
+        assert!(!glide.shafts);
+        assert!(!glide.obstacles);
+    }
+
+    #[test]
+    fn level_parse_is_forgiving_and_clamps() {
+        // Unknown keys and junk lines are ignored (forward compatibility),
+        // missing keys keep demo defaults, pad_spacing clamps to a sane band.
+        let l = Level::parse("name = X\nfuture_knob = 12\n# comment\nnot a kv line\npad_spacing = 5");
+        assert_eq!(l.name, "X");
+        assert_eq!(l.pad_spacing, 40.0);
+        assert!(l.shafts && l.obstacles);
+        assert_eq!(Level::parse(""), Level::demo());
+    }
+
+    #[test]
+    fn level_params_round_trip_through_the_replay_header() {
+        let lvl = Level::parse(include_str!("../levels/expanse.level"));
+        let back = Level::from_params(&lvl.to_params());
+        // Everything physics-relevant survives; only the cosmetic name doesn't.
+        assert_eq!(Level { name: lvl.name.clone(), ..back }, lvl);
+    }
+
+    #[test]
+    fn shaftless_level_seals_the_cave_and_keeps_refuel_pads() {
+        let expanse = Level::parse(include_str!("../levels/expanse.level"));
+        for idx in -400..400 {
+            assert!(!expanse.seg_in_opening(idx), "wall opening at segment {idx}");
+        }
+        // No shaft colliders load either.
+        let mut sim = Sim::new(expanse.clone());
+        for _ in 0..120 {
+            sim.tick(InputState::default());
+        }
+        assert!(sim.shafts.is_empty());
+        // Refueling pads still appear regularly — at least as many slots
+        // survive as on the demo level (the shaft-clearance skip is gone).
+        let count = |l: &Level| (-20..=20).filter(|&p| l.pad_spec(p).is_some()).count();
+        let (n_demo, n_exp) = (count(&lvl()), count(&expanse));
+        assert!(n_exp >= n_demo && n_demo >= 10,
+            "pads too sparse: demo {n_demo}, expanse {n_exp} of 41 slots");
+    }
+
+    #[test]
+    fn boulderless_level_has_no_obstacles_but_keeps_pads() {
+        let lvl = Level::parse(include_str!("../levels/glide.level"));
+        for k in -300..300 {
+            assert!(lvl.obstacle_spec(k).is_none(), "boulder at slot {k}");
+        }
+        let mut sim = Sim::new(lvl);
+        for _ in 0..120 {
+            sim.tick(InputState::default());
+        }
+        assert!(sim.obstacles.is_empty());
+        assert!(!sim.pads.is_empty(), "pads must still load");
+    }
+
+    #[test]
+    fn seed_reshapes_the_world_and_never_pinches_it_shut() {
+        let demo = lvl();
+        for seed in [1u32, 7, 123456] {
+            let seeded = Level { seed, ..lvl() };
+            assert_ne!(
+                seeded.cave_center(100.0).to_bits(),
+                demo.cave_center(100.0).to_bits(),
+                "seed {seed} did not reshape the cave"
+            );
+            // The harmonic amplitudes guarantee half-width ≥ 2.5 for ANY
+            // phases; pin the fairness floor against regressions.
+            for i in 0..3000 {
+                let x = i as f32 * 0.21;
+                assert!(seeded.cave_half_width(x) > 1.0, "seed {seed} pinches at x={x}");
+            }
+        }
+    }
+
+    #[test]
+    fn distance_level_pays_no_pad_points_and_tracks_max_dist() {
+        // Park on the spawn pad past PAD_LAND_TIME: the visit registers (the
+        // beacon turns blue) but the score stays 0 — on Distance levels the
+        // score is max |x|, mirrored in Sim::max_dist.
+        let lvl = Level::parse(include_str!("../levels/expanse.level"));
+        let mut sim = Sim::new(lvl);
+        for _ in 0..(2.0 / PHYSICS_DT) as u32 {
+            sim.tick(InputState::default());
+        }
+        assert!(!sim.visited_pads.is_empty(), "pad visit never registered");
+        assert_eq!(sim.score, 0, "distance level must not pay pad points");
+        let (x, _, _) = sim.ship_pose();
+        assert!(sim.max_dist >= x.abs());
     }
 }

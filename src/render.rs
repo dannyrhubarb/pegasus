@@ -78,12 +78,12 @@ pub fn col_x(col: i64) -> f32 {
 // wall edge (collider-aligned, no jitter); deeper rows recede into the rock
 // with small deterministic jitter for the faceted look.
 // side 0 = ceiling (rock is +y), side 1 = floor (rock is -y).
-pub fn lattice_point(col: i64, row: usize, side: u8) -> Vec2 {
+pub fn lattice_point(level: &Level, col: i64, row: usize, side: u8) -> Vec2 {
     let x = col_x(col);
     let edge_y = if side == 0 {
-        cave_center(x) + cave_half_width(x)
+        level.cave_center(x) + level.cave_half_width(x)
     } else {
-        cave_center(x) - cave_half_width(x)
+        level.cave_center(x) - level.cave_half_width(x)
     };
     if row == 0 {
         return vec2(x, edge_y); // locked to the collider line

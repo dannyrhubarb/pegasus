@@ -81,11 +81,11 @@ pub fn sim_params() -> SimParams {
 
 // The ship's state at a spawn/reset point: standing on the floor (or pad 0
 // at the origin), upright, still, tanks full.
-pub fn spawn_keyframe(x: f32) -> Keyframe {
+pub fn spawn_keyframe(level: &Level, x: f32) -> Keyframe {
     Keyframe {
         tick: 0,
         x,
-        y: stand_y(x),
+        y: level.stand_y(x),
         angle: 0.0,
         vx: 0.0,
         vy: 0.0,
@@ -165,10 +165,15 @@ pub struct Sim {
     pub pads: BTreeMap<(i64, i64), Pad>,
     synced_at: Option<(i64, i64)>, // (segment, layer) of the last window sync
 
+    // The world this sim generates around the ship. Immutable for the sim's
+    // lifetime — switching level means a fresh Sim (same rule as a new run).
+    pub level: Level,
+
     // Ship systems (all tick-driven).
     pub fuel: f32,
     pub hull: f32,
     pub score: u32,
+    pub max_dist: f32, // farthest |x| this run (the Distance-scoring metric)
     pub visited_pads: BTreeSet<(i64, i64)>,
     pub crashed: bool,
     land_timer: f32,
@@ -176,12 +181,12 @@ pub struct Sim {
 }
 
 impl Sim {
-    pub fn new() -> Sim {
+    pub fn new(level: Level) -> Sim {
         let mut bodies = RigidBodySet::new();
         let mut colliders = ColliderSet::new();
 
         let body = RigidBodyBuilder::dynamic()
-            .translation(vector![0.0, stand_y(0.0)])
+            .translation(vector![0.0, level.stand_y(0.0)])
             .angular_damping(ANGULAR_DAMPING)
             // A whisper of drag: imperceptible at landing speeds but it caps
             // how much momentum can pile up on a long burn or free-fall.
@@ -233,9 +238,11 @@ impl Sim {
             obstacles: BTreeMap::new(),
             pads: BTreeMap::new(),
             synced_at: None,
+            level,
             fuel: FUEL_MAX,
             hull: HULL_MAX,
             score: 0,
+            max_dist: 0.0,
             visited_pads: BTreeSet::new(),
             crashed: false,
             land_timer: 0.0,
@@ -243,7 +250,8 @@ impl Sim {
         };
         // Seed the collider window at the spawn so even the very first tick
         // has ground under the ship.
-        sim.restore(&spawn_keyframe(SPAWN_X));
+        let kf = spawn_keyframe(&sim.level, SPAWN_X);
+        sim.restore(&kf);
         sim
     }
 
@@ -261,6 +269,7 @@ impl Sim {
         self.hull = kf.hull;
         self.crashed = false;
         self.land_timer = 0.0;
+        self.max_dist = kf.x.abs();
         self.prev_vel = (kf.vx, kf.vy);
         self.sync_window(Self::window_key(kf.x, kf.y));
     }
@@ -272,7 +281,8 @@ impl Sim {
     // creates a fresh Sim per run instead; this is for tests/tools.
     #[allow(dead_code)]
     pub fn reset(&mut self, x: f32) {
-        self.restore(&spawn_keyframe(x));
+        let kf = spawn_keyframe(&self.level, x);
+        self.restore(&kf);
     }
 
     pub fn ship_pose(&self) -> (f32, f32, f32) {
@@ -397,6 +407,11 @@ impl Sim {
         let (vx, vy) = self.ship_vel();
 
         if !self.crashed {
+            // Distance-scoring metric (harmless to track on every level).
+            self.max_dist = self.max_dist.max(x.abs());
+        }
+
+        if !self.crashed {
             // Impact = per-tick velocity jump (a collision impulse resolves
             // within one tick; gravity/thrust move v by < 0.05 m/s per tick).
             let (dvx, dvy) = (vx - self.prev_vel.0, vy - self.prev_vel.1);
@@ -442,7 +457,10 @@ impl Sim {
             if let Some(key) = on_pad {
                 self.land_timer += PHYSICS_DT;
                 if self.land_timer >= PAD_LAND_TIME {
-                    if self.visited_pads.insert(key) {
+                    // First visits always register (beacons turn blue), but
+                    // they only pay points on Pads-scoring levels — on
+                    // Distance levels the score IS max |x|.
+                    if self.visited_pads.insert(key) && self.level.scoring == Scoring::Pads {
                         self.score += PAD_POINTS;
                         report.scored = true;
                     }
@@ -475,6 +493,7 @@ impl Sim {
         let (lay_lo, lay_hi) = (ship_layer - 1, ship_layer + 1);
 
         // Cave wall segments (2D window: segments × layers).
+        let level = &self.level;
         let (colliders, island_manager, bodies) =
             (&mut self.colliders, &mut self.island_manager, &mut self.bodies);
         self.cave.retain(|&(layer, idx), handles| {
@@ -491,7 +510,7 @@ impl Sim {
             for idx in want_left..=want_right {
                 self.cave
                     .entry((layer, idx))
-                    .or_insert_with(|| insert_seg(idx, layer, colliders));
+                    .or_insert_with(|| level.insert_seg(idx, layer, colliders));
             }
         }
 
@@ -509,9 +528,15 @@ impl Sim {
             }
         });
         for s in s_lo..=s_hi {
+            // Levels without shafts leave no openings in the cave walls, so
+            // the shaft wall colliders (which would sit sealed inside solid
+            // rock) are skipped entirely — the map just stays empty.
+            if !level.shafts {
+                break;
+            }
             for gap in [ship_layer - 1, ship_layer] {
                 let Entry::Vacant(e) = self.shafts.entry((s, gap)) else { continue };
-                let walls = [shaft_wall_pts(s, gap, 0), shaft_wall_pts(s, gap, 1)];
+                let walls = [level.shaft_wall_pts(s, gap, 0), level.shaft_wall_pts(s, gap, 1)];
                 let mut handles = Vec::new();
                 for pts in &walls {
                     for w in pts.windows(2) {
@@ -545,7 +570,7 @@ impl Sim {
         for layer in lay_lo..=lay_hi {
             for k in k_left..=k_right {
                 let Entry::Vacant(e) = self.obstacles.entry((k, layer)) else { continue };
-                let Some(spec) = obstacle_spec(k) else { continue };
+                let Some(spec) = level.obstacle_spec(k) else { continue };
                 let Some(builder) = ColliderBuilder::convex_hull(&spec.pts) else { continue };
                 let cy = spec.cy + layer as f32 * V_PERIOD;
                 let handle = colliders.insert(
@@ -567,8 +592,8 @@ impl Sim {
         }
 
         // Landing pads (±20 m position jitter).
-        let p_left = ((win_left_x - 20.0) / PAD_SPACING).floor() as i64;
-        let p_right = ((win_right_x + 20.0) / PAD_SPACING).ceil() as i64;
+        let p_left = ((win_left_x - 20.0) / level.pad_spacing).floor() as i64;
+        let p_right = ((win_right_x + 20.0) / level.pad_spacing).ceil() as i64;
         self.pads.retain(|&(p, layer), pad| {
             if p < p_left || p > p_right || layer < lay_lo || layer > lay_hi {
                 colliders.remove(pad.handle, island_manager, bodies, false);
@@ -580,7 +605,7 @@ impl Sim {
         for layer in lay_lo..=lay_hi {
             for p in p_left..=p_right {
                 let Entry::Vacant(e) = self.pads.entry((p, layer)) else { continue };
-                let Some(spec) = pad_spec(p) else { continue };
+                let Some(spec) = level.pad_spec(p) else { continue };
                 let y = spec.y + layer as f32 * V_PERIOD;
                 // High friction, no restitution: settle, don't skate.
                 let handle = colliders.insert(
@@ -611,7 +636,7 @@ impl Sim {
 // recorded keyframes bit-for-bit (glow excepted — it's a render-side
 // smoothing; resim substitutes the commanded throttle).
 pub fn resim(rec: &Recording) -> Vec<Keyframe> {
-    let mut sim = Sim::new();
+    let mut sim = Sim::new(Level::from_params(&rec.level));
     let Some(&k0) = rec.keyframes.first() else { return Vec::new() };
     sim.restore(&k0);
     let mut out = vec![k0];
@@ -660,9 +685,9 @@ mod tests {
         }
     }
 
-    fn record_scripted_flight(ticks: u32) -> (Recording, Vec<Keyframe>) {
-        let mut sim = Sim::new();
-        let mut rec = Recording::new(sim_params(), u32::MAX);
+    fn record_scripted_flight(level: Level, ticks: u32) -> (Recording, Vec<Keyframe>) {
+        let mut sim = Sim::new(level.clone());
+        let mut rec = Recording::new(sim_params(), level.to_params(), u32::MAX);
         rec.push_keyframe(sim.keyframe(0, 0.0));
         for t in 0..ticks {
             let input = script(t);
@@ -711,20 +736,20 @@ mod tests {
     #[test]
     fn fresh_sim_per_run_with_pad_contact_resims_exactly() {
         // Previous run happens on its own sim (dropped, like the fixed game).
-        let mut prior = Sim::new();
+        let mut prior = Sim::new(Level::demo());
         for _ in 0..1500 {
             prior.tick(InputState::from_controls(1.0, 1, 0.0, 0.0, false));
             if prior.crashed { break; }
         }
         drop(prior);
-        let mut sim = Sim::new();
+        let mut sim = Sim::new(Level::demo());
         // Recorded run: sit parked on pad 0 (multi-contact), hop, land, sit.
         let script = |t: u32| match t {
             0..=239 => InputState::default(),                                  // parked
             240..=299 => InputState::from_controls(0.5, 0, 0.0, 0.0, false),   // hop
             _ => InputState::default(),                                        // fall + land + sit
         };
-        let mut rec = Recording::new(sim_params(), u32::MAX);
+        let mut rec = Recording::new(sim_params(), Level::demo().to_params(), u32::MAX);
         rec.push_keyframe(sim.keyframe(0, 0.0));
         for t in 0..(8 * KEYFRAME_EVERY) {
             let input = script(t);
@@ -761,7 +786,25 @@ mod tests {
         // keyframes and a fresh resim of its input events must agree on
         // every physics field, bit for bit — the determinism contract that
         // makes shared replays and verified ghosts possible.
-        let (rec, live_kfs) = record_scripted_flight(12 * KEYFRAME_EVERY);
+        let (rec, live_kfs) = record_scripted_flight(Level::demo(), 12 * KEYFRAME_EVERY);
+        assert!(live_kfs.len() >= 3, "flight too short to be a meaningful test");
+        let resimmed = resim(&rec);
+        assert_eq!(resimmed.len(), live_kfs.len());
+        for (a, b) in live_kfs.iter().zip(&resimmed) {
+            assert_physics_eq(a, b);
+        }
+    }
+
+    #[test]
+    fn resim_reproduces_on_a_custom_level_bit_exactly() {
+        // The determinism contract must hold on NON-demo levels too: the
+        // level params ride in the recording header, and resim rebuilds the
+        // identical world from them (different seed, no shafts, tighter
+        // pads) before replaying the inputs.
+        let level = Level::parse(
+            "name = T\nscoring = distance\nshafts = off\nobstacles = on\npad_spacing = 90\nseed = 3",
+        );
+        let (rec, live_kfs) = record_scripted_flight(level, 12 * KEYFRAME_EVERY);
         assert!(live_kfs.len() >= 3, "flight too short to be a meaningful test");
         let resimmed = resim(&rec);
         assert_eq!(resimmed.len(), live_kfs.len());
@@ -774,13 +817,13 @@ mod tests {
     fn spawn_has_ground_under_the_ship() {
         // The window syncs inside restore/tick, so even tick 0 collides:
         // an idle ship must still be standing (not fallen through) after 2 s.
-        let mut sim = Sim::new();
+        let mut sim = Sim::new(Level::demo());
         for _ in 0..240 {
             sim.tick(InputState::default());
         }
         let (_, y, _) = sim.ship_pose();
         let (_, vy) = sim.ship_vel();
-        assert!((y - stand_y(0.0)).abs() < 0.5, "ship sank or bounced: y={y}");
+        assert!((y - Level::demo().stand_y(0.0)).abs() < 0.5, "ship sank or bounced: y={y}");
         assert!(vy.abs() < 0.2, "ship still moving vertically: vy={vy}");
         assert!(!sim.crashed);
     }
@@ -789,9 +832,10 @@ mod tests {
     fn empty_tank_kills_thrust_and_rcs() {
         // Mid-air with a whisker of fuel (NOT on the spawn pad — parked
         // ships refuel, which is exactly what this test must not trigger).
-        let mut sim = Sim::new();
-        let mut kf = spawn_keyframe(30.0);
-        kf.y = cave_center(30.0);
+        let lvl = Level::demo();
+        let mut sim = Sim::new(lvl.clone());
+        let mut kf = spawn_keyframe(&lvl, 30.0);
+        kf.y = lvl.cave_center(30.0);
         kf.fuel = 0.05;
         sim.restore(&kf);
         let burn = InputState::from_controls(1.0, 1, 0.0, 0.0, false);
@@ -808,7 +852,7 @@ mod tests {
     fn parked_on_spawn_pad_scores_and_refuels() {
         // stand_y(0) parks the ship on pad 0; sitting still past
         // PAD_LAND_TIME must register the visit and start refueling.
-        let mut sim = Sim::new();
+        let mut sim = Sim::new(Level::demo());
         sim.fuel = 50.0;
         let mut scored = false;
         let mut landed = false;
