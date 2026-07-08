@@ -51,7 +51,7 @@ push-retry loop for concurrent deploys):
 - `src/render.rs` — radial light shader sources, faceted wall/shaft lattice (`lattice_point`, `shaft_lattice`, `facet_shade`), `draw_flat_mesh`
 - `src/ship_mesh.rs` — `SHIP_TRIS` / `SHIP_DETAILS` data tables extracted from the Flash SWF
 - `src/audio.rs` — in-memory WAV synthesis (`wav_from_samples`, `thruster_wav`, `boom_wav`)
-- `index.html` — web wrapper, touch event forwarding, safe-area insets, **info overlay**, **gamepad polling**, and a **boot guard**: a small standalone `<script>` tag ahead of the bundle (script tags parse independently, so no error in the bundle/main script can kill it) that paints any script error on screen with file:line and offers a tap-to-reload if `wasm_exports` is missing 8 s after load. Keep it first and self-contained. It also wraps `console.error` (installed ahead of the bundle, so the wasm `console_error` import routes through it) and appends the last logged error to the banner when the error event is anonymous or attributed to the `.wasm` file — **a Rust panic reaches JS as an opaque trap** (`RuntimeError: unreachable`; iOS Safari mutes it further to a bare "Script error." with no filename, because wasm frames fail its same-origin check), and the only useful description is the panic-hook line logged just before the trap (`src/main.rs` installs `std::panic::set_hook` → `error!("{}", info)`; the *default* hook prints the useless Debug form `PanicHookInfo { payload: Any { .. }, … }`). Unhandled promise rejections get the same banner (skipped when `reason` is null). **Fully-anonymous errors (no filename AND no console.error trace) are deliberately ignored**: same-origin scripts always carry file:line and a wasm panic always logs via the hook first, so the only things that land there are Safari-injected third-party scripts — reproduced live on iOS: opening the **share sheet** runs share/action extensions' preprocessing JS in the page, and an error in any of them arrives as a muted "Script error." (this was the mystery banner of 2026-07-06, seen right after the Pegasus rename and initially blamed on it).
+- `index.html` — web wrapper, safe-area insets, settings checkboxes, **info overlay**, **gamepad polling**, and a **boot guard** (touch/stick input moved in-canvas — no touch handlers here any more): a small standalone `<script>` tag ahead of the bundle (script tags parse independently, so no error in the bundle/main script can kill it) that paints any script error on screen with file:line and offers a tap-to-reload if `wasm_exports` is missing 8 s after load. Keep it first and self-contained. It also wraps `console.error` (installed ahead of the bundle, so the wasm `console_error` import routes through it) and appends the last logged error to the banner when the error event is anonymous or attributed to the `.wasm` file — **a Rust panic reaches JS as an opaque trap** (`RuntimeError: unreachable`; iOS Safari mutes it further to a bare "Script error." with no filename, because wasm frames fail its same-origin check), and the only useful description is the panic-hook line logged just before the trap (`src/main.rs` installs `std::panic::set_hook` → `error!("{}", info)`; the *default* hook prints the useless Debug form `PanicHookInfo { payload: Any { .. }, … }`). Unhandled promise rejections get the same banner (skipped when `reason` is null). **Fully-anonymous errors (no filename AND no console.error trace) are deliberately ignored**: same-origin scripts always carry file:line and a wasm panic always logs via the hook first, so the only things that land there are Safari-injected third-party scripts — reproduced live on iOS: opening the **share sheet** runs share/action extensions' preprocessing JS in the page, and an error in any of them arrives as a muted "Script error." (this was the mystery banner of 2026-07-06, seen right after the Pegasus rename and initially blamed on it).
 - `mq_js_bundle.js` — **vendored** miniquad/quad-snd JS loader (from not-fl3/miniquad-samples). Pinned in-repo so deploys don't depend on a third-party host; includes the audio backend. Update it deliberately if macroquad is upgraded. **Gotcha**: it declares globals at top level (`const canvas`, `var gl`, `wasm_exports`, `function load`, …) that share the page's global scope — redeclaring any of them in `index.html`'s inline script is a SyntaxError that silently kills the *whole* inline script (no `load()` → no wasm, page shows only the HTML chrome). Pick distinct names and check the bundle before adding top-level identifiers.
 
 ## Input sources
@@ -64,24 +64,29 @@ pane (localStorage → wasm exports → atomics, with three working examples).
 Four input paths feed the same physics, combined in the main loop:
 - **Keyboard** (desktop): `Down` thrust, `Left`/`Right` rotate, `R` reset.
 - **Mouse**: left-button held = thrust.
-- **Touch** (mobile): a **floating attitude stick** (`#stick-base`) + a fixed
-  **JET button** (`#thrust-btn`, bottom-left) in `index.html`.
+- **Touch** (mobile): an **in-canvas floating attitude stick**, drawn and
+  read entirely in the game via macroquad's `touches()` API — no DOM element,
+  no JS handlers. `simulate_mouse_with_touch(false)` at startup stops miniquad
+  turning canvas touches into mouse-down (= full thrust); `touch-action: none`
+  on the canvas blocks iOS scroll/zoom. The `TouchStick` gatherer + `draw_stick`
+  helper live in `src/main.rs`.
   - **Attitude stick = commanded nose direction**: push up → nose up, push
     left → nose left, pull down → nose down. The "Invert stick" overlay
     checkbox (`#inv-toggle-row`, `pegasus_invert_stick`) negates the
-    commanded direction JS-side (both axes — push down = nose up, like
-    pulling back on a flight stick; the knob visual still follows the
-    finger; no wasm export). The game runs a **PD heading
+    commanded direction (both axes — push down = nose up, like pulling back
+    on a flight stick; the knob visual still follows the finger) via the
+    `set_invert_stick(i32)` export → `INVERT_STICK` atomic, applied in
+    `TouchStick::apply`. The game runs a **PD heading
     controller** (`HEADING_KP = 14`, `HEADING_KD = 2.2`, clamp
     `HEADING_TORQUE_MAX = 6`, applied via `add_torque`) that rotates the
     ship the **short way** to the commanded angle; deflection magnitude
-    scales the torque (nudge = trim, rim = hard flip). 15% radial dead-zone,
-    rescaled. Manual rotation (keyboard/pad) overrides while held; heading
-    RCS burns fuel proportional to commanded torque and puffs the matching
-    nozzle beyond ±0.4 torque (negative torque = left nozzle — `fire_rcs(-1)`
-    produces negative torque). Forwarded via exported `set_touch_steer(x, y)`
-    (screen convention, y down; `(0,0)` = released; game maps target angle =
-    `atan2(-x, -y)` since the nose at angle `a` points `(-sin a, cos a)`).
+    scales the torque (nudge = trim, rim = hard flip). `STICK_DZ = 0.15`
+    radial dead-zone, rescaled. Manual rotation (keyboard/pad) overrides
+    while held; heading RCS burns fuel proportional to commanded torque and
+    puffs the matching nozzle beyond ±0.4 torque (negative torque = left
+    nozzle — `fire_rcs(-1)` produces negative torque). The steer vector is
+    screen convention (y down); the sim maps target angle = `atan2(-x, -y)`
+    since the nose at angle `a` points `(-sin a, cos a)`.
   - **Holding the stick fires the main engine** — even dead-centre (inside
     the dead-zone there's just no heading command). One-handed flight:
     touch = burn + point, release = coast. The stick glows amber while held.
@@ -90,25 +95,14 @@ Four input paths feed the same physics, combined in the main loop:
     to full over `STICK_THRUST_RAMP = 0.18 s`, and a commanded flip past
     `FLIP_GATE_RAD (~92°)` keeps the engine cold (`flip_settling` latch)
     until the nose settles within `FLIP_DONE_RAD (~20°)` — the gate resets
-    the ramp, so post-flip thrust also fades in. The stick therefore
-    reports contact via its own `set_touch_stick_held(i32)` export (the
-    heading error is computed in the throttle block, post-physics, and
-    reused by the heading controller).
-  - **JET button** = thrust-only alternative, binary full power while held,
-    ungated (sends 1.0/0.0 through the still-analog `set_touch_thrust(f32)`
-    export). **Hidden by default** behind the "JET button" checkbox in the
-    info overlay (`#jet-toggle-row`, persisted as `pegasus_jet_btn` in
-    `localStorage`; pure client-side `display` toggle, no wasm export).
-  - **Floating**: parked bottom-right as a translucent ghost; a touch on the
-    canvas in the lower 45% of the viewport (`STICK_ZONE = 0.55`) spawns the
-    stick centred under the finger, release parks it again. Handlers sit on
-    the **document, capture phase**, and swallow every canvas touch in the
-    zone (`preventDefault` + `stopPropagation`) *before* miniquad's canvas
-    listeners see it — miniquad synthesizes mouse events from canvas touches
-    and mouse-down = full thrust. Mouse events are untouched (desktop
-    click-to-thrust works everywhere). `#stick-base` is `pointer-events:
-    none` — pure visuals; the JET button is its own element, so the document
-    handler ignores its touches (`e.target` check).
+    the ramp, so post-flip thrust also fades in. (There is no separate JET
+    thrust-only button any more — stick-hold covers one-handed play.)
+  - **Floating**: a touch below `STICK_ZONE = 0.55` of the viewport height
+    (only while flying) spawns the stick centred under the finger and claims
+    that touch id; other fresh touches become `ui_tap`s for the crash-dialog
+    / replay-skip hit-testing. Release parks the stick bottom-right as a
+    translucent ghost. Positions are physical px (`touches()` and
+    `screen_*()` share that space; a mouse press maps in via `× dpi`).
 - **Game controller** (BT/USB, web): `index.html` polls the **Web Gamepad API**
   each `requestAnimationFrame` and forwards to exported `set_pad_thrust(i32)` /
   `set_pad_torque(f32)` / `set_pad_reset()`. Mapping (standard layout): thrust =
@@ -117,8 +111,9 @@ Four input paths feed the same physics, combined in the main loop:
   Y/Triangle (3, edge-triggered). Polling starts on `gamepadconnected` and stops
   (releasing held inputs) if the pad drops out.
 
-Touch and gamepad use **separate atomics** (`TOUCH_*` vs `PAD_*`) so a
-connected-but-idle source never stomps the other. The main engine is a
+Touch is read directly via macroquad each frame; the gamepad uses `PAD_*`
+atomics (JS-forwarded) so a connected-but-idle controller never stomps an
+active touch. The main engine is a
 **throttle (0..1)**: every current source is binary (1.0), but the plumbing
 stays analog — engine force, glow, fuel burn, and exhaust particle
 count/speed all scale with it. Rotation has two modes: **rate control**
@@ -140,8 +135,8 @@ respectively. Opened locally without that substitution, the JS falls back to
 click doesn't bleed through to the canvas and fire the thruster.
 
 The overlay also hosts the settings checkboxes — **Velocity vector**
-(`#vel-toggle-row`), **JET button** (`#jet-toggle-row`), **Invert stick**
-(`#inv-toggle-row`); all `stopPropagation` but *no* `preventDefault`, which
+(`#vel-toggle-row`) and **Invert stick** (`#inv-toggle-row`); both
+`stopPropagation` but *no* `preventDefault`, which
 would kill the checkbox click — and a **⟳ Reload latest build** button (`#force-reload`) —
 the manual cache-bypass: same `?fresh=<ts>` navigation as the toast below,
 for when you don't want to wait for detection.
@@ -187,7 +182,32 @@ error reporting.
 | `SHIP_SCALE` | 1.5 | Render scale multiplier applied inside the `rot` closure — makes the ship visually 1.5× larger than the raw SWF coordinates without touching `SHIP_TRIS`/`SHIP_DETAILS` |
 
 ## Rendering architecture
-- **High-DPI**: `high_dpi: true` in `window_conf` — `screen_width()/screen_height()` are **physical pixels** (CSS px × devicePixelRatio). All breakpoints/fixed sizes were tuned in CSS px, so each frame computes `dpi = screen_dpi_scale()`; thresholds compare against `sw/dpi`, pixel sizes multiply by `dpi` (`view_scale`, `ui`, safe-area insets, star radius `(0.5*dpi).max(1)`, obstacle `bevel`; the minimap ship dot scales with `ui`). The **left** safe-area inset is capped at 24 CSS px — in landscape the notch/island sits mid-edge, not in the top corner, and the full inset pushed the minimap far right. Keep the dpi rule for any new pixel constant. `dpi = 1` on standard displays and native.
+- **High-DPI**: `high_dpi: true` in `window_conf`. The code treats
+  `screen_width()/screen_height()` as **physical pixels** and consistently
+  divides thresholds by `dpi = screen_dpi_scale()` and multiplies pixel sizes
+  by `dpi` (`view_scale`, `ui`, safe-area insets, star radius `(0.5*dpi).max(1)`,
+  obstacle `bevel`; the minimap ship dot scales with `ui`). **Subtlety
+  (measured 2026-07):** macroquad's `screen_width()` actually returns *logical*
+  px (`context.screen_width / dpi_scale()`), not physical — but the two mental
+  models produce identical output because `view_scale`/`ui` scale linearly with
+  `sw`, so the `×dpi` factors cancel. What matters is that **everything drawn
+  and every `mouse_position()` is in that one consistent space.** `dpi = 1` on
+  standard displays and native.
+  - **Safe-area insets are NOT ×dpi.** The `env(safe-area-inset-*)` values
+    JS forwards are CSS px = the logical draw space, so `safe_top/left/bottom/
+    right` are used as-is. (An earlier `×dpi` was masked by insets being ~0 in
+    browser-chrome mode; it surfaced as the minimap shoved ~3× too low in
+    fullscreen, where the notch inset is real.) The **left** inset is capped
+    at 24. All four sides are reported (`set_safe_area(top,left,bottom,right)`);
+    the **bottom** folds in the floating browser toolbar (the canvas is 100vh
+    and draws under it), measured JS-side via `visualViewport` — that's what
+    keeps the parked stick tappable above the URL bar.
+  - **`touches()` gotcha**: unlike `mouse_position()` (which divides by
+    `dpi_scale`), macroquad's `touches()` returns **raw physical px**. The
+    in-canvas stick therefore divides each touch position by `dpi` before use,
+    putting it in the same logical space as the drawing / `mouse_position()`.
+    A steer *direction* is scale-invariant, so a missed conversion still
+    steers correctly but draws the stick off-screen (that was the bug).
 - **World-to-screen**: a per-frame closure `w2s` (defined inside the `loop {}`, shadows the removed module-level function) converts world coords to screen pixels using `view_scale`.
 - **`view_scale`**: on small screens (`sw.min(sh)/dpi < 600` CSS px, i.e. mobile in either orientation) it is `sw.min(sh) / MOBILE_VIEW_M` (`MOBILE_VIEW_M = 19` world metres across the **smaller** screen dimension, capped at the desktop scale) — one scale for both orientations, so rotating never changes the zoom level. In landscape the smaller dimension is the height → the cave's typical full height (average ≈ 15.5 m) fits with margin; portrait keeps the same scale and simply shows more world vertically (~36 m on a tall phone). Earlier attempts for reference: a fixed factor (`SCALE * 0.38`) cropped landscape to 13 m; keying on `sh` alone fit both orientations but gave portrait a much more zoomed-in look than landscape. Desktop: `SCALE * dpi`. Controls zoom; HUD/minimap are unaffected.
 - **Cave walls**: drawn as **low-poly faceted** triangle meshes — one `draw_mesh` per (layer, side) for the up-to-3 loaded cave layers (y-culled), plus one per loaded shaft wall. Each mesh is a continuous lattice of flat-shaded triangles. See "Faceted wall rendering" and "Vertical shafts" below. Per-facet base colors carry deterministic brightness jitter; radial lighting is added on top by the fragment shader.
@@ -489,14 +509,12 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   impact tick itself is captured. Reset adopts the ended recording as the
   ghost and starts a fresh one.
 - **Crash dialog**: dimmed backdrop, in-canvas buttons **FLY AGAIN [R]** /
-  **WATCH REPLAY [ENTER]** drawn at `sh*0.36`. **Keep dialog hit targets above
-  the lower 45% of the screen**: the JS floating-stick handler swallows canvas
-  touches in that zone (capture phase, `preventDefault`) before miniquad can
-  synthesize mouse events, so buttons there are untappable on mobile. Clicks
-  route through `mouse_position()`/`is_mouse_button_pressed` (touch taps
-  arrive as synthesized mouse events). FLY AGAIN sets `do_reset`, consumed by
-  the same reset block as the R key. WATCH REPLAY is a no-op unless the buffer
-  has ≥ 2 frames.
+  **WATCH REPLAY [ENTER]** drawn at `sh*0.36`. Hit-testing uses `ui_tap` (a
+  fresh touch OR a mouse press, physical px) — the in-canvas stick only
+  claims touches *while flying*, so during the dialog the whole screen is
+  tappable (the old "keep buttons above the lower 45%" rule is gone with the
+  JS stick handler). FLY AGAIN sets `do_reset`, consumed by the same reset
+  block as the R key. WATCH REPLAY is a no-op unless the recording has ticks.
 - **Playback is RE-SIM DRIVEN** (`ResimPlayer` in main.rs): WATCH REPLAY
   re-runs the hybrid recording's input events through a **scratch `Sim`**
   paced by the render clock — the machinery a replay shared from another
@@ -512,9 +530,14 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   cursor passes: the overlay shows `re-simulated from inputs · drift N m`,
   and drift > `SNAP_DRIFT_M = 0.5` snaps to the keyframe (the graceful
   fallback for recordings from a different build/params — zero on the same
-  binary, unit-tested). The destroying impact is re-simulated, ends the
-  playback (boom + dialog); tap/click skips back to the dialog, R skips
-  straight to respawn. WATCH REPLAY is a no-op if the recording has no ticks.
+  binary, unit-tested). The **stick is drawn at its normal parked home**
+  (`stick_park`, bottom-right) animated by the input driving the re-sim —
+  knob at the recorded deflection, amber while held — so a replay shows the
+  pilot's hand where the live stick sits. (A throttle meter for both live
+  play and replay is a follow-up, see #67.) The destroying impact is
+  re-simulated, ends the playback (boom +
+  dialog); a `ui_tap` skips back to the dialog, R skips straight to respawn.
+  WATCH REPLAY is a no-op if the recording has no ticks.
   `ResimPlayer::step_one` is the shared per-tick core: `advance()` drives it
   on the wall clock for WATCH REPLAY; the ghost calls it in lockstep.
 
