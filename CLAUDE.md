@@ -482,13 +482,12 @@ A `Mode` enum (`Flying` / `CrashDialog` / `Replay`) sits above the crash flag:
 two **pause physics** (the stepping loop is gated on `Flying` and drains
 `phys_accum`, so no catch-up burst fires on resume; the wreck stays parked).
 
-- **Recording**: every physics step while alive (`crash_timer <= 0`) pushes a
-  `ReplayFrame` (pose, velocity, `glow`, RCS puff side `last_rcs`) into a
-  `VecDeque` ring buffer capped at `REPLAY_MAX_SECS = 300 s` × 120 Hz (≈1 MB
-  — sized to cover a whole spawn→crash run; longer runs keep the tail). The
-  impact itself is captured (crash detection runs after the stepping loop).
-  Reset/respawn clears the buffer. This dense buffer is the **visual
-  playback** path; the shareable format is the hybrid recording below.
+- **Recording**: the hybrid `Recording` (below) is the ONLY replay store —
+  the dense per-step visual buffer is gone (deprecated 2026-07 once both the
+  replay and the ghost became re-sim driven). Every physics step while alive
+  (`crash_timer <= 0`) records the tick's input + periodic keyframes; the
+  impact tick itself is captured. Reset adopts the ended recording as the
+  ghost and starts a fresh one.
 - **Crash dialog**: dimmed backdrop, in-canvas buttons **FLY AGAIN [R]** /
   **WATCH REPLAY [ENTER]** drawn at `sh*0.36`. **Keep dialog hit targets above
   the lower 45% of the screen**: the JS floating-stick handler swallows canvas
@@ -516,16 +515,18 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   binary, unit-tested). The destroying impact is re-simulated, ends the
   playback (boom + dialog); tap/click skips back to the dialog, R skips
   straight to respawn. WATCH REPLAY is a no-op if the recording has no ticks.
-  The dense visual buffer now feeds ONLY the ghost.
+  `ResimPlayer::step_one` is the shared per-tick core: `advance()` drives it
+  on the wall clock for WATCH REPLAY; the ghost calls it in lockstep.
 
-### Hybrid recording (`src/replay.rs`) — the shareable format
-Alongside the dense visual buffer, a `Recording` captures the same spawn→crash
-run as **inputs + params + keyframes** — the transport format for replays that
-leave the device (sharing/ghosts/leaderboards), in memory only for now:
+### Hybrid recording (`src/replay.rs`) — the single replay format
+A `Recording` captures each spawn→crash run as **inputs + params +
+keyframes** — both the in-game replay source AND the transport format for
+replays that leave the device (sharing/ghosts/leaderboards), in memory only
+for now:
 - **Input change-events**: the *resolved* controls per physics step
   (`InputState`: throttle u8, rate command i8, stick vector 2×i8, stick-held),
-  pushed only on change — `last_input` is captured next to `last_rcs` in the
-  controls section and recorded by `record_tick` in the stepping loop.
+  pushed only on change — the frame's quantized `input` is recorded by
+  `record_tick` in the stepping loop.
 - **Keyframes** every `KEYFRAME_EVERY = 120` ticks (1 Hz): full sim state
   (pose, velocities, fuel, hull, glow) for future drift detection / seeking /
   fallback playback, plus a terminal keyframe at the impact (`finalize`).
@@ -537,21 +538,20 @@ leave the device (sharing/ghosts/leaderboards), in memory only for now:
   (0 = local dev). Bump `REPLAY_FORMAT_VERSION` when the layout changes.
 - Trimming keeps the retained window **starting at a keyframe** with the
   effective input re-seeded there, so it stays replayable after the cap.
-  The hybrid window is `HYBRID_MAX_SECS = 60 min` (~1 MB/h worst case) — a
-  memory safety net, NOT the visual buffer's 5 min: a highscore ghost needs
-  the run from its spawn, so the hybrid recording must not lose t = 0 on
-  normal-length runs.
+  The window is `HYBRID_MAX_SECS = 60 min` (~1 MB/h worst case) — a memory
+  safety net, not an expected limit: a ghost needs the run from its spawn,
+  so the recording must not lose t = 0 on normal-length runs. (A trimmed
+  recording's ghost appears once the live run reaches its first keyframe.)
 - On destruction the blob is serialized (+ `compress` = `miniz_oxide` deflate,
   the repo's only new dependency) and the WATCH REPLAY button hint shows both
   sizes: `[ENTER] · <raw> → <deflated>`.
-- **Playback still uses the dense visual buffer**, but the input stream is
-  now genuinely re-simulable: `sim::resim(&Recording)` re-runs the events
-  through a fresh `Sim` and reproduces the recorded keyframes **bit-exactly**
-  (unit test `resim_reproduces_a_scripted_flight_bit_exactly`; `glow` is
-  render-side and excluded). Guarantee is per-binary — a build/params change
-  is what the header fields + keyframe fallback are for. `resim` and
-  `Recording::deserialize` are `#[allow(dead_code)]` until playback switches
-  over / blobs leave the device.
+- `sim::resim(&Recording)` re-runs the events through a fresh `Sim` and
+  reproduces the recorded keyframes **bit-exactly** (unit test
+  `resim_reproduces_a_scripted_flight_bit_exactly`; `glow` is render-side
+  and excluded). Guarantee is per-binary — a build/params change is what the
+  header fields + keyframe fallback are for. `resim` (the batch form of
+  `ResimPlayer`) and `Recording::deserialize` are `#[allow(dead_code)]`
+  until blobs leave the device (server-side verification).
 
 ### Determinism rules (the re-sim refactor, 2026-07)
 Live play and resim must perform IDENTICAL operation sequences:
@@ -566,15 +566,19 @@ Live play and resim must perform IDENTICAL operation sequences:
 - `Date`-like nondeterminism (macroquad `gen_range`) is allowed ONLY in
   cosmetics (particles, shake); nothing in `sim.rs` may use it.
 
-### Ghost of the last run
-On reset the ended run's visual buffer (if ≥ `GHOST_MIN_SECS = 2 s`) becomes
-`ghost`; during flight a translucent hull silhouette (`SHIP_TRIS`, no
-flame/details) is drawn at `ghost[ticks since spawn]` — same fractional-tick
-lerp as the replay, same spawn clock (`recorder.ticks()`), so it races you
-from the shared start line and vanishes at its own crash tick. A pale-blue
-dot mirrors it on the minimap. If the previous run outlived the visual
-buffer window, `ghost_first_tick > 0` delays its appearance accordingly.
-Hidden during the dialog/replay and while the current ship is a wreck.
+### Ghost of the last run (re-sim driven)
+On reset the ended run's `Recording` (if ≥ `GHOST_MIN_SECS = 2 s` of ticks)
+becomes `ghost_rec`, and a second `ResimPlayer` re-simulates it in
+**LOCKSTEP** with live play: exactly one `step_one` per live `sim.tick`
+(gated `p.tick < recorder.ticks()`), so both ships fly the same spawn clock
+and stay in sync through pauses (dialog/replay freeze live ticks → the
+ghost freezes too). The ghost renders as a translucent hull silhouette
+(`SHIP_TRIS`, no flame/details) at `lerped_pose(alpha)` with the live
+interpolation alpha, plus a pale-blue minimap dot; it vanishes at its own
+crash tick (`finished`). Hidden while the current ship is a wreck. Cost:
+one extra `Sim::tick` per physics step during flight (~2× physics, still
+tiny next to rendering; the ghost sim maintains its own collider windows
+around the ghost's position).
 
 ## Physics notes
 
