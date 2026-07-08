@@ -59,6 +59,119 @@ fn lerp_angle(a: f32, b: f32, t: f32) -> f32 {
     a + d * t
 }
 
+// Replay playback driver: RE-SIMULATES the hybrid recording's input events
+// through a scratch Sim, paced by the render clock — the exact machinery a
+// replay shared from another device would use. Every keyframe the cursor
+// passes is verified against the re-simmed state; drift beyond SNAP_DRIFT_M
+// snaps to the keyframe (the graceful fallback for recordings from a
+// different build/params — on this binary the test suite proves drift is 0).
+struct ResimPlayer {
+    sim: sim::Sim,
+    first_tick: u32,
+    end_tick: u32,
+    tick: u32,       // ticks simulated so far (recording clock)
+    event_idx: usize,
+    kf_idx: usize,
+    input: InputState,
+    prev_pose: (f32, f32, f32),
+    accum: f32,
+    glow: f32,
+    last_torque: f32,
+    drift: f32,      // metres to the last verified keyframe
+    snapped: bool,   // keyframe fallback engaged at least once
+    finished: bool,
+}
+
+const SNAP_DRIFT_M: f32 = 0.5;
+
+impl ResimPlayer {
+    fn new(rec: &Recording) -> Option<ResimPlayer> {
+        let &k0 = rec.keyframes.first()?;
+        if rec.ticks() <= k0.tick {
+            return None;
+        }
+        let mut s = sim::Sim::new();
+        s.restore(&k0);
+        let prev_pose = s.ship_pose();
+        Some(ResimPlayer {
+            sim: s,
+            first_tick: k0.tick,
+            end_tick: rec.ticks(),
+            tick: k0.tick,
+            event_idx: 0,
+            kf_idx: 0,
+            input: InputState::default(),
+            prev_pose,
+            accum: 0.0,
+            glow: k0.glow,
+            last_torque: 0.0,
+            drift: 0.0,
+            snapped: false,
+            finished: false,
+        })
+    }
+
+    // Advance by real time `dt`, re-simulating whole ticks and returning the
+    // interpolated visual frame (the final pose once finished).
+    fn advance(&mut self, rec: &Recording, dt: f32) -> ReplayFrame {
+        self.accum = (self.accum + dt).min(0.05);
+        while self.accum >= PHYSICS_DT && self.tick < self.end_tick {
+            self.prev_pose = self.sim.ship_pose();
+            while rec.events.get(self.event_idx).is_some_and(|e| e.tick <= self.tick) {
+                self.input = rec.events[self.event_idx].input;
+                self.event_idx += 1;
+            }
+            let rep = self.sim.tick(self.input);
+            self.tick += 1;
+            self.accum -= PHYSICS_DT;
+            self.last_torque = rep.heading_torque;
+            // Keyframe verification + fallback.
+            while rec.keyframes.get(self.kf_idx).is_some_and(|k| k.tick <= self.tick) {
+                let kf = rec.keyframes[self.kf_idx];
+                if kf.tick == self.tick {
+                    let (x, y, _) = self.sim.ship_pose();
+                    self.drift = ((x - kf.x).powi(2) + (y - kf.y).powi(2)).sqrt();
+                    if self.drift > SNAP_DRIFT_M {
+                        self.sim.restore(&kf);
+                        self.snapped = true;
+                    }
+                }
+                self.kf_idx += 1;
+            }
+        }
+        if self.tick >= self.end_tick {
+            self.finished = true;
+        }
+        // Engine glow follows the fuel-gated command, same smoothing as live.
+        let throttle_fx = if self.sim.fuel > 0.0 { self.input.throttle_f32() } else { 0.0 };
+        self.glow += (throttle_fx - self.glow) * 0.12;
+        let rcs_live = self.sim.fuel > 0.0 && !self.sim.crashed;
+        let rcs = if rcs_live && (self.input.rot < 0 || self.last_torque < -0.4) {
+            -1
+        } else if rcs_live && (self.input.rot > 0 || self.last_torque > 0.4) {
+            1
+        } else {
+            0
+        };
+        let alpha = (self.accum / PHYSICS_DT).clamp(0.0, 1.0);
+        let (px, py, pa) = self.prev_pose;
+        let (x, y, a) = self.sim.ship_pose();
+        let (vx, vy) = self.sim.ship_vel();
+        ReplayFrame {
+            x: px + (x - px) * alpha,
+            y: py + (y - py) * alpha,
+            angle: lerp_angle(pa, a, alpha),
+            vx, vy,
+            glow: self.glow,
+            rcs,
+        }
+    }
+
+    fn progress(&self) -> f32 {
+        (self.tick - self.first_tick) as f32 / (self.end_tick - self.first_tick).max(1) as f32
+    }
+}
+
 // Touch throttle is ANALOG (f32 bits, 0..1): the on-screen JET button sends
 // 1.0/0.0 today, but the export stays analog. The stick supplies a STEER
 // VECTOR (f32 bits each, screen convention: x right, y down, magnitude ≤ 1):
@@ -258,7 +371,9 @@ async fn main() {
     // playback cursor, in fractional frame indices.
     let replay_cap = (REPLAY_MAX_SECS / PHYSICS_DT) as usize;
     let mut replay_buf: VecDeque<ReplayFrame> = VecDeque::with_capacity(replay_cap);
-    let mut replay_t = 0.0f32;
+    // WATCH REPLAY playback: a scratch Sim re-simulating the hybrid
+    // recording's inputs (the visual buffer above only feeds the ghost now).
+    let mut replay_player: Option<ResimPlayer> = None;
     let mut last_rcs: i8 = 0; // RCS puff side of the previous frame, recorded per step
 
     // Hybrid recording (src/replay.rs): the shareable spawn→crash replay —
@@ -546,35 +661,28 @@ async fn main() {
             shake = (shake - 4.0 * get_frame_time()).max(0.0);
         }
 
-        // Replay playback: advance the cursor and override the camera/pose
-        // (and velocity, for the HUD and exhaust) with the recorded flight.
-        // The sliding windows below key off cam_x/cam_y, so the world loads
-        // around the replayed ship automatically. Ends by replaying the
-        // explosion at the crash site, then returns to the dialog.
+        // Replay playback: RE-SIMULATED from the hybrid recording — the
+        // scratch Sim re-runs the input events in real time and the camera/
+        // pose/velocity are overridden with its state. Its own collider
+        // windows follow the re-simmed ship, so the world (and collisions)
+        // are genuinely recomputed, not played back. Ends by re-simulating
+        // the destroying impact, then returns to the dialog.
         let mut replay_frame: Option<ReplayFrame> = None;
         if mode == Mode::Replay {
-            replay_t += get_frame_time() / PHYSICS_DT;
-            let last = replay_buf.len() - 1; // entry is gated on len >= 2
-            if replay_t >= last as f32 {
-                let f = replay_buf[last];
-                boom_burst(f.x, f.y, &mut particles);
-                if let Some(s) = &boom_snd {
-                    play_sound(s, PlaySoundParams { looped: false, volume: 0.9 });
+            if let Some(p) = replay_player.as_mut() {
+                let f = p.advance(&recorder, get_frame_time());
+                if p.finished {
+                    boom_burst(f.x, f.y, &mut particles);
+                    if let Some(s) = &boom_snd {
+                        play_sound(s, PlaySoundParams { looped: false, volume: 0.9 });
+                    }
+                } else {
+                    replay_frame = Some(f);
                 }
+            }
+            if replay_player.as_ref().is_none_or(|p| p.finished) {
+                replay_player = None;
                 mode = Mode::CrashDialog;
-            } else {
-                let i = replay_t.floor() as usize;
-                let t = replay_t - i as f32;
-                let (a, b) = (replay_buf[i], replay_buf[i + 1]);
-                replay_frame = Some(ReplayFrame {
-                    x: a.x + (b.x - a.x) * t,
-                    y: a.y + (b.y - a.y) * t,
-                    angle: lerp_angle(a.angle, b.angle, t),
-                    vx: a.vx + (b.vx - a.vx) * t,
-                    vy: a.vy + (b.vy - a.vy) * t,
-                    glow: a.glow + (b.glow - a.glow) * t,
-                    rcs: a.rcs,
-                });
             }
         }
         if let Some(f) = replay_frame {
@@ -774,11 +882,16 @@ async fn main() {
             }
         }
 
+        // During replay playback the world (and the run's fuel/hull/score
+        // below) renders from the SCRATCH sim — its windows follow the
+        // re-simmed ship, while the main sim's are parked at the wreck.
+        let world_sim = replay_player.as_ref().map_or(&sim, |p| &p.sim);
+
         // Vertical shaft walls — same faceted treatment rotated 90°: depth cols
         // recede horizontally into the rock, rows run along y. Col 0 sits exactly
         // on the wall polyline (= the colliders), and a solid fill extends past
         // the deepest col to blend into the inter-layer rock fill.
-        for (&(s, _gap), shaft) in sim.shafts.iter() {
+        for (&(s, _gap), shaft) in world_sim.shafts.iter() {
             for side in [0u8, 1u8] {
                 let pts = &shaft.walls[side as usize];
                 let dir = if side == 0 { -1.0f32 } else { 1.0 };
@@ -848,7 +961,7 @@ async fn main() {
         let bevel = 16.0 * dpi; // obstacle bevel width, tuned in CSS px
         // BTreeMap iteration is key-ordered, so adjacent overlapping boulders
         // keep a stable z-order as the window slides.
-        for (&(k, _layer), ob) in sim.obstacles.iter() {
+        for (&(k, _layer), ob) in world_sim.obstacles.iter() {
             let (c, s) = (ob.rot.cos(), ob.rot.sin());
             let poly: Vec<Vec2> = ob.verts.iter().map(|p| {
                 let wx = ob.cx + p.x * c - p.y * s;
@@ -916,7 +1029,7 @@ async fn main() {
         // Landing pads — man-made metal, drawn with the default material so
         // the deck and beacons stay readable in the dark. Deck top = the
         // collider line (alignment rule); legs drop to the floor curve.
-        for (&pad_key, pad) in sim.pads.iter() {
+        for (&pad_key, pad) in world_sim.pads.iter() {
             let pad_layer = pad_key.1;
             let top_mid = w2s(pad.cx, pad.y, sh, cam_x, cam_y);
             if top_mid.x < -margin || top_mid.x > sw + margin
@@ -940,7 +1053,7 @@ async fn main() {
                     Color::from_rgba(60, 68, 82, 255));
             }
             // Beacons: blinking green until first landing, then steady blue.
-            let visited = sim.visited_pads.contains(&pad_key);
+            let visited = world_sim.visited_pads.contains(&pad_key);
             let bc = if visited {
                 Color::from_rgba(110, 140, 200, 200)
             } else if (get_time() * 5.0).sin() > 0.0 {
@@ -1089,7 +1202,7 @@ async fn main() {
         let cave_x = cam_x.rem_euclid(PERIOD);
         let hud_fs = 36.0 * ui;
         let hud_y = safe_top + 252.0 * ui; // below the fuel + hull gauges
-        let hud = format!("score={}  x={:.0}  lvl={}  {:.0}m/{}m   [R] reset   FPS: {:.0}", sim.score, cam_x, ship_layer, cave_x, PERIOD as i32, smooth_fps);
+        let hud = format!("score={}  x={:.0}  lvl={}  {:.0}m/{}m   [R] reset   FPS: {:.0}", world_sim.score, cam_x, ship_layer, cave_x, PERIOD as i32, smooth_fps);
         draw_text(&hud, safe_left + 10.0 * ui, hud_y, hud_fs, WHITE);
         // Speed readout in the same danger color as the velocity arrow.
         let hud_w = measure_text(&hud, None, hud_fs as u16, 1.0).width;
@@ -1149,9 +1262,12 @@ async fn main() {
                 None => "[ENTER]".to_string(),
             };
             let replay_clicked = button(sw / 2.0 + gap / 2.0, "WATCH REPLAY", &replay_hint);
-            if (replay_clicked || is_key_pressed(KeyCode::Enter)) && replay_buf.len() >= 2 {
-                mode = Mode::Replay;
-                replay_t = 0.0;
+            if replay_clicked || is_key_pressed(KeyCode::Enter) {
+                // Re-simulate the hybrid recording from its first keyframe.
+                if let Some(p) = ResimPlayer::new(&recorder) {
+                    replay_player = Some(p);
+                    mode = Mode::Replay;
+                }
             }
         } else if mode == Mode::Replay {
             // Pulsing banner + progress bar; any click/tap (above the stick
@@ -1169,12 +1285,26 @@ async fn main() {
             draw_text(hint, (sw - hd.width) / 2.0, msg_y + 34.0 * ui, hfs,
                 Color::from_rgba(200, 205, 220, 160));
             let pw = sw * 0.30;
-            let frac = (replay_t / (replay_buf.len().max(2) - 1) as f32).clamp(0.0, 1.0);
+            let (frac, drift, snapped) = replay_player
+                .as_ref()
+                .map_or((0.0, 0.0, false), |p| (p.progress(), p.drift, p.snapped));
             let px = (sw - pw) / 2.0;
             let py = msg_y + 48.0 * ui;
             draw_rectangle(px, py, pw, 4.0 * ui, Color::from_rgba(255, 255, 255, 60));
             draw_rectangle(px, py, pw * frac, 4.0 * ui, Color::from_rgba(255, 220, 120, 200));
+            // The receipt: this is a live re-simulation of the recorded
+            // inputs, checked against the recording's keyframes.
+            let vfs = 18.0 * ui;
+            let vt = if snapped {
+                format!("re-simulated from inputs · drift {drift:.3} m · snapped to keyframe")
+            } else {
+                format!("re-simulated from inputs · drift {drift:.3} m")
+            };
+            let vd = measure_text(&vt, None, vfs as u16, 1.0);
+            draw_text(&vt, (sw - vd.width) / 2.0, py + 24.0 * ui, vfs,
+                Color::from_rgba(170, 180, 200, 170));
             if is_mouse_button_pressed(MouseButton::Left) {
+                replay_player = None;
                 mode = Mode::CrashDialog;
             }
         } else if crashed {
@@ -1294,11 +1424,13 @@ async fn main() {
 
         // Reset / respawn: R key, gamepad Start/Y, or the dialog's FLY AGAIN
         // button. Also the escape hatch out of the dialog and the replay.
+        // Respawn returns to the ORIGINAL spawn (not RESET_X): every run
+        // starts from the same place, which is what lets the ghost race you.
         if is_key_pressed(KeyCode::R) || PAD_RESET.swap(0, Ordering::Relaxed) != 0 || do_reset {
-            sim.reset(RESET_X);
+            sim.reset(SPAWN_X);
             // Snap the interpolation too, or the camera lerps across the
             // teleport for a frame.
-            prev_ship = (RESET_X, stand_y(RESET_X), 0.0);
+            prev_ship = (SPAWN_X, stand_y(SPAWN_X), 0.0);
             crash_timer = 0.0;
             shake = 0.0;
             mode = Mode::Flying;
@@ -1310,7 +1442,7 @@ async fn main() {
             }
             // A fresh attempt records a fresh replay (both formats).
             replay_buf.clear();
-            replay_t = 0.0;
+            replay_player = None;
             last_rcs = 0;
             glow = 0.0;
             recorder = Recording::new(sim_params(), (HYBRID_MAX_SECS / PHYSICS_DT) as u32);
@@ -1319,6 +1451,9 @@ async fn main() {
         }
 
         // --- Minimap (ship always centred; pans in BOTH axes) ---
+        // Re-bound after the dialog/reset mutations above; during playback
+        // this is the scratch sim (map follows the re-simmed run).
+        let world_sim = replay_player.as_ref().map_or(&sim, |p| &p.sim);
         let mm_w = 480.0f32 * ui;
         let mm_h = 160.0f32 * ui;
         let mm_ox = safe_left + 10.0f32 * ui;
@@ -1396,14 +1531,14 @@ async fn main() {
 
         // Pad markers on the minimap: bright line at deck height, green until
         // visited, blue-grey after.
-        for (&pad_key, pad) in sim.pads.iter() {
+        for (&pad_key, pad) in world_sim.pads.iter() {
             if (pad.cx - cam_x).abs() > MM_HALF_X + 5.0 || (pad.y - cam_y).abs() > MM_HALF_Y + 5.0 {
                 continue;
             }
             let y = to_mm_y(pad.y).clamp(mm_oy, mm_oy + mm_h);
             let x0 = to_mm_x(pad.cx - PAD_HALF_W).clamp(mm_ox, mm_ox + mm_w);
             let x1 = to_mm_x(pad.cx + PAD_HALF_W).clamp(mm_ox, mm_ox + mm_w);
-            let c = if sim.visited_pads.contains(&pad_key) {
+            let c = if world_sim.visited_pads.contains(&pad_key) {
                 Color::from_rgba(110, 140, 200, 220)
             } else {
                 Color::from_rgba(90, 240, 130, 255)
@@ -1413,7 +1548,7 @@ async fn main() {
 
         // Obstacle shapes on the minimap — actual polygon, not just a dot.
         // All loaded layers; the y window filters to what's actually in view.
-        for ob in sim.obstacles.values() {
+        for ob in world_sim.obstacles.values() {
             if (ob.cx - cam_x).abs() > MM_HALF_X + 6.0 || (ob.cy - cam_y).abs() > MM_HALF_Y + 6.0 {
                 continue;
             }
@@ -1466,7 +1601,7 @@ async fn main() {
         // Fuel gauge — slim bar directly under the minimap.
         let fg_y = mm_oy + mm_h + 8.0 * ui;
         let fg_h = 14.0 * ui;
-        let frac = sim.fuel / FUEL_MAX;
+        let frac = world_sim.fuel / FUEL_MAX;
         let fg_col = if frac > 0.5 {
             Color::from_rgba(90, 200, 120, 255)
         } else if frac > 0.25 {
@@ -1480,7 +1615,7 @@ async fn main() {
 
         // Hull gauge — same slim bar directly under the fuel gauge.
         let hg_y = fg_y + fg_h + 6.0 * ui;
-        let hfrac = sim.hull / HULL_MAX;
+        let hfrac = world_sim.hull / HULL_MAX;
         let hg_col = if hfrac > 0.5 {
             Color::from_rgba(150, 175, 215, 255)
         } else if hfrac > 0.25 {
@@ -1642,6 +1777,48 @@ mod tests {
             let v = r.range_int(3, 9);
             assert!((3..=9).contains(&v));
         }
+    }
+
+    #[test]
+    fn resim_player_replays_a_recording_to_the_end_without_drift() {
+        // Record a short flight directly through the sim (burn, then coast),
+        // then drive the playback player at a fake 60 Hz frame clock: it
+        // must reach the recording's end with zero keyframe drift and no
+        // fallback snaps on this binary.
+        let mut s = Sim::new();
+        let mut rec = Recording::new(sim_params(), u32::MAX);
+        rec.push_keyframe(s.keyframe(0, 0.0));
+        for t in 0..600u32 {
+            let input = if t < 150 {
+                InputState::from_controls(0.8, 0, 0.0, 0.0, false)
+            } else {
+                InputState::default()
+            };
+            let rep = s.tick(input);
+            let due = rec.record_tick(input);
+            if let Some(imp) = rep.impact.filter(|i| i.destroyed) {
+                rec.finalize(Keyframe {
+                    tick: rec.ticks(),
+                    x: imp.x, y: imp.y, angle: imp.angle,
+                    vx: imp.vx, vy: imp.vy, angvel: imp.angvel,
+                    fuel: s.fuel, hull: s.hull, glow: 0.0,
+                });
+                break;
+            }
+            if due {
+                rec.push_keyframe(s.keyframe(rec.ticks(), 0.0));
+            }
+        }
+        let mut p = ResimPlayer::new(&rec).expect("player from recording");
+        let mut guard = 0;
+        while !p.finished && guard < 10_000 {
+            p.advance(&rec, 1.0 / 60.0);
+            guard += 1;
+        }
+        assert!(p.finished, "player never finished");
+        assert_eq!(p.tick, rec.ticks());
+        assert!(p.drift < 1e-4, "keyframe drift {} m", p.drift);
+        assert!(!p.snapped, "fallback snap engaged on the same binary");
     }
 
     #[test]

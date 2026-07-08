@@ -30,6 +30,9 @@ use crate::replay::{InputState, Keyframe, Recording, SimParams};
 use crate::world::*;
 
 pub const PHYSICS_DT: f32 = 1.0 / 120.0;
+// Where every run starts AND where reset/respawn returns: a shared start
+// line is what lets the last-run ghost race you (it stands on pad 0).
+pub const SPAWN_X: f32 = 0.0;
 // How many segments to keep loaded on each side of the ship.
 pub const HALF_WINDOW: i64 = 80;
 pub const GRAVITY_Y: f32 = -1.62;
@@ -240,7 +243,7 @@ impl Sim {
         };
         // Seed the collider window at the spawn so even the very first tick
         // has ground under the ship.
-        sim.restore(&spawn_keyframe(0.0));
+        sim.restore(&spawn_keyframe(SPAWN_X));
         sim
     }
 
@@ -590,9 +593,10 @@ impl Sim {
     }
 }
 
-// Not called by the game loop yet — playback still renders the dense visual
-// buffer; this becomes live when replays leave the device (verification) or
-// playback switches to re-sim. Exercised by the determinism tests below.
+// The batch form of what main's ResimPlayer does incrementally for playback.
+// Not called by the game loop — it's the verification entry point for when
+// blobs leave the device (a server re-running a submitted run), and the
+// anchor of the determinism tests below.
 #[allow(dead_code)]
 // Re-run a hybrid Recording through a fresh Sim: restore its first keyframe,
 // feed the input events tick by tick, and emit keyframes on the same cadence

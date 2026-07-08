@@ -463,8 +463,11 @@ On destruction: 70 explosion particles (`kind 3`, ~1.1 s life), the wreck is
 parked (`set_gravity_scale(0)`, velocities zeroed) so the camera holds still,
 input is dead (`crashed` gates thrust/RCS and ship rendering), and a "CRASHED"
 banner shows. After `CRASH_DIALOG_DELAY = 1.5 s` the **crash dialog** takes
-over (see below); respawning at `RESET_X` happens from its FLY AGAIN action
-(or the R key, which works from any mode). `Sim::restore` snaps its internal
+over (see below); respawn happens from its FLY AGAIN action (or the R key,
+which works from any mode) and returns to **`SPAWN_X` = 0, the original
+spawn** — every run shares the ghost's start line. (`RESET_X` = 64 remains
+in world.rs purely as an obstacle-clearance anchor; changing it would
+reshape the cave.) `Sim::restore` snaps its internal
 `prev_vel` on any teleport (otherwise the velocity jump reads as an impact);
 main must still snap `prev_ship` (render interpolation) after `sim.reset`.
 Spawn/reset place the ship **standing on the floor** (`stand_y(x)` = floor +
@@ -495,15 +498,25 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   arrive as synthesized mouse events). FLY AGAIN sets `do_reset`, consumed by
   the same reset block as the R key. WATCH REPLAY is a no-op unless the buffer
   has ≥ 2 frames.
-- **Playback**: `replay_t` advances `get_frame_time()/PHYSICS_DT` frames and
-  lerps between recorded steps (`lerp_angle` for the seam-safe heading, unit
-  tested). The lerped frame **overrides `cam_x`/`cam_y`/`angle`/`ship_vx/vy`
-  and `glow`** before the `lp`/`ld` closures are built, so the sliding windows,
-  flame, radial light, engine volume, exhaust particles (recorded glow stands
-  in for the throttle) and RCS puffs (recorded side) all replay for free. HUD
-  shows a pulsing REPLAY banner + progress bar; tap/click skips back to the
-  dialog, R skips straight to respawn. At the end the explosion is re-fired
-  (`boom_burst` + boom sound) and the dialog returns.
+- **Playback is RE-SIM DRIVEN** (`ResimPlayer` in main.rs): WATCH REPLAY
+  re-runs the hybrid recording's input events through a **scratch `Sim`**
+  paced by the render clock — the machinery a replay shared from another
+  device would use. The interpolated frame (fractional-tick lerp,
+  `lerp_angle` for the seam-safe heading) **overrides
+  `cam_x`/`cam_y`/`angle`/`ship_vx/vy` and `glow`** before the `lp`/`ld`
+  closures are built, so flame/light/volume/exhaust/RCS puffs replay from
+  the re-simmed state; glow is re-derived from the commanded throttle. The
+  **world renders from the scratch sim** (`world_sim` binding — its collider
+  windows follow the re-simmed ship; the main sim's stay parked at the
+  wreck), including fuel/hull gauges, score and pad beacons, which re-earn
+  themselves as the replay lands. Each 1 Hz keyframe is verified as the
+  cursor passes: the overlay shows `re-simulated from inputs · drift N m`,
+  and drift > `SNAP_DRIFT_M = 0.5` snaps to the keyframe (the graceful
+  fallback for recordings from a different build/params — zero on the same
+  binary, unit-tested). The destroying impact is re-simulated, ends the
+  playback (boom + dialog); tap/click skips back to the dialog, R skips
+  straight to respawn. WATCH REPLAY is a no-op if the recording has no ticks.
+  The dense visual buffer now feeds ONLY the ghost.
 
 ### Hybrid recording (`src/replay.rs`) — the shareable format
 Alongside the dense visual buffer, a `Recording` captures the same spawn→crash
