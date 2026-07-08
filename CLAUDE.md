@@ -513,10 +513,13 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   cursor passes: the overlay shows `re-simulated from inputs · drift N m`,
   and drift > `SNAP_DRIFT_M = 0.5` snaps to the keyframe (the graceful
   fallback for recordings from a different build/params — zero on the same
-  binary, unit-tested). The destroying impact is re-simulated, ends the
-  playback (boom + dialog); tap/click skips back to the dialog, R skips
-  straight to respawn. WATCH REPLAY is a no-op if the recording has no ticks.
-  The dense visual buffer now feeds ONLY the ghost.
+  binary, unit-tested). A **recorded-input widget** (bottom-center — the
+  HTML stick parks bottom-right, JET sits bottom-left) shows the input
+  stream live: stick ring + knob at the recorded deflection (amber while
+  held), throttle bar, rot arrows. The destroying impact is re-simulated,
+  ends the playback (boom + dialog); tap/click skips back to the dialog, R
+  skips straight to respawn. WATCH REPLAY is a no-op if the recording has
+  no ticks. The dense visual buffer now feeds ONLY the ghost.
 
 ### Hybrid recording (`src/replay.rs`) — the shareable format
 Alongside the dense visual buffer, a `Recording` captures the same spawn→crash
