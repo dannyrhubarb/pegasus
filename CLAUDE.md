@@ -578,6 +578,16 @@ for now:
 
 ### Determinism rules (the re-sim refactor, 2026-07)
 Live play and resim must perform IDENTICAL operation sequences:
+- **Fresh `Sim` per run — NEVER reuse a sim across recorded runs.** Rapier's
+  contact solve is sensitive to collider HANDLE NUMBERING; a reused sim's
+  handle space carries the previous run's window churn, while resim always
+  runs fresh. Under sustained multi-point contact (parked on a pad) the
+  differing float summation order creeps ~1e-4 m, and chaos amplifies it to
+  metres at later collisions (found 2026-07 from a real replay: 13.4 m
+  drift, same binary, same page load). The reset block does `sim =
+  Sim::new()`; `Sim::reset()` survives for tests only. Regression test:
+  `fresh_sim_per_run_with_pad_contact_resims_exactly` (its inverse — reset
+  instead of recreate — reproducibly diverged).
 - All forces/fuel/damage/landing run per tick inside `Sim::tick` from the
   quantized `InputState` (never from raw device floats — quantize first via
   `InputState::from_controls`, then both the sim and recorder consume it).
