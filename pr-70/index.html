@@ -166,8 +166,9 @@
 <body>
   <canvas id="glcanvas" tabindex="1"></canvas>
 
-  <!-- Probe element to read the top/left safe-area insets in CSS pixels -->
+  <!-- Probe elements to read the safe-area insets in CSS pixels (all four sides) -->
   <div id="safe-area-probe" style="position:fixed;top:0;left:0;height:env(safe-area-inset-top);width:env(safe-area-inset-left);pointer-events:none;"></div>
+  <div id="safe-area-probe-br" style="position:fixed;bottom:0;right:0;height:env(safe-area-inset-bottom);width:env(safe-area-inset-right);pointer-events:none;"></div>
 
   <!-- Info button + fullscreen overlay -->
   <div id="info-btn" role="button" aria-label="Info" title="Info">i</div>
@@ -176,11 +177,11 @@
     <h1>Pegasus — Moon Lander</h1>
     <div class="info-row">
       <div class="info-label">Build revision</div>
-      <div class="info-value" id="git-rev">c4e9ceb-pr-70</div>
+      <div class="info-value" id="git-rev">1ec6704-pr-70</div>
     </div>
     <div class="info-row">
       <div class="info-label">Build time</div>
-      <div class="info-value" id="build-time">2026-07-08 13:02 UTC</div>
+      <div class="info-value" id="build-time">2026-07-08 13:35 UTC</div>
     </div>
     <label id="vel-toggle-row">
       <input type="checkbox" id="vel-toggle">
@@ -350,14 +351,29 @@
     // (e.g. after a reload), so probe once the WASM exports are ready too.
     if (firstGamepad()) startPadPolling();
 
-    // Report the safe-area insets (notch / status bar) to the WASM HUD.
+    // Report the safe-area insets (all four sides) to the game, in CSS px.
+    // The canvas is 100vh, so it extends UNDER the floating browser toolbar;
+    // env(safe-area-inset-bottom) only covers the home indicator, so the
+    // bottom inset also folds in the toolbar height measured via
+    // visualViewport (window height minus the actually-visible height).
     const safeProbe = document.getElementById("safe-area-probe");
+    const safeProbeBR = document.getElementById("safe-area-probe-br");
     function reportSafeArea() {
-      const rect = safeProbe.getBoundingClientRect();
-      call("set_safe_area", rect.height, rect.width);
+      const tl = safeProbe.getBoundingClientRect();
+      const br = safeProbeBR.getBoundingClientRect();
+      const vv = window.visualViewport;
+      const obscuredBottom = vv
+        ? Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop))
+        : 0;
+      const bottom = Math.max(br.height, obscuredBottom);
+      call("set_safe_area", tl.height, tl.width, bottom, br.width);
     }
     window.addEventListener("resize", reportSafeArea);
     window.addEventListener("orientationchange", () => setTimeout(reportSafeArea, 300));
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", reportSafeArea);
+      window.visualViewport.addEventListener("scroll", reportSafeArea);
+    }
     // The WASM exports aren't ready immediately; poll briefly until it loads.
     const safeAreaTimer = setInterval(() => {
       if (typeof wasm_exports !== "undefined" && wasm_exports.set_safe_area) {
@@ -409,7 +425,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "c4e9ceb-pr-70";
+    const wasmRev = "1ec6704-pr-70";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
