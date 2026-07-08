@@ -7,6 +7,8 @@
 use macroquad::prelude::*;
 use rapier2d::prelude::*;
 
+use crate::replay::LevelParams;
+
 pub const SEG_LEN: f32 = 3.0;
 // Historical reset point, now only a world-gen clearance anchor: obstacles
 // keep clear of it (like the x = 0 spawn). Respawn itself returns to SPAWN_X
@@ -19,63 +21,186 @@ pub const RESET_X: f32 = 64.0;
 pub const PERIOD: f32 = 600.0;
 pub const BASE: f32 = std::f32::consts::TAU / PERIOD; // 2π / 600
 
-pub fn cave_center(x: f32) -> f32 {
-    (x * BASE).sin()       * 14.0   // 1st harmonic  — big slow sweep
-    + (x * BASE * 3.0).cos() *  5.0 // 3rd harmonic  — medium curves
-    + (x * BASE * 7.0).sin() *  3.0 // 7th harmonic  — tighter wiggles
+
+// ---- Levels ---------------------------------------------------------------
+//
+// A Level is a parameter block for the procedural generator: everything that
+// shapes the WORLD lives here, so new levels are data (levels/*.level files
+// fetched at runtime, with compiled-in fallbacks) rather than code. Physics
+// depends on these values, so the replay header records them (LevelParams in
+// src/replay.rs) and resim reconstructs the Level from the recording.
+// seed = 0 reproduces the original cave bit-for-bit (legacy phases).
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Scoring {
+    Pads,     // +100 per first landing on each pad
+    Distance, // high score = max |x| reached in a run
 }
 
-pub fn cave_half_width(x: f32) -> f32 {
-    6.5
-    + (x * BASE * 2.0).sin()      * 2.5  // narrows / widens slowly
-    + (x * BASE * 5.0).cos()      * 1.5  // medium variation
-    + (x * BASE * 11.0).sin().abs() * 2.0 // pinch points (abs keeps it positive)
+#[derive(Clone, Debug, PartialEq)]
+pub struct Level {
+    pub name: String,
+    pub scoring: Scoring,
+    pub shafts: bool,
+    pub obstacles: bool,
+    pub pad_spacing: f32,
+    pub seed: u32,
 }
 
-// Spawn/reset height at x: standing on the floor (feet reach 0.73 below the
-// body origin). Spawning at cave_center dropped the ship 8–9 m; the ~5.5 m/s
-// touchdown tripped the crash threshold and put spawn → crash → respawn into
-// an endless loop.
-pub fn stand_y(x: f32) -> f32 {
-    let mut ground = cave_center(x) - cave_half_width(x);
-    // If a landing pad deck covers x, stand on the deck instead (its friction
-    // also keeps the parked ship from drifting on sloped, frictionless rock).
-    let p0 = (x / PAD_SPACING).round() as i64;
-    for p in p0 - 1..=p0 + 1 {
-        if let Some(pad) = pad_spec(p)
-            && (pad.cx - x).abs() <= PAD_HALF_W
-        {
-            ground = ground.max(pad.y);
+impl Level {
+    // The original world: pad scoring, shafts, boulders. seed 0 = legacy.
+    pub fn demo() -> Level {
+        Level {
+            name: "The Caves".to_string(),
+            scoring: Scoring::Pads,
+            shafts: true,
+            obstacles: true,
+            pad_spacing: PAD_SPACING,
+            seed: 0,
         }
     }
-    ground + 0.78
-}
 
-// Returns (top_a, top_b, bot_a, bot_b) for segment index i
-pub fn seg_points(idx: i64) -> (Point<f32>, Point<f32>, Point<f32>, Point<f32>) {
-    let x0 = idx as f32 * SEG_LEN;
-    let x1 = x0 + SEG_LEN;
-    let (cy0, hw0) = (cave_center(x0), cave_half_width(x0));
-    let (cy1, hw1) = (cave_center(x1), cave_half_width(x1));
-    (
-        point![x0, cy0 + hw0], point![x1, cy1 + hw1],
-        point![x0, cy0 - hw0], point![x1, cy1 - hw1],
-    )
-}
-
-pub fn insert_seg(idx: i64, layer: i64, collider_set: &mut ColliderSet) -> Vec<ColliderHandle> {
-    // Shaft openings: no ceiling/floor collider where a vertical shaft punches
-    // through — the shaft's own walls take over exactly at the opening edges.
-    if seg_in_opening(idx) {
-        return Vec::new();
+    // Parse the `key = value` level format (# comments, unknown keys ignored
+    // for forward compatibility; missing keys keep demo defaults).
+    pub fn parse(text: &str) -> Level {
+        let mut lvl = Level::demo();
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let Some((k, v)) = line.split_once('=') else { continue };
+            let (k, v) = (k.trim(), v.trim());
+            let on = matches!(v, "on" | "true" | "yes" | "1");
+            match k {
+                "name" => lvl.name = v.to_string(),
+                "scoring" => {
+                    lvl.scoring = if v.eq_ignore_ascii_case("distance") {
+                        Scoring::Distance
+                    } else {
+                        Scoring::Pads
+                    }
+                }
+                "shafts" => lvl.shafts = on,
+                "obstacles" => lvl.obstacles = on,
+                "pad_spacing" => {
+                    if let Ok(f) = v.parse::<f32>() {
+                        lvl.pad_spacing = f.clamp(40.0, 2000.0);
+                    }
+                }
+                "seed" => {
+                    if let Ok(s) = v.parse::<u32>() {
+                        lvl.seed = s;
+                    }
+                }
+                _ => {}
+            }
+        }
+        lvl
     }
-    let ly = layer as f32 * V_PERIOD;
-    let (ta, tb, ba, bb) = seg_points(idx);
-    let off = |p: Point<f32>| point![p.x, p.y + ly];
-    vec![
-        collider_set.insert(ColliderBuilder::segment(off(ta), off(tb)).friction(0.0).build()),
-        collider_set.insert(ColliderBuilder::segment(off(ba), off(bb)).friction(0.0).build()),
-    ]
+
+    // Per-harmonic phase offset derived from the seed. seed 0 = the original
+    // cave (zero phases), any other seed reshapes the whole world.
+    fn phase(&self, salt: u32) -> f32 {
+        if self.seed == 0 {
+            0.0
+        } else {
+            (hash_u32(self.seed ^ salt) & 0xffff) as f32 / 65535.0 * std::f32::consts::TAU
+        }
+    }
+
+    // Fold the seed into a slot hash (0 = legacy value untouched).
+    fn slot_seed(&self, k: u32) -> u32 {
+        k ^ self.seed.wrapping_mul(0x9e37_79b9)
+    }
+
+    // The physics-relevant subset, for the replay header. The name is
+    // cosmetic and doesn't survive the round trip.
+    pub fn to_params(&self) -> LevelParams {
+        LevelParams {
+            scoring: match self.scoring {
+                Scoring::Pads => 0,
+                Scoring::Distance => 1,
+            },
+            shafts: self.shafts as u8,
+            obstacles: self.obstacles as u8,
+            pad_spacing: self.pad_spacing,
+            seed: self.seed,
+        }
+    }
+
+    pub fn from_params(p: &LevelParams) -> Level {
+        Level {
+            name: "(replay)".to_string(),
+            scoring: if p.scoring == 1 { Scoring::Distance } else { Scoring::Pads },
+            shafts: p.shafts != 0,
+            obstacles: p.obstacles != 0,
+            pad_spacing: p.pad_spacing,
+            seed: p.seed,
+        }
+    }
+}
+
+impl Level {
+    pub fn cave_center(&self, x: f32) -> f32 {
+        (x * BASE + self.phase(1)).sin()       * 14.0   // 1st harmonic  — big slow sweep
+        + (x * BASE * 3.0 + self.phase(2)).cos() *  5.0 // 3rd harmonic  — medium curves
+        + (x * BASE * 7.0 + self.phase(3)).sin() *  3.0 // 7th harmonic  — tighter wiggles
+    }
+
+    pub fn cave_half_width(&self, x: f32) -> f32 {
+        6.5
+        + (x * BASE * 2.0 + self.phase(4)).sin()      * 2.5  // narrows / widens slowly
+        + (x * BASE * 5.0 + self.phase(5)).cos()      * 1.5  // medium variation
+        + (x * BASE * 11.0 + self.phase(6)).sin().abs() * 2.0 // pinch points (abs keeps it positive)
+    }
+
+    // Spawn/reset height at x: standing on the floor (feet reach 0.73 below
+    // the body origin). Spawning at cave_center dropped the ship 8–9 m; the
+    // ~5.5 m/s touchdown tripped the crash threshold and put spawn → crash →
+    // respawn into an endless loop.
+    pub fn stand_y(&self, x: f32) -> f32 {
+        let mut ground = self.cave_center(x) - self.cave_half_width(x);
+        // If a landing pad deck covers x, stand on the deck instead (its
+        // friction also keeps the parked ship from drifting on sloped,
+        // frictionless rock).
+        let p0 = (x / self.pad_spacing).round() as i64;
+        for p in p0 - 1..=p0 + 1 {
+            if let Some(pad) = self.pad_spec(p)
+                && (pad.cx - x).abs() <= PAD_HALF_W
+            {
+                ground = ground.max(pad.y);
+            }
+        }
+        ground + 0.78
+    }
+
+    // Returns (top_a, top_b, bot_a, bot_b) for segment index i
+    pub fn seg_points(&self, idx: i64) -> (Point<f32>, Point<f32>, Point<f32>, Point<f32>) {
+        let x0 = idx as f32 * SEG_LEN;
+        let x1 = x0 + SEG_LEN;
+        let (cy0, hw0) = (self.cave_center(x0), self.cave_half_width(x0));
+        let (cy1, hw1) = (self.cave_center(x1), self.cave_half_width(x1));
+        (
+            point![x0, cy0 + hw0], point![x1, cy1 + hw1],
+            point![x0, cy0 - hw0], point![x1, cy1 - hw1],
+        )
+    }
+
+    pub fn insert_seg(&self, idx: i64, layer: i64, collider_set: &mut ColliderSet) -> Vec<ColliderHandle> {
+        // Shaft openings: no ceiling/floor collider where a vertical shaft
+        // punches through — the shaft walls take over at the opening edges.
+        if self.seg_in_opening(idx) {
+            return Vec::new();
+        }
+        let ly = layer as f32 * V_PERIOD;
+        let (ta, tb, ba, bb) = self.seg_points(idx);
+        let off = |p: Point<f32>| point![p.x, p.y + ly];
+        vec![
+            collider_set.insert(ColliderBuilder::segment(off(ta), off(tb)).friction(0.0).build()),
+            collider_set.insert(ColliderBuilder::segment(off(ba), off(bb)).friction(0.0).build()),
+        ]
+    }
 }
 
 // ---- Vertical shafts ------------------------------------------------------
@@ -92,54 +217,62 @@ pub const SHAFT_BASE_SEG: i64 = 35;     // slot anchor; keeps openings clear of 
 pub const SHAFT_OPEN_SEGS: i64 = 3;     // opening width: 3 segments = 9 m
 pub const SHAFT_STEP: f32 = 3.0;        // shaft wall segment length (m)
 
-// Start segment of the ceiling/floor opening for shaft slot `s`. Jitter is
-// keyed on s mod 4 (= slots per PERIOD) so the pattern repeats exactly every
-// period in x — the wrap stays seamless in both axes.
-pub fn shaft_open_seg(s: i64) -> i64 {
-    let j = (hash_u32(s.rem_euclid(4) as u32 ^ 0x51ed_270b) % 13) as i64 - 6; // ±6 segs
-    s * SHAFT_SPACING_SEGS + SHAFT_BASE_SEG + j
-}
+impl Level {
+    // Start segment of the ceiling/floor opening for shaft slot `s`. Jitter
+    // is keyed on s mod 4 (= slots per PERIOD) so the pattern repeats exactly
+    // every period in x — the wrap stays seamless in both axes.
+    pub fn shaft_open_seg(&self, s: i64) -> i64 {
+        let j = (hash_u32(self.slot_seed(s.rem_euclid(4) as u32) ^ 0x51ed_270b) % 13) as i64 - 6; // ±6 segs
+        s * SHAFT_SPACING_SEGS + SHAFT_BASE_SEG + j
+    }
 
-// Does cave segment `idx` fall inside a shaft opening (→ walls removed there)?
-pub fn seg_in_opening(idx: i64) -> bool {
-    let s0 = (idx - SHAFT_BASE_SEG).div_euclid(SHAFT_SPACING_SEGS);
-    [s0, s0 + 1].iter().any(|&s| {
-        let o = shaft_open_seg(s);
-        idx >= o && idx < o + SHAFT_OPEN_SEGS
-    })
-}
-
-// Wall x for shaft `s` at normalized height t ∈ [0,1]; side 0 = left, 1 = right.
-// The envelope pins both ends exactly to the opening edges so the wall meets
-// the clipped ceiling/floor colliders with no gap; in between it wiggles up to
-// ±1.25 m (opening is 9 m wide → the shaft always stays ≥ 6.5 m flyable).
-pub fn shaft_wall_x(s: i64, side: u8, t: f32) -> f32 {
-    let o = shaft_open_seg(s);
-    let edge = (if side == 0 { o } else { o + SHAFT_OPEN_SEGS }) as f32 * SEG_LEN;
-    let h = hash_u32(s.rem_euclid(4) as u32 ^ ((side as u32) << 8) ^ 0xabc0_ffee);
-    let tau = std::f32::consts::TAU;
-    let p1 = (h & 0xffff) as f32 / 65535.0 * tau;
-    let p2 = ((h >> 16) & 0xffff) as f32 / 65535.0 * tau;
-    let env = (t.min(1.0 - t) / 0.18).clamp(0.0, 1.0);
-    edge + env * ((t * tau * 2.0 + p1).sin() * 0.9 + (t * tau * 5.0 + p2).sin() * 0.35)
-}
-
-// Wall polyline for the shaft connecting layer `gap`'s ceiling to layer
-// `gap + 1`'s floor. Endpoints lie exactly on the two cave wall curves at the
-// opening edges, so colliders and row-0 facets chain seamlessly through both
-// junctions. The shape is identical for every gap (mod V_PERIOD) — the wrap.
-pub fn shaft_wall_pts(s: i64, gap: i64, side: u8) -> Vec<Vec2> {
-    let o = shaft_open_seg(s);
-    let xe = (if side == 0 { o } else { o + SHAFT_OPEN_SEGS }) as f32 * SEG_LEN;
-    let y_bot = gap as f32 * V_PERIOD + cave_center(xe) + cave_half_width(xe);
-    let y_top = (gap + 1) as f32 * V_PERIOD + cave_center(xe) - cave_half_width(xe);
-    let n = ((y_top - y_bot) / SHAFT_STEP).ceil().max(1.0) as usize;
-    (0..=n)
-        .map(|i| {
-            let t = i as f32 / n as f32;
-            vec2(shaft_wall_x(s, side, t), y_bot + (y_top - y_bot) * t)
+    // Does cave segment `idx` fall inside a shaft opening (→ walls removed
+    // there)? Always false on levels without shafts.
+    pub fn seg_in_opening(&self, idx: i64) -> bool {
+        if !self.shafts {
+            return false;
+        }
+        let s0 = (idx - SHAFT_BASE_SEG).div_euclid(SHAFT_SPACING_SEGS);
+        [s0, s0 + 1].iter().any(|&s| {
+            let o = self.shaft_open_seg(s);
+            idx >= o && idx < o + SHAFT_OPEN_SEGS
         })
-        .collect()
+    }
+
+    // Wall x for shaft `s` at normalized height t ∈ [0,1]; side 0 = left,
+    // 1 = right. The envelope pins both ends exactly to the opening edges so
+    // the wall meets the clipped ceiling/floor colliders with no gap; in
+    // between it wiggles up to ±1.25 m (opening is 9 m wide → the shaft
+    // always stays ≥ 6.5 m flyable).
+    pub fn shaft_wall_x(&self, s: i64, side: u8, t: f32) -> f32 {
+        let o = self.shaft_open_seg(s);
+        let edge = (if side == 0 { o } else { o + SHAFT_OPEN_SEGS }) as f32 * SEG_LEN;
+        let h = hash_u32(self.slot_seed(s.rem_euclid(4) as u32) ^ ((side as u32) << 8) ^ 0xabc0_ffee);
+        let tau = std::f32::consts::TAU;
+        let p1 = (h & 0xffff) as f32 / 65535.0 * tau;
+        let p2 = ((h >> 16) & 0xffff) as f32 / 65535.0 * tau;
+        let env = (t.min(1.0 - t) / 0.18).clamp(0.0, 1.0);
+        edge + env * ((t * tau * 2.0 + p1).sin() * 0.9 + (t * tau * 5.0 + p2).sin() * 0.35)
+    }
+
+    // Wall polyline for the shaft connecting layer `gap`'s ceiling to layer
+    // `gap + 1`'s floor. Endpoints lie exactly on the two cave wall curves at
+    // the opening edges, so colliders and row-0 facets chain seamlessly
+    // through both junctions. The shape is identical for every gap (mod
+    // V_PERIOD) — the wrap.
+    pub fn shaft_wall_pts(&self, s: i64, gap: i64, side: u8) -> Vec<Vec2> {
+        let o = self.shaft_open_seg(s);
+        let xe = (if side == 0 { o } else { o + SHAFT_OPEN_SEGS }) as f32 * SEG_LEN;
+        let y_bot = gap as f32 * V_PERIOD + self.cave_center(xe) + self.cave_half_width(xe);
+        let y_top = (gap + 1) as f32 * V_PERIOD + self.cave_center(xe) - self.cave_half_width(xe);
+        let n = ((y_top - y_bot) / SHAFT_STEP).ceil().max(1.0) as usize;
+        (0..=n)
+            .map(|i| {
+                let t = i as f32 / n as f32;
+                vec2(self.shaft_wall_x(s, side, t), y_bot + (y_top - y_bot) * t)
+            })
+            .collect()
+    }
 }
 
 // ---- Random polygon obstacles -------------------------------------------
@@ -193,67 +326,74 @@ pub struct ObstacleSpec {
     pub pts: Vec<Point<f32>>, // local-space candidate vertices for the convex hull
 }
 
-pub fn obstacle_spec(k: i64) -> Option<ObstacleSpec> {
-    let mut rng = Rng::new(k as u32);
-
-    let cx = k as f32 * OBSTACLE_SPACING + rng.range(-3.0, 3.0);
-
-    // Keep the spawn and reset areas clear so neither drops the ship onto a rock.
-    if cx.abs() < 9.0 || (cx - RESET_X).abs() < 9.0 {
-        return None;
-    }
-
-    let cy_wall = cave_center(cx);
-    let hw = cave_half_width(cx);
-
-    // Skip pinch points — no room for an obstacle plus a passable gap.
-    if hw < 4.5 {
-        return None;
-    }
-
-    // Skip slots near a vertical shaft opening so the junction crossings
-    // (where the player has to maneuver vertically) stay flyable.
-    let seg = (cx / SEG_LEN).floor() as i64;
-    let s0 = (seg - SHAFT_BASE_SEG).div_euclid(SHAFT_SPACING_SEGS);
-    for s in [s0, s0 + 1] {
-        let o = shaft_open_seg(s);
-        let (ox0, ox1) = (o as f32 * SEG_LEN, (o + SHAFT_OPEN_SEGS) as f32 * SEG_LEN);
-        if cx > ox0 - 8.0 && cx < ox1 + 8.0 {
+impl Level {
+    pub fn obstacle_spec(&self, k: i64) -> Option<ObstacleSpec> {
+        if !self.obstacles {
             return None;
         }
+        let mut rng = Rng::new(self.slot_seed(k as u32));
+
+        let cx = k as f32 * OBSTACLE_SPACING + rng.range(-3.0, 3.0);
+
+        // Keep the spawn and reset areas clear so neither drops the ship onto a rock.
+        if cx.abs() < 9.0 || (cx - RESET_X).abs() < 9.0 {
+            return None;
+        }
+
+        let cy_wall = self.cave_center(cx);
+        let hw = self.cave_half_width(cx);
+
+        // Skip pinch points — no room for an obstacle plus a passable gap.
+        if hw < 4.5 {
+            return None;
+        }
+
+        // Skip slots near a vertical shaft opening so the junction crossings
+        // (where the player has to maneuver vertically) stay flyable.
+        if self.shafts {
+            let seg = (cx / SEG_LEN).floor() as i64;
+            let s0 = (seg - SHAFT_BASE_SEG).div_euclid(SHAFT_SPACING_SEGS);
+            for s in [s0, s0 + 1] {
+                let o = self.shaft_open_seg(s);
+                let (ox0, ox1) = (o as f32 * SEG_LEN, (o + SHAFT_OPEN_SEGS) as f32 * SEG_LEN);
+                if cx > ox0 - 8.0 && cx < ox1 + 8.0 {
+                    return None;
+                }
+            }
+        }
+
+        // Roughly 1 in 6 slots is empty, for uneven, natural-feeling spacing.
+        if rng.range_int(0, 5) == 0 {
+            return None;
+        }
+
+        // Obstacle size. Boulders up to 5.5 m radius appear in the widest
+        // sections; the cap scales with local half-width so a gap always fits.
+        let max_r = (hw * 0.65).min(5.5);
+        let r = rng.range(0.3, 1.0) * max_r;
+
+        // Centre offset, leaving at least ~1.3 m clearance to the nearer wall so
+        // there is always a flyable gap on at least one side.
+        let max_off = (hw - r - 1.3).max(0.0);
+        let cy = cy_wall + rng.range(-max_off, max_off);
+
+        // Build a lumpy convex polygon: vertices at sorted angles, varying radius.
+        let n = rng.range_int(6, 9);
+        let mut pts = Vec::with_capacity(n as usize);
+        for i in 0..n {
+            let base = i as f32 / n as f32 * std::f32::consts::TAU;
+            let ang = base + rng.range(-0.25, 0.25);
+            let rad = r * rng.range(0.6, 1.0);
+            pts.push(point![rad * ang.cos(), rad * ang.sin()]);
+        }
+
+        Some(ObstacleSpec {
+            cx,
+            cy,
+            rot: rng.range(0.0, std::f32::consts::TAU),
+            pts,
+        })
     }
-
-    // Roughly 1 in 6 slots is empty, for uneven, natural-feeling spacing.
-    if rng.range_int(0, 5) == 0 {
-        return None;
-    }
-
-    // Obstacle size. Boulders up to 5.5 m radius appear in the widest
-    // sections; the cap scales with local half-width so a gap always fits.
-    let max_r = (hw * 0.65).min(5.5);
-    let r = rng.range(0.3, 1.0) * max_r;
-
-    // Centre offset, leaving at least ~1.3 m clearance to the nearer wall so
-    // there is always a flyable gap on at least one side.
-    let max_off = (hw - r - 1.3).max(0.0);
-    let cy = cy_wall + rng.range(-max_off, max_off);
-
-    // Build a lumpy convex polygon: vertices at sorted angles, varying radius.
-    let n = rng.range_int(6, 9);
-    let mut pts = Vec::with_capacity(n as usize);
-    for i in 0..n {
-        let base = i as f32 / n as f32 * std::f32::consts::TAU;
-        let ang = base + rng.range(-0.25, 0.25);
-        let rad = r * rng.range(0.6, 1.0);
-        pts.push(point![rad * ang.cos(), rad * ang.sin()]);
-    }
-
-    Some(ObstacleSpec {
-        cx,
-        cy,
-        rot: rng.range(0.0, std::f32::consts::TAU),
-        pts,
-    })
 }
 
 // ---- Landing pads ---------------------------------------------------------
@@ -274,48 +414,53 @@ pub struct PadSpec {
     pub y: f32, // deck top = collider line
 }
 
-pub fn pad_spec(p: i64) -> Option<PadSpec> {
-    let mut rng = Rng::new((p as u32) ^ 0x50AD_5EED);
-    let cx = p as f32 * PAD_SPACING + rng.range(-20.0, 20.0);
+impl Level {
+    pub fn pad_spec(&self, p: i64) -> Option<PadSpec> {
+        let mut rng = Rng::new(self.slot_seed(p as u32) ^ 0x50AD_5EED);
+        let cx = p as f32 * self.pad_spacing + rng.range(-20.0, 20.0);
 
-    // Need headroom to come down vertically.
-    if cave_half_width(cx) < 5.0 {
-        return None;
-    }
-
-    // Keep clear of shaft openings (same 8 m rule as obstacles).
-    let seg = (cx / SEG_LEN).floor() as i64;
-    let s0 = (seg - SHAFT_BASE_SEG).div_euclid(SHAFT_SPACING_SEGS);
-    for s in [s0, s0 + 1] {
-        let o = shaft_open_seg(s);
-        let (ox0, ox1) = (o as f32 * SEG_LEN, (o + SHAFT_OPEN_SEGS) as f32 * SEG_LEN);
-        if cx > ox0 - 8.0 && cx < ox1 + 8.0 {
+        // Need headroom to come down vertically.
+        if self.cave_half_width(cx) < 5.0 {
             return None;
         }
-    }
 
-    // Don't overlap a boulder: check the obstacle slots whose jitter range
-    // could reach the deck.
-    let k0 = (cx / OBSTACLE_SPACING).round() as i64;
-    for k in k0 - 1..=k0 + 1 {
-        if let Some(ob) = obstacle_spec(k) {
-            let r = ob
-                .pts
-                .iter()
-                .map(|q| (q.x * q.x + q.y * q.y).sqrt())
-                .fold(0.0f32, f32::max);
-            if (ob.cx - cx).abs() < r + PAD_HALF_W + 1.0 {
-                return None;
+        // Keep clear of shaft openings (same 8 m rule as obstacles).
+        if self.shafts {
+            let seg = (cx / SEG_LEN).floor() as i64;
+            let s0 = (seg - SHAFT_BASE_SEG).div_euclid(SHAFT_SPACING_SEGS);
+            for s in [s0, s0 + 1] {
+                let o = self.shaft_open_seg(s);
+                let (ox0, ox1) = (o as f32 * SEG_LEN, (o + SHAFT_OPEN_SEGS) as f32 * SEG_LEN);
+                if cx > ox0 - 8.0 && cx < ox1 + 8.0 {
+                    return None;
+                }
             }
         }
-    }
 
-    // Deck sits just above the highest floor point under the span, so the
-    // collider never dips into the rock.
-    let mut y = f32::NEG_INFINITY;
-    for i in 0..=12 {
-        let x = cx - PAD_HALF_W + i as f32 * (PAD_HALF_W / 6.0);
-        y = y.max(cave_center(x) - cave_half_width(x));
+        // Don't overlap a boulder: check the obstacle slots whose jitter range
+        // could reach the deck. (obstacle_spec is None on boulder-free levels,
+        // so those levels keep every otherwise-valid pad slot.)
+        let k0 = (cx / OBSTACLE_SPACING).round() as i64;
+        for k in k0 - 1..=k0 + 1 {
+            if let Some(ob) = self.obstacle_spec(k) {
+                let r = ob
+                    .pts
+                    .iter()
+                    .map(|q| (q.x * q.x + q.y * q.y).sqrt())
+                    .fold(0.0f32, f32::max);
+                if (ob.cx - cx).abs() < r + PAD_HALF_W + 1.0 {
+                    return None;
+                }
+            }
+        }
+
+        // Deck sits just above the highest floor point under the span, so the
+        // collider never dips into the rock.
+        let mut y = f32::NEG_INFINITY;
+        for i in 0..=12 {
+            let x = cx - PAD_HALF_W + i as f32 * (PAD_HALF_W / 6.0);
+            y = y.max(self.cave_center(x) - self.cave_half_width(x));
+        }
+        Some(PadSpec { cx, y: y + 0.1 })
     }
-    Some(PadSpec { cx, y: y + 0.1 })
 }
