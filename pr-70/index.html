@@ -177,11 +177,11 @@
     <h1>Pegasus — Moon Lander</h1>
     <div class="info-row">
       <div class="info-label">Build revision</div>
-      <div class="info-value" id="git-rev">23cefdb-pr-70</div>
+      <div class="info-value" id="git-rev">1312056-pr-70</div>
     </div>
     <div class="info-row">
       <div class="info-label">Build time</div>
-      <div class="info-value" id="build-time">2026-07-08 14:57 UTC</div>
+      <div class="info-value" id="build-time">2026-07-08 19:54 UTC</div>
     </div>
     <label id="vel-toggle-row">
       <input type="checkbox" id="vel-toggle">
@@ -197,6 +197,9 @@
 
   <!-- Stale-cache reload toast (hidden until a newer version.json is seen) -->
   <div id="update-toast" role="button">⟳ New build available — tap to reload</div>
+
+  <!-- DEBUG (replay-drift investigation): download the last run's recording -->
+  <div id="dl-replay" role="button" style="position:fixed;left:calc(env(safe-area-inset-left) + 12px);bottom:calc(env(safe-area-inset-bottom) + 12px);z-index:20;padding:8px 12px;border-radius:8px;background:rgba(40,50,70,0.85);color:#cdd;border:1px solid rgba(190,200,218,0.6);font:600 13px -apple-system,sans-serif;display:none;">⬇︎ replay</div>
 
 
   <script>
@@ -433,7 +436,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "23cefdb-pr-70";
+    const wasmRev = "1312056-pr-70";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -537,6 +540,31 @@
         clearInterval(invTimer);
       }
     }, 200);
+
+    // DEBUG (replay-drift investigation): show the download button once a run
+    // has crashed (a recording blob is available), and download it on tap.
+    const dlReplay = document.getElementById("dl-replay");
+    function downloadReplay() {
+      if (typeof wasm_exports === "undefined" || !wasm_exports.replay_blob_len) return;
+      const len = wasm_exports.replay_blob_len();
+      if (!len) return;
+      const ptr = wasm_exports.replay_blob_ptr();
+      const bytes = new Uint8Array(wasm_memory.buffer, ptr, len).slice();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+      a.download = "pegasus-replay.bin";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+    ["click", "touchend"].forEach(ev => dlReplay.addEventListener(ev, e => {
+      e.preventDefault(); e.stopPropagation(); downloadReplay();
+    }, { passive: false }));
+    setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.replay_blob_len) {
+        dlReplay.style.display = wasm_exports.replay_blob_len() > 0 ? "" : "none";
+      }
+    }, 500);
 
     // Manual reload button in the info overlay (stopPropagation so the tap
     // doesn't just close the overlay).
