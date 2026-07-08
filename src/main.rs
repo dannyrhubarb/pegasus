@@ -170,11 +170,6 @@ impl ResimPlayer {
     fn progress(&self) -> f32 {
         (self.tick - self.first_tick) as f32 / (self.end_tick - self.first_tick).max(1) as f32
     }
-
-    // The input currently driving the re-sim (for the replay's input widget).
-    fn input(&self) -> InputState {
-        self.input
-    }
 }
 
 // Touch throttle is ANALOG (f32 bits, 0..1): the on-screen JET button sends
@@ -1308,54 +1303,6 @@ async fn main() {
             let vd = measure_text(&vt, None, vfs as u16, 1.0);
             draw_text(&vt, (sw - vd.width) / 2.0, py + 24.0 * ui, vfs,
                 Color::from_rgba(170, 180, 200, 170));
-
-            // Recorded-input widget: what the pilot's hand was doing, straight
-            // from the input stream driving the re-sim. Bottom-CENTER — the
-            // real (HTML) stick parks bottom-right and the JET button lives
-            // bottom-left. Stick ring with the knob at the recorded
-            // deflection (screen convention, y down — same as the real
-            // stick; amber while held), a throttle bar for the engine
-            // command, and rot arrows so keyboard/pad replays animate too.
-            let inp = replay_player.as_ref().map(|p| p.input()).unwrap_or_default();
-            let (ix, iy) = inp.steer_f32();
-            let held = inp.stick_held != 0;
-            let scx = sw / 2.0;
-            let scy = sh - 90.0 * ui;
-            let sr = 36.0 * ui;
-            let dim = Color::from_rgba(200, 205, 220, 110);
-            draw_circle_lines(scx, scy, sr, 2.0 * dpi, dim);
-            let kcol = if held {
-                Color::from_rgba(230, 176, 60, 230) // amber = engine-held, like the live stick
-            } else {
-                Color::from_rgba(160, 170, 190, 140)
-            };
-            draw_circle(scx + ix * sr, scy + iy * sr, 10.0 * ui, kcol);
-            // Throttle bar (left of the stick), filled bottom-up.
-            let tb_h = 2.0 * sr;
-            let tb_w = 10.0 * ui;
-            let tbx = scx - sr - 30.0 * ui;
-            let tby = scy - sr;
-            let th = inp.throttle_f32();
-            draw_rectangle_lines(tbx, tby, tb_w, tb_h, 2.0 * dpi, dim);
-            if th > 0.0 {
-                draw_rectangle(tbx, tby + tb_h * (1.0 - th), tb_w, tb_h * th,
-                    Color::from_rgba(255, 150, 40, 220));
-            }
-            // Manual rotation command (keyboard/pad): ◀ ▶ right of the stick,
-            // lit RCS-blue while active.
-            let au = 8.0 * ui;
-            let rcs_blue = Color::from_rgba(100, 180, 255, 230);
-            let lx = scx + sr + 24.0 * ui;
-            draw_triangle(
-                vec2(lx - au, scy), vec2(lx + au * 0.7, scy - au), vec2(lx + au * 0.7, scy + au),
-                if inp.rot < 0 { rcs_blue } else { dim },
-            );
-            let rx = lx + 30.0 * ui;
-            draw_triangle(
-                vec2(rx + au, scy), vec2(rx - au * 0.7, scy - au), vec2(rx - au * 0.7, scy + au),
-                if inp.rot > 0 { rcs_blue } else { dim },
-            );
-
             if is_mouse_button_pressed(MouseButton::Left) {
                 replay_player = None;
                 mode = Mode::CrashDialog;
