@@ -265,6 +265,12 @@ impl Sim {
         self.sync_window(Self::window_key(kf.x, kf.y));
     }
 
+    // Teleport this sim back to a spawn. WARNING: do NOT use this to start a
+    // new RECORDED run — a reused sim's collider-handle space differs from
+    // the fresh sim a replay uses, and Rapier's contact solve is sensitive
+    // to handle numbering (see the fresh-sim regression test). The game
+    // creates a fresh Sim per run instead; this is for tests/tools.
+    #[allow(dead_code)]
     pub fn reset(&mut self, x: f32) {
         self.restore(&spawn_keyframe(x));
     }
@@ -597,6 +603,7 @@ impl Sim {
 // Not called by the game loop — it's the verification entry point for when
 // blobs leave the device (a server re-running a submitted run), and the
 // anchor of the determinism tests below.
+
 #[allow(dead_code)]
 // Re-run a hybrid Recording through a fresh Sim: restore its first keyframe,
 // feed the input events tick by tick, and emit keyframes on the same cadence
@@ -690,6 +697,62 @@ mod tests {
         assert_eq!(a.angvel.to_bits(), b.angvel.to_bits(), "angvel differs at tick {}", a.tick);
         assert_eq!(a.fuel.to_bits(), b.fuel.to_bits(), "fuel differs at tick {}", a.tick);
         assert_eq!(a.hull.to_bits(), b.hull.to_bits(), "hull differs at tick {}", a.tick);
+    }
+
+    // Regression test for the replay-drift bug (2026-07). Rapier's contact
+    // solve depends on collider HANDLE NUMBERING: a sim reused across runs
+    // (reset instead of recreated) carries the previous run's handle space,
+    // while resim always runs on a fresh sim — and under sustained pad
+    // contact the differing float summation order diverged (reproduced:
+    // max 1e-4 m creep, first at kf tick 840, amplified to metres by chaos
+    // at later collisions). The game therefore creates a FRESH Sim per run;
+    // this test mimics exactly that (prior run on a separate sim, recording
+    // on a fresh one, sustained pad contact) and must stay bit-exact.
+    #[test]
+    fn fresh_sim_per_run_with_pad_contact_resims_exactly() {
+        // Previous run happens on its own sim (dropped, like the fixed game).
+        let mut prior = Sim::new();
+        for _ in 0..1500 {
+            prior.tick(InputState::from_controls(1.0, 1, 0.0, 0.0, false));
+            if prior.crashed { break; }
+        }
+        drop(prior);
+        let mut sim = Sim::new();
+        // Recorded run: sit parked on pad 0 (multi-contact), hop, land, sit.
+        let script = |t: u32| match t {
+            0..=239 => InputState::default(),                                  // parked
+            240..=299 => InputState::from_controls(0.5, 0, 0.0, 0.0, false),   // hop
+            _ => InputState::default(),                                        // fall + land + sit
+        };
+        let mut rec = Recording::new(sim_params(), u32::MAX);
+        rec.push_keyframe(sim.keyframe(0, 0.0));
+        for t in 0..(8 * KEYFRAME_EVERY) {
+            let input = script(t);
+            let rep = sim.tick(input);
+            let due = rec.record_tick(input);
+            if let Some(imp) = rep.impact.filter(|i| i.destroyed) {
+                rec.finalize(Keyframe {
+                    tick: rec.ticks(), x: imp.x, y: imp.y, angle: imp.angle,
+                    vx: imp.vx, vy: imp.vy, angvel: imp.angvel,
+                    fuel: sim.fuel, hull: sim.hull, glow: input.throttle_f32(),
+                });
+                break;
+            }
+            if due {
+                rec.push_keyframe(sim.keyframe(rec.ticks(), input.throttle_f32()));
+            }
+        }
+        let live = rec.keyframes.clone();
+        let resimmed = resim(&rec);
+        let mut max_drift = 0.0f32;
+        let mut first: Option<u32> = None;
+        for (a, b) in live.iter().zip(&resimmed) {
+            let d = ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt();
+            if d > 1e-6 && first.is_none() { first = Some(a.tick); }
+            if d > max_drift { max_drift = d; }
+        }
+        assert!(max_drift < 1e-6,
+            "fresh-sim run vs resim diverges: max {max_drift} m, first at kf tick {first:?}");
     }
 
     #[test]
