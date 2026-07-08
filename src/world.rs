@@ -8,8 +8,10 @@ use macroquad::prelude::*;
 use rapier2d::prelude::*;
 
 pub const SEG_LEN: f32 = 3.0;
-// Where [R] / gamepad reset drops the ship. Obstacles keep clear of this point
-// (like the x = 0 spawn) so a reset never lands on a rock.
+// Historical reset point, now only a world-gen clearance anchor: obstacles
+// keep clear of it (like the x = 0 spawn). Respawn itself returns to SPAWN_X
+// so every run shares the ghost's start line — changing this value would
+// reshape obstacle placement across the whole cave.
 pub const RESET_X: f32 = 64.0;
 
 // Cave repeats exactly every PERIOD metres. All terms are integer harmonics
