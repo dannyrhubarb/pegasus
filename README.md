@@ -14,11 +14,27 @@ WebAssembly.
 | Click / Down arrow | Thrust in the direction the box is pointing |
 | Left / Right arrow | Rotate |
 | R | Reset |
-| Touch (mobile) | Floating stick: hold = main engine, direction = point the nose (auto-rotates the short way). Optional JET button in settings |
+| Touch (mobile) | Floating stick: hold = main engine, direction = point the nose (auto-rotates the short way) |
 
 How the controls feel is governed by a small set of constants — see
 [`docs/control-tuning.md`](docs/control-tuning.md) for the full knob
 reference and preset recipes.
+
+## Levels
+
+Levels are plain-text **data files** in [`levels/`](levels/), fetched at
+runtime and selectable from the ⓘ info overlay — adding a level means adding a
+`.level` file and listing it in `levels/manifest.json`, no wasm rebuild:
+
+- **The Expanse** — fly as far as you can in either direction; the high score
+  is the farthest |x| you reach. No vertical shafts, boulders on, refueling
+  pads every ~130 m.
+- **The Glide** — The Expanse without the boulders.
+- **The Caves** — the original shafted, pad-scoring world, kept as the
+  demo/experimentation level.
+
+See the "Levels" section in `CLAUDE.md` for the file format and how the level
+parameters ride in every replay recording.
 
 ## Development
 
