@@ -610,5 +610,20 @@ Each is built `ColliderBuilder::new(SharedShape::capsule(a, b, r)).restitution(0
   preview deployment at `pr-<n>/`.
 - Development branch: `claude/crash-replay-dialog-qmvtn8` (current); previous: `claude/replicate-pr-review-deployment-gjw4x0`
 - Merges to `main` via rebase PRs using the GitHub MCP tools (`mcp__github__create_pull_request`, `mcp__github__merge_pull_request`).
+- **Curate the branch before merging.** Rebase merges land every branch
+  commit on `main` verbatim, so branch noise becomes permanent history.
+  Before merging, squash the branch into a sensible set of logically
+  distinct commits: fold fixups/lint-fixes into the commit they fix, and
+  drop add+revert pairs and dead-end experiments entirely — a revert pair
+  is net-zero code but poisons `git bisect` (it can land between the two
+  and test a state that was never meant to ship) and buries the real
+  changes. Keep genuinely separate concerns as separate commits; curate,
+  don't flatten — one-commit squashes are for one-concern PRs (or just use
+  GitHub's squash merge for those). Interactive rebase isn't available
+  here; use `git reset --soft $(git merge-base HEAD origin/main)` and
+  re-commit in slices instead. Do it BEFORE requesting review or right
+  before merge — force-pushes orphan inline review comments. (Cautionary
+  example: PR #66 merged with the replay-input-widget commit AND its
+  revert, both now on `main`.)
 - Branch consistently diverges from main after merges — always `git fetch origin main && git rebase origin/main && git push --force-with-lease` before creating a PR to avoid merge conflicts.
 - The wasm binary (`pegasus.wasm`) is **not tracked** (gitignored) — deploy builds it from source, and for local play you build it into the repo root per the README. It previously lived in git and conflicted on every rebase; don't re-add it.
