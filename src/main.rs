@@ -222,6 +222,20 @@ pub extern "C" fn set_invert_stick(on: i32) {
     INVERT_STICK.store(on as u32, Ordering::Relaxed);
 }
 
+// The serialized recording blob of the last crashed run, exposed to JS so it
+// can be downloaded (offline analysis today; the sharing feature tomorrow).
+// Single-threaded (wasm), so the returned pointer stays valid until the next
+// crash overwrites it.
+static REPLAY_BLOB: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
+#[unsafe(no_mangle)]
+pub extern "C" fn replay_blob_len() -> i32 {
+    REPLAY_BLOB.lock().unwrap().len() as i32
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn replay_blob_ptr() -> *const u8 {
+    REPLAY_BLOB.lock().unwrap().as_ptr()
+}
+
 // --- Bluetooth / USB game controller bridge (Web Gamepad API, see index.html) ---
 #[unsafe(no_mangle)]
 pub extern "C" fn set_pad_thrust(active: i32) {
@@ -695,6 +709,7 @@ async fn main() {
                 });
                 let blob = recorder.serialize(BUILD_ID.load(Ordering::Relaxed));
                 blob_sizes = Some((blob.len(), compress(&blob).len()));
+                *REPLAY_BLOB.lock().unwrap() = blob; // for the download button
             } else {
                 // Survivable scrape: a spray of sparks + a quiet thud,
                 // scaled to the damage taken. The ship keeps flying.
@@ -1582,7 +1597,15 @@ async fn main() {
         // Respawn returns to the ORIGINAL spawn (not RESET_X): every run
         // starts from the same place, which is what lets the ghost race you.
         if is_key_pressed(KeyCode::R) || PAD_RESET.swap(0, Ordering::Relaxed) != 0 || do_reset {
-            sim.reset(SPAWN_X);
+            // FRESH Sim per run — never reuse the world across recorded runs.
+            // Rapier's contact solve depends on collider handle numbering: a
+            // reused sim's handle space carries the previous run's history,
+            // while a replay's sim is fresh, and under sustained multi-point
+            // contact (parked on a pad) the differing float summation order
+            // diverges → chaos amplifies → metres of replay drift (found
+            // 2026-07 from a real downloaded replay). A fresh sim makes live
+            // and resim identical operation sequences by construction.
+            sim = Sim::new();
             // Snap the interpolation too, or the camera lerps across the
             // teleport for a frame.
             prev_ship = (SPAWN_X, stand_y(SPAWN_X), 0.0);
@@ -1976,6 +1999,60 @@ mod tests {
         assert_eq!(p.tick, rec.ticks());
         assert!(p.drift < 1e-4, "keyframe drift {} m", p.drift);
         assert!(!p.snapped, "fallback snap engaged on the same binary");
+    }
+
+    // DIAGNOSTIC: faithfully mimic the LIVE loop — input computed once per
+    // frame, a variable number of physics ticks per frame via the accumulator
+    // (with the 0.05 s cap), each tick recorded — then play the recording back
+    // through ResimPlayer at a DIFFERENT variable frame clock. Reproduces the
+    // real replay conditions the simpler tests skip.
+    #[test]
+    fn frame_batched_recording_replays_without_snapping() {
+        // A wandering flight that keeps steering (lots of heading commands).
+        let script = |tick: u32| -> InputState {
+            let f = tick as f32 * 0.02;
+            let sx = (f.sin()) * 0.8;
+            let sy = -(f * 0.7).cos() * 0.6;
+            InputState::from_controls(0.7, 0, sx, sy, true)
+        };
+        let mut sim = Sim::new();
+        let mut rec = Recording::new(sim_params(), u32::MAX);
+        rec.push_keyframe(sim.keyframe(0, 0.0));
+        // Variable frame times cycling 40–90 fps, driving the accumulator.
+        let frame_dts = [0.011f32, 0.025, 0.016, 0.009, 0.05, 0.02, 0.014];
+        let mut accum = 0.0f32;
+        let mut done_ticks = 0u32;
+        'frames: for fi in 0..2000usize {
+            accum = (accum + frame_dts[fi % frame_dts.len()]).min(0.05);
+            // Input generated ONCE per frame, from the current tick count.
+            let input = script(done_ticks);
+            while accum >= PHYSICS_DT {
+                let rep = sim.tick(input);
+                accum -= PHYSICS_DT;
+                let due = rec.record_tick(input);
+                done_ticks += 1;
+                if rep.impact.filter(|i| i.destroyed).is_some() {
+                    rec.finalize(sim.keyframe(rec.ticks(), input.throttle_f32()));
+                    break 'frames;
+                }
+                if due {
+                    rec.push_keyframe(sim.keyframe(rec.ticks(), input.throttle_f32()));
+                }
+                if done_ticks >= 10 * KEYFRAME_EVERY { break 'frames; }
+            }
+        }
+        // Play back at a different variable frame clock.
+        let mut p = ResimPlayer::new(&rec).expect("player");
+        let play_dts = [0.016f32, 0.033, 0.008, 0.02, 0.045];
+        let mut pj = 0usize;
+        let mut guard = 0;
+        while !p.finished && guard < 100_000 {
+            p.advance(&rec, play_dts[pj % play_dts.len()]);
+            pj += 1; guard += 1;
+        }
+        assert!(p.finished, "player never finished (tick {} / {})", p.tick, rec.ticks());
+        assert!(p.drift < 1e-3, "keyframe drift {} m", p.drift);
+        assert!(!p.snapped, "SNAP engaged — recording diverges from replay");
     }
 
     #[test]
