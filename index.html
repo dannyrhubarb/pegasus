@@ -16,79 +16,10 @@
     body { overflow: hidden; background: #14141e; }
     canvas { display: block; width: 100vw; height: 100vh; }
 
-    /* Floating attitude stick: its DIRECTION is the commanded nose
-       direction (push up = nose up, push left = nose left, …); the main
-       engine is the separate JET button. Parked bottom-right as a
-       translucent ghost; touching the lower part of the screen re-spawns
-       it centred under the finger (input is captured at the document level
-       in JS — pointer-events stays none so the element itself never eats
-       events). */
-    #stick-base {
-      position: fixed;
-      bottom: calc(env(safe-area-inset-bottom) + 20px);
-      right: calc(env(safe-area-inset-right) + 24px);
-      width: 170px;
-      height: 170px;
-      border-radius: 50%;
-      background: rgba(255, 255, 255, 0.08);
-      border: 2px solid rgba(255, 255, 255, 0.35);
-      pointer-events: none;
-      user-select: none;
-      -webkit-user-select: none;
-      opacity: 0.45;
-      transition: opacity 0.15s;
-    }
-    /* Active = engine lit (holding the stick thrusts), so it glows amber */
-    #stick-base.active { opacity: 1; border-color: rgba(255, 200, 0, 0.7); }
-    #stick-base.active #stick-knob { background: rgba(255, 200, 0, 0.85); }
-    #stick-base .stick-hint {
-      position: absolute;
-      color: rgba(255, 255, 255, 0.35);
-      font: 600 14px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      pointer-events: none;
-    }
-    .stick-hint.up    { top: 8px;    left: 50%; transform: translateX(-50%); }
-    .stick-hint.left  { left: 10px;  top: 50%; transform: translateY(-50%); }
-    .stick-hint.right { right: 10px; top: 50%; transform: translateY(-50%); }
-    .stick-hint.down  { bottom: 8px; left: 50%; transform: translateX(-50%); }
-    #stick-knob {
-      position: absolute;
-      left: 50%;
-      top: 50%;
-      width: 64px;
-      height: 64px;
-      margin: -32px 0 0 -32px;
-      border-radius: 50%;
-      background: rgba(255, 255, 255, 0.45);
-      transition: transform 0.12s, background 0.1s;
-    }
-    #stick-base.active #stick-knob {
-      transition: background 0.1s;   /* knob tracks the finger with no lag */
-    }
-    /* Main-engine JET button — bottom-left, mirror of the stick's corner */
-    #thrust-btn {
-      position: fixed;
-      bottom: calc(env(safe-area-inset-bottom) + 40px);
-      left: calc(env(safe-area-inset-left) + 24px);
-      width: 120px;
-      height: 120px;
-      border-radius: 50%;
-      background: rgba(255, 255, 255, 0.10);
-      border: 2px solid rgba(255, 255, 255, 0.35);
-      color: rgba(255, 255, 255, 0.5);
-      font: 600 15px/116px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      text-align: center;
-      pointer-events: all;
-      touch-action: none;
-      user-select: none;
-      -webkit-user-select: none;
-      z-index: 5;
-    }
-    #thrust-btn.active {
-      background: rgba(255, 200, 0, 0.4);
-      border-color: rgba(255, 200, 0, 0.8);
-      color: rgba(255, 235, 180, 0.9);
-    }
+    /* The attitude stick is drawn IN-CANVAS by the game now (macroquad touch
+       API); no DOM element. touch-action:none on the canvas stops iOS
+       scroll/zoom gestures from hijacking flight touches. */
+    canvas { touch-action: none; }
 
     /* Info button — top-right corner, clear of the notch */
     #info-btn {
@@ -168,9 +99,8 @@
       color: #6c84ad;
       margin-top: 8px;
     }
-    /* Settings rows: velocity-vector arrow + JET button (both off by default) */
+    /* Settings rows: velocity-vector arrow + invert-stick toggle */
     #vel-toggle-row,
-    #jet-toggle-row,
     #inv-toggle-row {
       display: flex;
       align-items: center;
@@ -182,7 +112,6 @@
       -webkit-user-select: none;
     }
     #vel-toggle-row input,
-    #jet-toggle-row input,
     #inv-toggle-row input {
       width: 20px;
       height: 20px;
@@ -237,8 +166,9 @@
 <body>
   <canvas id="glcanvas" tabindex="1"></canvas>
 
-  <!-- Probe element to read the top/left safe-area insets in CSS pixels -->
+  <!-- Probe elements to read the safe-area insets in CSS pixels (all four sides) -->
   <div id="safe-area-probe" style="position:fixed;top:0;left:0;height:env(safe-area-inset-top);width:env(safe-area-inset-left);pointer-events:none;"></div>
+  <div id="safe-area-probe-br" style="position:fixed;bottom:0;right:0;height:env(safe-area-inset-bottom);width:env(safe-area-inset-right);pointer-events:none;"></div>
 
   <!-- Info button + fullscreen overlay -->
   <div id="info-btn" role="button" aria-label="Info" title="Info">i</div>
@@ -247,19 +177,15 @@
     <h1>Pegasus — Moon Lander</h1>
     <div class="info-row">
       <div class="info-label">Build revision</div>
-      <div class="info-value" id="git-rev">8c63ba6</div>
+      <div class="info-value" id="git-rev">b2eb929</div>
     </div>
     <div class="info-row">
       <div class="info-label">Build time</div>
-      <div class="info-value" id="build-time">2026-07-08 09:55 UTC</div>
+      <div class="info-value" id="build-time">2026-07-08 21:44 UTC</div>
     </div>
     <label id="vel-toggle-row">
       <input type="checkbox" id="vel-toggle">
       Velocity vector
-    </label>
-    <label id="jet-toggle-row">
-      <input type="checkbox" id="jet-toggle">
-      JET button
     </label>
     <label id="inv-toggle-row">
       <input type="checkbox" id="inv-toggle">
@@ -272,14 +198,9 @@
   <!-- Stale-cache reload toast (hidden until a newer version.json is seen) -->
   <div id="update-toast" role="button">⟳ New build available — tap to reload</div>
 
-  <div id="stick-base">
-    <span class="stick-hint up">&#9650;</span>
-    <span class="stick-hint left">&#9664;</span>
-    <span class="stick-hint right">&#9654;</span>
-    <span class="stick-hint down">&#9660;</span>
-    <div id="stick-knob"></div>
-  </div>
-  <div id="thrust-btn">JET</div>
+  <!-- DEBUG (replay-drift investigation): download the last run's recording -->
+  <div id="dl-replay" role="button" style="position:fixed;left:calc(env(safe-area-inset-left) + 12px);bottom:calc(env(safe-area-inset-bottom) + 12px);z-index:20;padding:8px 12px;border-radius:8px;background:rgba(40,50,70,0.85);color:#cdd;border:1px solid rgba(190,200,218,0.6);font:600 13px -apple-system,sans-serif;display:none;">⬇︎ replay</div>
+
 
   <script>
     // Boot guard — deliberately in its OWN <script> tag: script tags parse
@@ -359,151 +280,12 @@
       }
     }
 
-    // --- Floating attitude stick + JET button ---
-    // The stick's DIRECTION is the commanded nose direction (push up = nose
-    // up, push left = nose left, pull down = nose down — a PD controller in
-    // the game rotates the ship the short way around). Deflection magnitude
-    // scales the rotation authority: a small nudge trims, the rim flips
-    // hard. HOLDING the stick — even dead-centre — also fires the main
-    // engine (one-handed flight: touch = burn + point). The JET button
-    // (bottom-left) is an alternative thrust-only control; either source
-    // keeps the engine lit, tracked by the two flags below.
-    //
-    // FLOATING: any touch on the canvas in the lower STICK_ZONE of the
-    // screen spawns the stick centred under the finger; on release it parks
-    // back bottom-right as a translucent ghost. Handlers live on the
-    // DOCUMENT in the capture phase so the touch is swallowed before the
-    // canvas sees it (miniquad synthesizes mouse events from canvas touches,
-    // and mouse-down = thrust). Mouse events are left alone — desktop
-    // click-to-thrust still works everywhere. The JET button is its own
-    // element, so the document handler ignores its touches (target check).
-    // NOTE: mq_js_bundle.js declares a global `const canvas` — redeclaring
-    // any of its globals here is a SyntaxError that kills this whole script
-    // (no wasm load). Hence the distinct name.
-    const gameCanvas = document.getElementById("glcanvas");
-    const stickBase = document.getElementById("stick-base");
-    const stickKnob = document.getElementById("stick-knob");
-    const STICK_TRAVEL = 60;   // px from center = full deflection
-    const STICK_DZ = 0.15;     // radial dead-zone, rescaled so 1 is reachable
-    const STICK_ZONE = 0.55;   // touches below 55% of viewport height grab the stick
-    let stickId = null;        // active touch identifier (null = parked)
-    let stickCX = 0, stickCY = 0; // stick centre = where the touch landed
-    // "Invert stick" setting (checkbox wired further down): negates the
-    // commanded direction — push down = nose up, like pulling back on a
-    // flight stick. The knob visual still follows the finger.
-    let invertStick = localStorage.getItem("pegasus_invert_stick") === "1";
-
-    function stickApply(dx, dy) {
-      const len = Math.hypot(dx, dy);
-      if (len > STICK_TRAVEL) {          // clamp knob to the travel circle
-        dx *= STICK_TRAVEL / len;
-        dy *= STICK_TRAVEL / len;
-      }
-      stickKnob.style.transform = `translate(${dx}px, ${dy}px)`;
-      // Radial dead-zone on the magnitude, rescaled so the rim reaches 1;
-      // the steer vector keeps the raw direction (screen convention: y down).
-      const m = Math.min(len / STICK_TRAVEL, 1);
-      const eff = m < STICK_DZ ? 0 : (m - STICK_DZ) / (1 - STICK_DZ);
-      if (eff > 0 && len > 0) {
-        const flip = invertStick ? -1 : 1;
-        call("set_touch_steer", (dx / len) * eff * flip, (dy / len) * eff * flip);
-      } else {
-        call("set_touch_steer", 0, 0);
-      }
-    }
-
-    function stickRelease() {
-      stickId = null;
-      stickBase.classList.remove("active");
-      // Clear the inline spawn position → the CSS right/bottom parking
-      // spot takes over again (left/top win over right/bottom while set).
-      stickBase.style.left = "";
-      stickBase.style.top = "";
-      stickKnob.style.transform = "translate(0, 0)";
-      call("set_touch_steer", 0, 0);
-      call("set_touch_stick_held", 0);
-    }
-
-    document.addEventListener("touchstart", e => {
-      if (e.target !== gameCanvas) return; // buttons/overlays handle their own
-      let zoneTouch = false;
-      for (const t of Array.from(e.changedTouches)) {
-        if (t.clientY < window.innerHeight * STICK_ZONE) continue;
-        zoneTouch = true;
-        if (stickId === null) {
-          stickId = t.identifier;
-          stickCX = t.clientX;
-          stickCY = t.clientY;
-          const r = stickBase.offsetWidth / 2;
-          stickBase.style.left = (stickCX - r) + "px";
-          stickBase.style.top = (stickCY - r) + "px";
-          stickBase.classList.add("active");
-          stickApply(0, 0);
-          // Holding the stick lights the main engine, but through the
-          // game-side gating (flick grace + flip settle) — separate export.
-          call("set_touch_stick_held", 1);
-        }
-      }
-      // Swallow every canvas touch in the zone (extra fingers included) so
-      // miniquad can't turn any of them into a mouse-down (= full thrust).
-      if (zoneTouch) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
-    }, { capture: true, passive: false });
-
-    document.addEventListener("touchmove", e => {
-      if (stickId === null) return;
-      let ours = false;
-      for (const t of Array.from(e.changedTouches)) {
-        if (t.identifier === stickId) {
-          stickApply(t.clientX - stickCX, t.clientY - stickCY);
-          ours = true;
-        }
-      }
-      if (ours) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
-    }, { capture: true, passive: false });
-
-    function stickTouchEnd(e) {
-      if (stickId === null) return;
-      for (const t of Array.from(e.changedTouches)) {
-        if (t.identifier === stickId) {
-          e.preventDefault();
-          e.stopPropagation();
-          stickRelease();
-        }
-      }
-    }
-    document.addEventListener("touchend", stickTouchEnd, { capture: true, passive: false });
-    document.addEventListener("touchcancel", stickTouchEnd, { capture: true, passive: false });
-
-    // JET button: hold = main engine at full power. Its own element, so the
-    // stick's document-level handlers never see these touches. Mouse
-    // handlers included for desktop/touch-laptop parity.
-    const thrustBtn = document.getElementById("thrust-btn");
-    function thrustOn(e) {
-      e.preventDefault();
-      e.stopPropagation();
-      thrustBtn.classList.add("active");
-      call("set_touch_thrust", 1);
-    }
-    function thrustOff() {
-      thrustBtn.classList.remove("active");
-      call("set_touch_thrust", 0);
-    }
-    thrustBtn.addEventListener("touchstart", thrustOn, { passive: false });
-    thrustBtn.addEventListener("touchend", e => {
-      if (e.targetTouches.length === 0) thrustOff();
-    });
-    thrustBtn.addEventListener("touchcancel", e => {
-      if (e.targetTouches.length === 0) thrustOff();
-    });
-    thrustBtn.addEventListener("mousedown", thrustOn);
-    thrustBtn.addEventListener("mouseup", thrustOff);
-    thrustBtn.addEventListener("mouseleave", thrustOff);
+    // --- Attitude stick + main engine ---
+    // The floating attitude stick is drawn and read IN-CANVAS by the game
+    // (macroquad touch API, mouse-synthesis disabled). No DOM stick, no
+    // document touch handlers, no JET button — holding the stick lights the
+    // engine. The only touch setting still forwarded from here is Invert
+    // stick (set_invert_stick export, wired below).
 
     // --- Bluetooth / USB game controller (Web Gamepad API) ---
     // A controller paired with the device shows up in navigator.getGamepads().
@@ -572,14 +354,37 @@
     // (e.g. after a reload), so probe once the WASM exports are ready too.
     if (firstGamepad()) startPadPolling();
 
-    // Report the safe-area insets (notch / status bar) to the WASM HUD.
+    // Report the safe-area insets (all four sides) to the game, in CSS px.
+    // The canvas is 100vh, so it extends UNDER the floating browser toolbar;
+    // env(safe-area-inset-bottom) only covers the home indicator, so the
+    // bottom inset also folds in the toolbar height measured via
+    // visualViewport (window height minus the actually-visible height).
     const safeProbe = document.getElementById("safe-area-probe");
+    const safeProbeBR = document.getElementById("safe-area-probe-br");
     function reportSafeArea() {
-      const rect = safeProbe.getBoundingClientRect();
-      call("set_safe_area", rect.height, rect.width);
+      const tl = safeProbe.getBoundingClientRect();
+      const br = safeProbeBR.getBoundingClientRect();
+      const vv = window.visualViewport;
+      // The canvas is 100vh = the LARGE viewport (toolbar retracted); vh units
+      // don't shrink when the toolbar shows. visualViewport.height is the
+      // ACTUALLY visible height. Their difference is what the floating toolbar
+      // + home indicator hide at the bottom. (window.innerHeight is unreliable
+      // here — it often already equals visualViewport.height.)
+      let obscuredBottom = 0;
+      if (vv) {
+        const canvas = document.getElementById("glcanvas");
+        const ch = canvas ? canvas.getBoundingClientRect().height : window.innerHeight;
+        obscuredBottom = Math.max(0, Math.round(ch - vv.height - vv.offsetTop));
+      }
+      const bottom = Math.max(br.height, obscuredBottom);
+      call("set_safe_area", tl.height, tl.width, bottom, br.width);
     }
     window.addEventListener("resize", reportSafeArea);
     window.addEventListener("orientationchange", () => setTimeout(reportSafeArea, 300));
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", reportSafeArea);
+      window.visualViewport.addEventListener("scroll", reportSafeArea);
+    }
     // The WASM exports aren't ready immediately; poll briefly until it loads.
     const safeAreaTimer = setInterval(() => {
       if (typeof wasm_exports !== "undefined" && wasm_exports.set_safe_area) {
@@ -631,7 +436,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "8c63ba6";
+    const wasmRev = "b2eb929";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -713,34 +518,53 @@
       }
     }, 200);
 
-    // JET button visibility toggle: hidden by default (the stick-hold engine
-    // covers one-handed play); pure client-side — no wasm export involved,
-    // so the saved value applies immediately.
-    const jetToggle = document.getElementById("jet-toggle");
-    const jetRow = document.getElementById("jet-toggle-row");
-    jetToggle.checked = localStorage.getItem("pegasus_jet_btn") === "1";
-    function applyJetSetting() {
-      thrustBtn.style.display = jetToggle.checked ? "" : "none";
-    }
-    jetToggle.addEventListener("change", () => {
-      localStorage.setItem("pegasus_jet_btn", jetToggle.checked ? "1" : "0");
-      applyJetSetting();
-    });
-    ["mousedown", "click", "touchstart"].forEach(ev =>
-      jetRow.addEventListener(ev, e => e.stopPropagation()));
-    applyJetSetting();
-
-    // Invert-stick toggle: flips the commanded direction (both axes) in
-    // stickApply via the invertStick flag — pure client-side, no wasm export.
+    // Invert-stick toggle: negates the commanded nose direction in-game
+    // (push down = nose up). Forwarded to the WASM `set_invert_stick` export
+    // and persisted per device; re-applied once the exports load (same
+    // pattern as the velocity toggle).
     const invToggle = document.getElementById("inv-toggle");
     const invRow = document.getElementById("inv-toggle-row");
-    invToggle.checked = invertStick;
+    invToggle.checked = localStorage.getItem("pegasus_invert_stick") === "1";
+    function applyInvSetting() {
+      call("set_invert_stick", invToggle.checked ? 1 : 0);
+    }
     invToggle.addEventListener("change", () => {
-      invertStick = invToggle.checked;
-      localStorage.setItem("pegasus_invert_stick", invertStick ? "1" : "0");
+      localStorage.setItem("pegasus_invert_stick", invToggle.checked ? "1" : "0");
+      applyInvSetting();
     });
     ["mousedown", "click", "touchstart"].forEach(ev =>
       invRow.addEventListener(ev, e => e.stopPropagation()));
+    const invTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_invert_stick) {
+        applyInvSetting();
+        clearInterval(invTimer);
+      }
+    }, 200);
+
+    // DEBUG (replay-drift investigation): show the download button once a run
+    // has crashed (a recording blob is available), and download it on tap.
+    const dlReplay = document.getElementById("dl-replay");
+    function downloadReplay() {
+      if (typeof wasm_exports === "undefined" || !wasm_exports.replay_blob_len) return;
+      const len = wasm_exports.replay_blob_len();
+      if (!len) return;
+      const ptr = wasm_exports.replay_blob_ptr();
+      const bytes = new Uint8Array(wasm_memory.buffer, ptr, len).slice();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+      a.download = "pegasus-replay.bin";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+    ["click", "touchend"].forEach(ev => dlReplay.addEventListener(ev, e => {
+      e.preventDefault(); e.stopPropagation(); downloadReplay();
+    }, { passive: false }));
+    setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.replay_blob_len) {
+        dlReplay.style.display = wasm_exports.replay_blob_len() > 0 ? "" : "none";
+      }
+    }, 500);
 
     // Manual reload button in the info overlay (stopPropagation so the tap
     // doesn't just close the overlay).
