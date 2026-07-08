@@ -47,11 +47,12 @@ push-retry loop for concurrent deploys):
 ## Project structure
 - `src/main.rs` — input exports/atomics, window conf, the frame loop (input gathering + stick gating, camera, drawing, HUD, minimap, crash dialog/replay/ghost cosmetics), and unit tests
 - `src/sim.rs` — **the deterministic simulation core**: `Sim` owns all Rapier state, the sliding collider windows (BTreeMaps) and ship systems (fuel/hull/score/landing/crash), advanced ONLY by `tick(InputState) -> TickReport` at `PHYSICS_DT`; plus `resim(&Recording)` and all physics constants. Same inputs + same start keyframe → bit-identical trajectory (unit-tested). **Any new gameplay force/effect must go through `tick`** — frame-level physics mutation would break replay determinism.
-- `src/world.rs` — deterministic world generation: cave curves, shafts, obstacles, pads, `stand_y`, `Rng`/`hash_u32`, and their constants (`SEG_LEN`, `RESET_X`, `PERIOD`, `V_PERIOD`, …)
+- `src/world.rs` — deterministic world generation, parameterized by a **`Level`** (see "Levels"): cave curves, shafts, obstacles, pads and `stand_y` are all `Level` methods; plus `Rng`/`hash_u32` and the world constants (`SEG_LEN`, `RESET_X`, `PERIOD`, `V_PERIOD`, …)
 - `src/render.rs` — radial light shader sources, faceted wall/shaft lattice (`lattice_point`, `shaft_lattice`, `facet_shade`), `draw_flat_mesh`
 - `src/ship_mesh.rs` — `SHIP_TRIS` / `SHIP_DETAILS` data tables extracted from the Flash SWF
 - `src/audio.rs` — in-memory WAV synthesis (`wav_from_samples`, `thruster_wav`, `boom_wav`)
-- `index.html` — web wrapper, safe-area insets, settings checkboxes, **info overlay**, **gamepad polling**, and a **boot guard** (touch/stick input moved in-canvas — no touch handlers here any more): a small standalone `<script>` tag ahead of the bundle (script tags parse independently, so no error in the bundle/main script can kill it) that paints any script error on screen with file:line and offers a tap-to-reload if `wasm_exports` is missing 8 s after load. Keep it first and self-contained. It also wraps `console.error` (installed ahead of the bundle, so the wasm `console_error` import routes through it) and appends the last logged error to the banner when the error event is anonymous or attributed to the `.wasm` file — **a Rust panic reaches JS as an opaque trap** (`RuntimeError: unreachable`; iOS Safari mutes it further to a bare "Script error." with no filename, because wasm frames fail its same-origin check), and the only useful description is the panic-hook line logged just before the trap (`src/main.rs` installs `std::panic::set_hook` → `error!("{}", info)`; the *default* hook prints the useless Debug form `PanicHookInfo { payload: Any { .. }, … }`). Unhandled promise rejections get the same banner (skipped when `reason` is null). **Fully-anonymous errors (no filename AND no console.error trace) are deliberately ignored**: same-origin scripts always carry file:line and a wasm panic always logs via the hook first, so the only things that land there are Safari-injected third-party scripts — reproduced live on iOS: opening the **share sheet** runs share/action extensions' preprocessing JS in the page, and an error in any of them arrives as a muted "Script error." (this was the mystery banner of 2026-07-06, seen right after the Pegasus rename and initially blamed on it).
+- `levels/` — **runtime level data**: `*.level` files (`key = value`) + `manifest.json` (menu order), fetched by `index.html` and pushed into the wasm — new levels deploy with no recompile (see "Levels")
+- `index.html` — web wrapper, safe-area insets, settings checkboxes, **level picker**, **info overlay**, **gamepad polling**, and a **boot guard** (touch/stick input moved in-canvas — no touch handlers here any more): a small standalone `<script>` tag ahead of the bundle (script tags parse independently, so no error in the bundle/main script can kill it) that paints any script error on screen with file:line and offers a tap-to-reload if `wasm_exports` is missing 8 s after load. Keep it first and self-contained. It also wraps `console.error` (installed ahead of the bundle, so the wasm `console_error` import routes through it) and appends the last logged error to the banner when the error event is anonymous or attributed to the `.wasm` file — **a Rust panic reaches JS as an opaque trap** (`RuntimeError: unreachable`; iOS Safari mutes it further to a bare "Script error." with no filename, because wasm frames fail its same-origin check), and the only useful description is the panic-hook line logged just before the trap (`src/main.rs` installs `std::panic::set_hook` → `error!("{}", info)`; the *default* hook prints the useless Debug form `PanicHookInfo { payload: Any { .. }, … }`). Unhandled promise rejections get the same banner (skipped when `reason` is null). **Fully-anonymous errors (no filename AND no console.error trace) are deliberately ignored**: same-origin scripts always carry file:line and a wasm panic always logs via the hook first, so the only things that land there are Safari-injected third-party scripts — reproduced live on iOS: opening the **share sheet** runs share/action extensions' preprocessing JS in the page, and an error in any of them arrives as a muted "Script error." (this was the mystery banner of 2026-07-06, seen right after the Pegasus rename and initially blamed on it).
 - `mq_js_bundle.js` — **vendored** miniquad/quad-snd JS loader (from not-fl3/miniquad-samples). Pinned in-repo so deploys don't depend on a third-party host; includes the audio backend. Update it deliberately if macroquad is upgraded. **Gotcha**: it declares globals at top level (`const canvas`, `var gl`, `wasm_exports`, `function load`, …) that share the page's global scope — redeclaring any of them in `index.html`'s inline script is a SyntaxError that silently kills the *whole* inline script (no `load()` → no wasm, page shows only the HTML chrome). Pick distinct names and check the bundle before adding top-level identifiers.
 
 ## Input sources
@@ -181,6 +182,53 @@ error reporting.
 | `SHAFT_OPEN_SEGS` | 3 | Shaft opening width: 3 segments = 9 m |
 | `SHIP_SCALE` | 1.5 | Render scale multiplier applied inside the `rot` closure — makes the ship visually 1.5× larger than the raw SWF coordinates without touching `SHIP_TRIS`/`SHIP_DETAILS` |
 
+## Levels (data-driven worlds)
+
+A **`Level`** (src/world.rs) is a parameter block for the whole procedural
+generator — all world generation is `Level` methods, so a level IS the world:
+
+| Key | Values | Effect |
+|-----|--------|--------|
+| `name` | text | Cosmetic (picker label, not in replay headers) |
+| `scoring` | `pads` / `distance` | Pads: +100 per first landing. Distance: score = max \|x\| reached (`Sim::max_dist`; HUD shows `dist=`/`best=`) |
+| `shafts` | on/off | Off: `seg_in_opening` is always false (sealed cave), no shaft colliders load, minimap skips the carve |
+| `obstacles` | on/off | Off: `obstacle_spec` returns None everywhere (pads then skip the boulder-overlap check) |
+| `pad_spacing` | 40–2000 (clamped) | Metres between pad slots (`PAD_SPACING = 130` is the default) |
+| `seed` | u32 | **0 = the legacy world bit-for-bit** (zero harmonic phases, untouched slot hashes — pinned by the pre-Level unit tests still passing unchanged). Any other seed re-phases the cave harmonics and re-keys every slot hash. The half-width harmonics guarantee ≥ 2.5 m clearance for ANY phases (unit-tested), so no seed can pinch the cave shut |
+
+`Level::parse` reads `key = value` lines (# comments; unknown keys ignored
+for forward compatibility; missing keys keep `Level::demo()` defaults — the
+legacy world). Shipped levels (pinned by `include_str!` tests): **The
+Expanse** (distance, no shafts, boulders) and **The Glide** (distance, no
+shafts, no boulders) — the two "fly far" levels — plus **The Caves** (the
+original, kept as demo/experimentation level).
+
+**Decoupled from the wasm**: `index.html` fetches `levels/manifest.json` +
+each `.level` file (cache-bypassed), fills the `#level-select` in the info
+overlay (labels = the files' `name =` line), and pushes the selected level's
+raw text into the game: `level_buf_ptr(len)` returns a wasm-side buffer, JS
+writes the UTF-8 bytes via `wasm_memory.buffer`, `load_level(len)` parses it
+into `PENDING_LEVEL`. The main loop applies a pending level at the next frame
+boundary as a **full fresh start** (new `Sim`, new recorder, ghost dropped —
+it was flown on a different world; a re-push of the identical level is a
+no-op). Adding a level = add the file + list it in the manifest; the deploy
+copies `levels/` verbatim (`build-site`). Selection persists in
+`localStorage` (`pegasus_level`); manifest fetch failure hides the row and
+the game stays on the compiled-in `Level::demo()`.
+
+**Distance high score**: `Sim.max_dist` (farthest \|x\| this run, reset by
+restore) raises the `BEST_DIST` atomic live; JS polls `get_best_dist()`
+every 2 s into `localStorage` (`pegasus_best_<file>`, per level file) and
+pushes the stored value back via `set_best_dist()` after every level load
+(`load_level` zeroes it so bests never leak across levels).
+
+**Replays**: physics depends on the level, so the recording header carries
+`LevelParams` (scoring/shafts/obstacles/pad_spacing/seed — NOT the cosmetic
+name; `REPLAY_FORMAT_VERSION` bumped to 2) and `resim`/`ResimPlayer` rebuild
+the level from the header (`Level::from_params`) — a replay re-runs in the
+world it was flown in, unit-tested bit-exact on a non-demo level too
+(`resim_reproduces_on_a_custom_level_bit_exactly`).
+
 ## Rendering architecture
 - **High-DPI**: `high_dpi: true` in `window_conf`. The code treats
   `screen_width()/screen_height()` as **physical pixels** and consistently
@@ -276,7 +324,7 @@ with trivial sequential indices `(0..len)`.
   identically → **no seams/cracks**. The visible column range is
   `col_lo = want_left*SUBCOLS`, `col_hi = (want_right+1)*SUBCOLS`.
 - `ROW_DEPTHS = [0.0, 1.0, 3.0, 6.5]` m into the rock; `N_ROWS = 4`.
-- `lattice_point(col, row, side)` → world `Vec2` (layer-0 space; the draw loop
+- `lattice_point(&level, col, row, side)` → world `Vec2` (layer-0 space; the draw loop
   adds `layer * V_PERIOD` to y). **Row 0 is exactly on the wall edge with ZERO
   jitter** (collider-aligned — the hard rule below); deeper rows recede into the
   rock (ceiling = +y, floor = −y) with small deterministic jitter (`hash_u32` of
@@ -313,7 +361,7 @@ crossing every layer, so climbing (or falling) one always brings you back to
 just grows; nothing teleports. HUD shows the current layer as `lvl=N`
 (`ship_layer = round(cam_y / V_PERIOD)`).
 
-### Placement (all pure functions, `src/world.rs`)
+### Placement (all pure `Level` methods, `src/world.rs`)
 - `shaft_open_seg(s)` — opening start segment for slot `s`: every
   `SHAFT_SPACING_SEGS = 50` segments, anchored at `SHAFT_BASE_SEG = 35`, ±6 segs
   jitter hashed on `s mod 4` so the pattern repeats **exactly** each `PERIOD`
@@ -556,7 +604,9 @@ for now:
 - **Header**: `SimParams` — every physics constant, built by `sim_params()`
   from the (now module-level) consts `GRAVITY_Y`, `THRUST_FORCE`,
   `LINEAR_DAMPING`, `ANGULAR_DAMPING`, `RCS_FORCE`, PD gains, fuel/crash/hull
-  numbers — and a **build id**: index.html parses the first 8 hex chars of
+  numbers — plus `LevelParams` (the world half: scoring/shafts/obstacles/
+  pad_spacing/seed, format v2) so resim rebuilds the exact world — and a
+  **build id**: index.html parses the first 8 hex chars of
   the deploy revision to a u32 and pushes it via the `set_build_id` export
   (0 = local dev). Bump `REPLAY_FORMAT_VERSION` when the layout changes.
 - Trimming keeps the retained window **starting at a keyframe** with the
@@ -585,7 +635,7 @@ Live play and resim must perform IDENTICAL operation sequences:
   differing float summation order creeps ~1e-4 m, and chaos amplifies it to
   metres at later collisions (found 2026-07 from a real replay: 13.4 m
   drift, same binary, same page load). The reset block does `sim =
-  Sim::new()`; `Sim::reset()` survives for tests only. Regression test:
+  Sim::new(sim.level.clone())`; `Sim::reset()` survives for tests only. Regression test:
   `fresh_sim_per_run_with_pad_contact_resims_exactly` (its inverse — reset
   instead of recreate — reproducibly diverged).
 - All forces/fuel/damage/landing run per tick inside `Sim::tick` from the
