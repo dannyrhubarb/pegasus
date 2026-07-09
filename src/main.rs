@@ -437,6 +437,17 @@ pub extern "C" fn set_sound_enabled(on: i32) {
     SOUND_ON.store(on as u32, Ordering::Relaxed);
 }
 
+// "Debug HUD" (settings toggle, OFF by default): the developer telemetry
+// TEXT line only — x / layer / cave-position / FPS / speed. The minimap and
+// the fuel & hull gauges are always on; the default HUD is those plus the big
+// distance (or score) readout.
+static DEBUG_HUD: AtomicU32 = AtomicU32::new(0);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_debug_hud(on: i32) {
+    DEBUG_HUD.store(on as u32, Ordering::Relaxed);
+}
+
 // Deploy git revision (first 8 hex chars parsed to a u32 by index.html),
 // stamped into serialized replay blobs so a future re-sim/verifier knows
 // which build flew the run. 0 = local dev build.
@@ -1629,8 +1640,7 @@ async fn main() {
 
         smooth_fps += (get_fps() as f32 - smooth_fps) * 0.05;
         let cave_x = cam_x.rem_euclid(PERIOD);
-        let hud_fs = 36.0 * ui;
-        let hud_y = safe_top + 252.0 * ui; // below the fuel + hull gauges
+        let debug_hud = DEBUG_HUD.load(Ordering::Relaxed) != 0;
         // Distance levels: the score IS the farthest |x| reached; raise the
         // per-level best live (JS mirrors it into localStorage).
         if sim.level.scoring == Scoring::Distance
@@ -1638,19 +1648,29 @@ async fn main() {
         {
             BEST_DIST.store(sim.max_dist.to_bits(), Ordering::Relaxed);
         }
-        let hud = match world_sim.level.scoring {
-            Scoring::Distance => format!(
-                "dist={:.0}m  best={:.0}m  x={:.0}  lvl={}   [R] reset   FPS: {:.0}",
-                world_sim.max_dist, get_best_dist(), cam_x, ship_layer, smooth_fps),
-            Scoring::Pads => format!(
-                "score={}  x={:.0}  lvl={}  {:.0}m/{}m   [R] reset   FPS: {:.0}",
-                world_sim.score, cam_x, ship_layer, cave_x, PERIOD as i32, smooth_fps),
-        };
-        draw_text(&hud, safe_left + 10.0 * ui, hud_y, hud_fs, WHITE);
-        // Speed readout in the same danger color as the velocity arrow.
-        let hud_w = measure_text(&hud, None, hud_fs as u16, 1.0).width;
-        draw_text(format!("  v={speed:.1}"),
-            safe_left + 10.0 * ui + hud_w, hud_y, hud_fs, speed_col);
+
+        // The prominent distance / score readout is drawn LATER — below the
+        // minimap + fuel + hull gauges (see the gauge block) — so it needs
+        // their laid-out y; it can't go here (before the minimap section).
+
+        // Full telemetry line — Debug HUD only. Position/layer/cave-progress,
+        // FPS, and the numeric speed readout (in the shared danger colour).
+        if debug_hud {
+            let hud_fs = 30.0 * ui;
+            let hud_y = safe_top + 252.0 * ui; // below the fuel + hull gauges
+            let hud = match world_sim.level.scoring {
+                Scoring::Distance => format!(
+                    "dist={:.0}m  best={:.0}m  x={:.0}  lvl={}   [R] reset   FPS: {:.0}",
+                    world_sim.max_dist, get_best_dist(), cam_x, ship_layer, smooth_fps),
+                Scoring::Pads => format!(
+                    "score={}  x={:.0}  lvl={}  {:.0}m/{}m   [R] reset   FPS: {:.0}",
+                    world_sim.score, cam_x, ship_layer, cave_x, PERIOD as i32, smooth_fps),
+            };
+            draw_text(&hud, safe_left + 10.0 * ui, hud_y, hud_fs, WHITE);
+            let hud_w = measure_text(&hud, None, hud_fs as u16, 1.0).width;
+            draw_text(format!("  v={speed:.1}"),
+                safe_left + 10.0 * ui + hud_w, hud_y, hud_fs, speed_col);
+        }
 
         // In-canvas floating attitude stick (mobile). Spawned under the
         // finger while held (amber = engine lit); parked bottom-right as a
@@ -1900,7 +1920,7 @@ async fn main() {
             recorder.push_keyframe(sim.keyframe(0, 0.0));
         }
 
-        // --- Minimap (ship always centred; pans in BOTH axes) ---
+        // --- Minimap + gauges (top-left) ---
         // Re-bound after the dialog/reset mutations above; during playback
         // this is the scratch sim (map follows the re-simmed run).
         let world_sim = replay_player.as_ref().map_or(&sim, |p| &p.sim);
@@ -1910,176 +1930,280 @@ async fn main() {
         let mm_oy = safe_top + 10.0f32 * ui;
         let mm_dark = Color::from_rgba(8, 8, 18, 220);
 
-        // World → minimap, both axes relative to the ship.
-        let to_mm_x = |wx: f32| -> f32 {
-            mm_ox + (wx - cam_x + MM_HALF_X) / (2.0 * MM_HALF_X) * mm_w
-        };
-        let to_mm_y = |wy: f32| -> f32 {
-            mm_oy + mm_h - (wy - cam_y + MM_HALF_Y) / (2.0 * MM_HALF_Y) * mm_h
-        };
-
-        // Fill with rock, then carve the cave interior of every layer in view,
-        // sampled in columns around the ship.
-        draw_rectangle(mm_ox, mm_oy, mm_w, mm_h, rock_mid);
-        let col_w = mm_w / MM_SAMPLES as f32 + 0.5;
-        for i in 0..MM_SAMPLES {
-            let x     = cam_x - MM_HALF_X + (i as f32 + 0.5) * (2.0 * MM_HALF_X) / MM_SAMPLES as f32;
-            let col_x = mm_ox + i as f32 / MM_SAMPLES as f32 * mm_w;
-            let c  = world_sim.level.cave_center(x);
-            let hw = world_sim.level.cave_half_width(x);
-            for layer in (ship_layer - 1)..=(ship_layer + 1) {
-                let ly = layer as f32 * V_PERIOD;
-                let top_s = to_mm_y(ly + c + hw).clamp(mm_oy, mm_oy + mm_h);
-                let bot_s = to_mm_y(ly + c - hw).clamp(mm_oy, mm_oy + mm_h);
-                if bot_s > top_s {
-                    draw_rectangle(col_x, top_s, col_w, bot_s - top_s, mm_dark);
-                }
-            }
-        }
-
-        // Carve the vertical shafts with their true wall shape — evaluated from
-        // the same pure functions as the world geometry, so the minimap is a
-        // genuinely zoomed-out view (wiggles, junction heights and all).
-        const MM_SHAFT_STEPS: usize = 16;
-        let slot_w = SHAFT_SPACING_SEGS as f32 * SEG_LEN;
-        let s_mm_lo = ((cam_x - MM_HALF_X) / slot_w).floor() as i64 - 1;
-        let s_mm_hi = ((cam_x + MM_HALF_X) / slot_w).ceil()  as i64 + 1;
-        let gap_lo = ((cam_y - MM_HALF_Y - 10.0) / V_PERIOD).floor() as i64;
-        let gap_hi = ((cam_y + MM_HALF_Y + 10.0) / V_PERIOD).floor() as i64;
-        for s in s_mm_lo..=s_mm_hi {
-            if !world_sim.level.shafts {
-                break;
-            }
-            let lv = &world_sim.level;
-            let o = lv.shaft_open_seg(s);
-            let (xl, xr) = (o as f32 * SEG_LEN, (o + SHAFT_OPEN_SEGS) as f32 * SEG_LEN);
-            if xr < cam_x - MM_HALF_X - 2.0 || xl > cam_x + MM_HALF_X + 2.0 {
-                continue;
-            }
-            // Per-side junction offsets within a layer (same as shaft_wall_pts).
-            let (jbl, jtl) = (lv.cave_center(xl) + lv.cave_half_width(xl), lv.cave_center(xl) - lv.cave_half_width(xl));
-            let (jbr, jtr) = (lv.cave_center(xr) + lv.cave_half_width(xr), lv.cave_center(xr) - lv.cave_half_width(xr));
-            for gap in gap_lo..=gap_hi {
-                let (gy0, gy1) = (gap as f32 * V_PERIOD, (gap + 1) as f32 * V_PERIOD);
-                let mm_pt = |side: u8, t: f32| -> Vec2 {
-                    let (y0, y1) = if side == 0 { (gy0 + jbl, gy1 + jtl) } else { (gy0 + jbr, gy1 + jtr) };
-                    vec2(
-                        to_mm_x(world_sim.level.shaft_wall_x(s, side, t)).clamp(mm_ox, mm_ox + mm_w),
-                        to_mm_y(y0 + (y1 - y0) * t).clamp(mm_oy, mm_oy + mm_h),
-                    )
-                };
-                for k in 0..MM_SHAFT_STEPS {
-                    let t0 = k as f32 / MM_SHAFT_STEPS as f32;
-                    let t1 = (k + 1) as f32 / MM_SHAFT_STEPS as f32;
-                    let a = mm_pt(0, t0);
-                    let b = mm_pt(1, t0);
-                    let c = mm_pt(1, t1);
-                    let d = mm_pt(0, t1);
-                    // Cells fully clamped to the top/bottom edge are degenerate
-                    // (zero height) and draw nothing — no need to cull.
-                    draw_triangle(a, b, c, mm_dark);
-                    draw_triangle(a, c, d, mm_dark);
-                }
-            }
-        }
-
-        // Pad markers on the minimap: bright line at deck height, green until
-        // visited, blue-grey after.
-        for (&pad_key, pad) in world_sim.pads.iter() {
-            if (pad.cx - cam_x).abs() > MM_HALF_X + 5.0 || (pad.y - cam_y).abs() > MM_HALF_Y + 5.0 {
-                continue;
-            }
-            let y = to_mm_y(pad.y).clamp(mm_oy, mm_oy + mm_h);
-            let x0 = to_mm_x(pad.cx - PAD_HALF_W).clamp(mm_ox, mm_ox + mm_w);
-            let x1 = to_mm_x(pad.cx + PAD_HALF_W).clamp(mm_ox, mm_ox + mm_w);
-            let c = if world_sim.visited_pads.contains(&pad_key) {
-                Color::from_rgba(110, 140, 200, 220)
-            } else {
-                Color::from_rgba(90, 240, 130, 255)
-            };
-            draw_line(x0, y, x1, y, 2.0 * dpi, c);
-        }
-
-        // Obstacle shapes on the minimap — actual polygon, not just a dot.
-        // All loaded layers; the y window filters to what's actually in view.
-        for ob in world_sim.obstacles.values() {
-            if (ob.cx - cam_x).abs() > MM_HALF_X + 6.0 || (ob.cy - cam_y).abs() > MM_HALF_Y + 6.0 {
-                continue;
-            }
-            let (c, s) = (ob.rot.cos(), ob.rot.sin());
-            let mm_poly: Vec<Vec2> = ob.verts.iter().map(|p| {
-                let wx = ob.cx + p.x * c - p.y * s;
-                let wy = ob.cy + p.x * s + p.y * c;
-                vec2(
-                    to_mm_x(wx).clamp(mm_ox, mm_ox + mm_w),
-                    to_mm_y(wy).clamp(mm_oy, mm_oy + mm_h),
-                )
-            }).collect();
-            let mc = vec2(to_mm_x(ob.cx), to_mm_y(ob.cy).clamp(mm_oy, mm_oy + mm_h));
-            let n = mm_poly.len();
-            for i in 0..n {
-                draw_triangle(mc, mm_poly[i], mm_poly[(i + 1) % n], obs_fill);
-            }
-            for i in 0..n {
-                draw_line(mm_poly[i].x, mm_poly[i].y,
-                          mm_poly[(i + 1) % n].x, mm_poly[(i + 1) % n].y,
-                          1.0, obs_edge);
-            }
-        }
-
-        // Viewport rectangle — ship-centred in both axes, like the map itself
-        let vp_hw   = sw / (2.0 * view_scale);
-        let vp_hh   = sh / (2.0 * view_scale);
-        let vp_mm_hw = vp_hw / MM_HALF_X * (mm_w / 2.0);
-        let vp_mm_hh = vp_hh / MM_HALF_Y * (mm_h / 2.0);
-        let (mm_cx, mm_cy) = (mm_ox + mm_w / 2.0, mm_oy + mm_h / 2.0);
-        draw_rectangle_lines(mm_cx - vp_mm_hw, mm_cy - vp_mm_hh,
-            2.0 * vp_mm_hw, 2.0 * vp_mm_hh, 1.0,
-            Color::from_rgba(255, 255, 255, 180));
-
-        // Ship dot — map centre
-        draw_circle(mm_cx, mm_cy, 3.0 * ui, YELLOW);
-
-        // Ghost dot — the last run's position, when it's inside the window.
-        if let Some((gx, gy, _)) = ghost_pose
-            && (gx - cam_x).abs() < MM_HALF_X
-            && (gy - cam_y).abs() < MM_HALF_Y
+        // Minimap — always on (ship centred; pans in BOTH axes). A scoped
+        // block so its helper locals (to_mm_x/y, MM_SHAFT_STEPS, …) don't leak
+        // into the rest of the frame. The fuel & hull gauges are drawn just
+        // below it; only the telemetry TEXT line is gated on the Debug HUD.
         {
-            draw_circle(to_mm_x(gx), to_mm_y(gy), 2.5 * ui,
-                Color::from_rgba(150, 190, 255, 180));
+            // World → minimap, both axes relative to the ship.
+            let to_mm_x = |wx: f32| -> f32 {
+                mm_ox + (wx - cam_x + MM_HALF_X) / (2.0 * MM_HALF_X) * mm_w
+            };
+            let to_mm_y = |wy: f32| -> f32 {
+                mm_oy + mm_h - (wy - cam_y + MM_HALF_Y) / (2.0 * MM_HALF_Y) * mm_h
+            };
+
+            // Fill with rock, then carve the cave interior of every layer in view,
+            // sampled in columns around the ship.
+            draw_rectangle(mm_ox, mm_oy, mm_w, mm_h, rock_mid);
+            let col_w = mm_w / MM_SAMPLES as f32 + 0.5;
+            for i in 0..MM_SAMPLES {
+                let x     = cam_x - MM_HALF_X + (i as f32 + 0.5) * (2.0 * MM_HALF_X) / MM_SAMPLES as f32;
+                let col_x = mm_ox + i as f32 / MM_SAMPLES as f32 * mm_w;
+                let c  = world_sim.level.cave_center(x);
+                let hw = world_sim.level.cave_half_width(x);
+                for layer in (ship_layer - 1)..=(ship_layer + 1) {
+                    let ly = layer as f32 * V_PERIOD;
+                    let top_s = to_mm_y(ly + c + hw).clamp(mm_oy, mm_oy + mm_h);
+                    let bot_s = to_mm_y(ly + c - hw).clamp(mm_oy, mm_oy + mm_h);
+                    if bot_s > top_s {
+                        draw_rectangle(col_x, top_s, col_w, bot_s - top_s, mm_dark);
+                    }
+                }
+            }
+
+            // Carve the vertical shafts with their true wall shape — evaluated from
+            // the same pure functions as the world geometry, so the minimap is a
+            // genuinely zoomed-out view (wiggles, junction heights and all).
+            const MM_SHAFT_STEPS: usize = 16;
+            let slot_w = SHAFT_SPACING_SEGS as f32 * SEG_LEN;
+            let s_mm_lo = ((cam_x - MM_HALF_X) / slot_w).floor() as i64 - 1;
+            let s_mm_hi = ((cam_x + MM_HALF_X) / slot_w).ceil()  as i64 + 1;
+            let gap_lo = ((cam_y - MM_HALF_Y - 10.0) / V_PERIOD).floor() as i64;
+            let gap_hi = ((cam_y + MM_HALF_Y + 10.0) / V_PERIOD).floor() as i64;
+            for s in s_mm_lo..=s_mm_hi {
+                if !world_sim.level.shafts {
+                    break;
+                }
+                let lv = &world_sim.level;
+                let o = lv.shaft_open_seg(s);
+                let (xl, xr) = (o as f32 * SEG_LEN, (o + SHAFT_OPEN_SEGS) as f32 * SEG_LEN);
+                if xr < cam_x - MM_HALF_X - 2.0 || xl > cam_x + MM_HALF_X + 2.0 {
+                    continue;
+                }
+                // Per-side junction offsets within a layer (same as shaft_wall_pts).
+                let (jbl, jtl) = (lv.cave_center(xl) + lv.cave_half_width(xl), lv.cave_center(xl) - lv.cave_half_width(xl));
+                let (jbr, jtr) = (lv.cave_center(xr) + lv.cave_half_width(xr), lv.cave_center(xr) - lv.cave_half_width(xr));
+                for gap in gap_lo..=gap_hi {
+                    let (gy0, gy1) = (gap as f32 * V_PERIOD, (gap + 1) as f32 * V_PERIOD);
+                    let mm_pt = |side: u8, t: f32| -> Vec2 {
+                        let (y0, y1) = if side == 0 { (gy0 + jbl, gy1 + jtl) } else { (gy0 + jbr, gy1 + jtr) };
+                        vec2(
+                            to_mm_x(world_sim.level.shaft_wall_x(s, side, t)).clamp(mm_ox, mm_ox + mm_w),
+                            to_mm_y(y0 + (y1 - y0) * t).clamp(mm_oy, mm_oy + mm_h),
+                        )
+                    };
+                    for k in 0..MM_SHAFT_STEPS {
+                        let t0 = k as f32 / MM_SHAFT_STEPS as f32;
+                        let t1 = (k + 1) as f32 / MM_SHAFT_STEPS as f32;
+                        let a = mm_pt(0, t0);
+                        let b = mm_pt(1, t0);
+                        let c = mm_pt(1, t1);
+                        let d = mm_pt(0, t1);
+                        // Cells fully clamped to the top/bottom edge are degenerate
+                        // (zero height) and draw nothing — no need to cull.
+                        draw_triangle(a, b, c, mm_dark);
+                        draw_triangle(a, c, d, mm_dark);
+                    }
+                }
+            }
+
+            // Pad markers on the minimap: bright line at deck height, green until
+            // visited, blue-grey after.
+            for (&pad_key, pad) in world_sim.pads.iter() {
+                if (pad.cx - cam_x).abs() > MM_HALF_X + 5.0 || (pad.y - cam_y).abs() > MM_HALF_Y + 5.0 {
+                    continue;
+                }
+                let y = to_mm_y(pad.y).clamp(mm_oy, mm_oy + mm_h);
+                let x0 = to_mm_x(pad.cx - PAD_HALF_W).clamp(mm_ox, mm_ox + mm_w);
+                let x1 = to_mm_x(pad.cx + PAD_HALF_W).clamp(mm_ox, mm_ox + mm_w);
+                let c = if world_sim.visited_pads.contains(&pad_key) {
+                    Color::from_rgba(110, 140, 200, 220)
+                } else {
+                    Color::from_rgba(90, 240, 130, 255)
+                };
+                draw_line(x0, y, x1, y, 2.0 * dpi, c);
+            }
+
+            // Obstacle shapes on the minimap — actual polygon, not just a dot.
+            // All loaded layers; the y window filters to what's actually in view.
+            for ob in world_sim.obstacles.values() {
+                if (ob.cx - cam_x).abs() > MM_HALF_X + 6.0 || (ob.cy - cam_y).abs() > MM_HALF_Y + 6.0 {
+                    continue;
+                }
+                let (c, s) = (ob.rot.cos(), ob.rot.sin());
+                let mm_poly: Vec<Vec2> = ob.verts.iter().map(|p| {
+                    let wx = ob.cx + p.x * c - p.y * s;
+                    let wy = ob.cy + p.x * s + p.y * c;
+                    vec2(
+                        to_mm_x(wx).clamp(mm_ox, mm_ox + mm_w),
+                        to_mm_y(wy).clamp(mm_oy, mm_oy + mm_h),
+                    )
+                }).collect();
+                let mc = vec2(to_mm_x(ob.cx), to_mm_y(ob.cy).clamp(mm_oy, mm_oy + mm_h));
+                let n = mm_poly.len();
+                for i in 0..n {
+                    draw_triangle(mc, mm_poly[i], mm_poly[(i + 1) % n], obs_fill);
+                }
+                for i in 0..n {
+                    draw_line(mm_poly[i].x, mm_poly[i].y,
+                              mm_poly[(i + 1) % n].x, mm_poly[(i + 1) % n].y,
+                              1.0, obs_edge);
+                }
+            }
+
+            // Viewport rectangle — ship-centred in both axes, like the map itself
+            let vp_hw   = sw / (2.0 * view_scale);
+            let vp_hh   = sh / (2.0 * view_scale);
+            let vp_mm_hw = vp_hw / MM_HALF_X * (mm_w / 2.0);
+            let vp_mm_hh = vp_hh / MM_HALF_Y * (mm_h / 2.0);
+            let (mm_cx, mm_cy) = (mm_ox + mm_w / 2.0, mm_oy + mm_h / 2.0);
+            draw_rectangle_lines(mm_cx - vp_mm_hw, mm_cy - vp_mm_hh,
+                2.0 * vp_mm_hw, 2.0 * vp_mm_hh, 1.0,
+                Color::from_rgba(255, 255, 255, 180));
+
+            // Ship dot — map centre
+            draw_circle(mm_cx, mm_cy, 3.0 * ui, YELLOW);
+
+            // Ghost dot — the last run's position, when it's inside the window.
+            if let Some((gx, gy, _)) = ghost_pose
+                && (gx - cam_x).abs() < MM_HALF_X
+                && (gy - cam_y).abs() < MM_HALF_Y
+            {
+                draw_circle(to_mm_x(gx), to_mm_y(gy), 2.5 * ui,
+                    Color::from_rgba(150, 190, 255, 180));
+            }
+
+            // Border
+            draw_rectangle_lines(mm_ox, mm_oy, mm_w, mm_h, 1.0, Color::from_rgba(255, 255, 255, 120));
         }
 
-        // Border
-        draw_rectangle_lines(mm_ox, mm_oy, mm_w, mm_h, 1.0, Color::from_rgba(255, 255, 255, 120));
+        // Prominent distance / score readout text + sizing, computed here (but
+        // drawn further below, once the gauges are laid out) so `small_fs` —
+        // the "BEST …" size — is available to the gauge percentage labels too.
+        let (big, small) = match world_sim.level.scoring {
+            Scoring::Distance => (
+                format!("{:.0} m", world_sim.max_dist),
+                format!("BEST {:.0} m", get_best_dist()),
+            ),
+            Scoring::Pads => (format!("{}", world_sim.score), "SCORE".to_string()),
+        };
+        // Left-aligned to the HUD column's left edge (`mm_ox`) plus a margin,
+        // shrunk to the minimap width so a long number stays inside the column.
+        let ro_margin = 20.0 * ui;
+        let ro_x = mm_ox + ro_margin;
+        let mut big_fs = 100.0 * ui;
+        let big_dim = measure_text(&big, None, big_fs as u16, 1.0);
+        if big_dim.width > mm_w - ro_margin {
+            big_fs *= (mm_w - ro_margin) / big_dim.width;
+        }
+        let small_fs = big_fs * 0.36; // gauge percentages match this size
 
-        // Fuel gauge — slim bar directly under the minimap.
+        // Fuel & hull gauges — two slim bars directly under the minimap, each
+        // with a little vector icon to its left (a fuel drop, a heart) and a
+        // bold percentage readout BETWEEN the icon and the bar (same size as
+        // the "BEST" label). Distinct identities: fuel = warm amber (→ red
+        // when low); hull = classic health green → amber → red.
+        let gw = mm_w;
+        let fg_h = 18.0 * ui;
+        let ir = 14.0 * ui; // icon radius (big, unmissable)
+        let bar_gap = 12.0 * ui; // space between the two bars
+        let white120 = Color::from_rgba(255, 255, 255, 120);
+        // Fuel drop: pointed top, rounded bottom.
+        let draw_drop = |cx: f32, cy: f32, col: Color| {
+            draw_triangle(vec2(cx, cy - ir), vec2(cx - ir * 0.72, cy + ir * 0.12),
+                vec2(cx + ir * 0.72, cy + ir * 0.12), col);
+            draw_circle(cx, cy + ir * 0.28, ir * 0.72, col);
+        };
+        // Heart: two lobes + a downward point.
+        let draw_heart = |cx: f32, cy: f32, col: Color| {
+            draw_circle(cx - ir * 0.42, cy - ir * 0.22, ir * 0.5, col);
+            draw_circle(cx + ir * 0.42, cy - ir * 0.22, ir * 0.5, col);
+            draw_triangle(vec2(cx - ir * 0.9, cy), vec2(cx + ir * 0.9, cy),
+                vec2(cx, cy + ir * 0.9), col);
+        };
+
+        // Icon column, then the percentage (reserved to the widest case —
+        // "100%" — so the bar starts at the same x for both gauges regardless
+        // of the actual value), then the bar fills the rest of the column.
+        let icon_cx = mm_ox + ir + 6.0 * ui;
+        let pct_x = icon_cx + ir + 10.0 * ui;
+        let pct_col = |frac: f32| -> Color {
+            if frac > 0.5 {
+                Color::from_rgba(120, 230, 140, 255)
+            } else if frac > 0.25 {
+                Color::from_rgba(255, 210, 70, 255)
+            } else {
+                Color::from_rgba(255, 70, 60, 255)
+            }
+        };
+        let pct_max_w = measure_text("100%", None, small_fs as u16, 1.0).width;
+        let bar_x = pct_x + pct_max_w + 10.0 * ui;
+        let bar_w = gw - (bar_x - mm_ox);
+        // Bold look via an 8-direction dark outline (scaled with `ui` so it
+        // stays proportional at any resolution) filling in the strokes, then
+        // the colored glyph on top — legible over the cave/space background,
+        // not just over a bar. (An earlier version faked bold by drawing a
+        // second copy offset sideways; at this outline weight it just read as
+        // a smeared extra digit, so the outline alone carries the boldness.)
+        let draw_pct = |frac: f32, bar_y: f32| {
+            let label = format!("{}%", (frac * 100.0).round() as i32);
+            // Exact vertical centering on the bar's mid-line: draw_text(x, Y)
+            // rasterizes into Rect::new(x, Y - offset_y, w, h) (macroquad
+            // TextDimensions docs), so solve Y from that rect's vertical
+            // centre = the bar's centre — no font-metric guesswork.
+            let dim = measure_text(&label, None, small_fs as u16, 1.0);
+            let ty = bar_y + fg_h * 0.5 + dim.offset_y - dim.height * 0.5;
+            let col = pct_col(frac);
+            let sh = Color::from_rgba(0, 0, 0, 220);
+            let o = 1.6 * ui;
+            for dx in [-o, 0.0, o] {
+                for dy in [-o, 0.0, o] {
+                    if dx != 0.0 || dy != 0.0 {
+                        draw_text(&label, pct_x + dx, ty + dy, small_fs, sh);
+                    }
+                }
+            }
+            draw_text(&label, pct_x, ty, small_fs, col);
+        };
+
+        // Fuel gauge (warm amber identity, red when low).
         let fg_y = mm_oy + mm_h + 8.0 * ui;
-        let fg_h = 14.0 * ui;
         let frac = world_sim.fuel / FUEL_MAX;
         let fg_col = if frac > 0.5 {
-            Color::from_rgba(90, 200, 120, 255)
+            Color::from_rgba(250, 190, 70, 255)
         } else if frac > 0.25 {
-            Color::from_rgba(230, 180, 60, 255)
+            Color::from_rgba(232, 150, 45, 255)
         } else {
-            Color::from_rgba(220, 70, 50, 255)
+            Color::from_rgba(225, 70, 45, 255)
         };
-        draw_rectangle(mm_ox, fg_y, mm_w, fg_h, mm_dark);
-        draw_rectangle(mm_ox, fg_y, mm_w * frac, fg_h, fg_col);
-        draw_rectangle_lines(mm_ox, fg_y, mm_w, fg_h, 1.0, Color::from_rgba(255, 255, 255, 120));
+        draw_rectangle(bar_x, fg_y, bar_w, fg_h, mm_dark);
+        draw_rectangle(bar_x, fg_y, bar_w * frac, fg_h, fg_col);
+        draw_rectangle_lines(bar_x, fg_y, bar_w, fg_h, 1.0, white120);
+        draw_drop(icon_cx, fg_y + fg_h * 0.5, fg_col);
+        draw_pct(frac, fg_y);
 
-        // Hull gauge — same slim bar directly under the fuel gauge.
-        let hg_y = fg_y + fg_h + 6.0 * ui;
+        // Hull gauge — red health identity (heart + bar); brighter red when
+        // critically low. The bar length still shows how much is left.
+        let hg_y = fg_y + fg_h + bar_gap;
         let hfrac = world_sim.hull / HULL_MAX;
-        let hg_col = if hfrac > 0.5 {
-            Color::from_rgba(150, 175, 215, 255)
-        } else if hfrac > 0.25 {
-            Color::from_rgba(230, 180, 60, 255)
+        let hg_col = if hfrac > 0.25 {
+            Color::from_rgba(220, 65, 55, 255)
         } else {
-            Color::from_rgba(220, 70, 50, 255)
+            Color::from_rgba(255, 45, 35, 255)
         };
-        draw_rectangle(mm_ox, hg_y, mm_w, fg_h, mm_dark);
-        draw_rectangle(mm_ox, hg_y, mm_w * hfrac, fg_h, hg_col);
-        draw_rectangle_lines(mm_ox, hg_y, mm_w, fg_h, 1.0, Color::from_rgba(255, 255, 255, 120));
+        draw_rectangle(bar_x, hg_y, bar_w, fg_h, mm_dark);
+        draw_rectangle(bar_x, hg_y, bar_w * hfrac, fg_h, hg_col);
+        draw_rectangle_lines(bar_x, hg_y, bar_w, fg_h, 1.0, white120);
+        draw_heart(icon_cx, hg_y + fg_h * 0.5, hg_col);
+        draw_pct(hfrac, hg_y);
+
+        // Prominent distance / score readout — directly BELOW the gauges,
+        // left-aligned under the minimap column (see sizing above).
+        let ro_y = hg_y + fg_h + 14.0 * ui + big_fs;
+        draw_text(&big, ro_x, ro_y, big_fs, WHITE);
+        draw_text(&small, ro_x, ro_y + small_fs + 4.0 * ui,
+            small_fs, Color::from_rgba(150, 180, 220, 220));
 
         next_frame().await;
     }

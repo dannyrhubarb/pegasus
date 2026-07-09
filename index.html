@@ -599,6 +599,10 @@
         <span>Race best ghost</span>
         <input type="checkbox" id="ghost-toggle"><span class="tgl"></span>
       </label>
+      <label class="setrow" id="debug-toggle-row">
+        <span>Debug HUD</span>
+        <input type="checkbox" id="debug-toggle"><span class="tgl"></span>
+      </label>
       <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
     </div>
 
@@ -1312,6 +1316,24 @@
       if (typeof wasm_exports !== "undefined" && wasm_exports.set_ghost_enabled) {
         applyGhostSetting();
         clearInterval(ghostTimer);
+      }
+    }, 200);
+
+    // "Debug HUD" toggle (OFF by default): shows the developer telemetry line
+    // + the minimap. Same plumbing as the others.
+    const debugToggle = document.getElementById("debug-toggle");
+    debugToggle.checked = localStorage.getItem("pegasus_debug_hud") === "1";
+    function applyDebugSetting() {
+      call("set_debug_hud", debugToggle.checked ? 1 : 0);
+    }
+    debugToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_debug_hud", debugToggle.checked ? "1" : "0");
+      applyDebugSetting();
+    });
+    const debugTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_debug_hud) {
+        applyDebugSetting();
+        clearInterval(debugTimer);
       }
     }, 200);
 
