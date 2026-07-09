@@ -357,7 +357,46 @@ pub extern "C" fn load_ghost_blob(len: u32) -> i32 {
     }
 }
 
-// "Race best ghost" toggle (info-overlay checkbox, on by default): whether
+// --- HTML game-menu bridge (index.html owns the menu/pause/game-over UI) ---
+// The web wrapper drives the game with set_ui_pause + ui_command and observes
+// it through ui_state / cur_dist. UI_STATE and CUR_DIST are per-frame mirrors
+// written by the main loop — exports can't read loop locals.
+static UI_PAUSE: AtomicU32 = AtomicU32::new(0);
+static UI_CMD: AtomicU32 = AtomicU32::new(0);
+static UI_STATE: AtomicU32 = AtomicU32::new(0);
+static CUR_DIST: AtomicU32 = AtomicU32::new(0);
+
+/// Freeze/unfreeze the live sim while an HTML overlay (menu, pause view) is
+/// up. Replay playback is NOT gated — a stored replay watched from the menu
+/// keeps playing behind no overlay.
+#[unsafe(no_mangle)]
+pub extern "C" fn set_ui_pause(on: i32) {
+    UI_PAUSE.store(on as u32, Ordering::Relaxed);
+}
+
+/// One-shot commands from the HTML UI (swap-to-consume, like PAD_RESET):
+/// 1 = reset / fly again, 2 = watch the last crashed run's replay.
+#[unsafe(no_mangle)]
+pub extern "C" fn ui_command(cmd: i32) {
+    UI_CMD.store(cmd as u32, Ordering::Relaxed);
+}
+
+/// What the game is doing, for the JS overlay state machine:
+/// 0 = flying, 1 = wreck (explosion pause), 2 = crash dialog, 3 = replay.
+#[unsafe(no_mangle)]
+pub extern "C" fn ui_state() -> i32 {
+    UI_STATE.load(Ordering::Relaxed) as i32
+}
+
+/// The current run's distance (farthest |x| reached), for the game-over
+/// screen. Still valid during the crash dialog — the sim isn't recreated
+/// until the respawn.
+#[unsafe(no_mangle)]
+pub extern "C" fn cur_dist() -> f32 {
+    f32::from_bits(CUR_DIST.load(Ordering::Relaxed))
+}
+
+// "Race best ghost" toggle (settings checkbox, on by default): whether
 // the top-highscore run re-simulates alongside live play.
 static GHOST_ON: AtomicU32 = AtomicU32::new(1);
 
@@ -631,7 +670,6 @@ async fn main() {
     let mut recorder = Recording::new(sim_params(), sim.level.to_params(),
         (HYBRID_MAX_SECS / PHYSICS_DT) as u32);
     recorder.push_keyframe(sim.keyframe(0, 0.0));
-    let mut blob_sizes: Option<(usize, usize)> = None; // (raw, deflated) at last crash
 
     // Ghost of the BEST run: JS pushes the current level's top-highscore
     // recording (load_ghost_blob) and it is RE-SIMULATED in lockstep with
@@ -692,7 +730,6 @@ async fn main() {
             replay_player = None;
             watch_rec = None;
             glow = 0.0;
-            blob_sizes = None;
         }
 
         // Best-run ghost pushed from JS (the current level's top highscore).
@@ -724,6 +761,25 @@ async fn main() {
             mode = Mode::Replay;
         }
 
+        // One-shot HTML-UI commands (menu buttons). Reset flows through the
+        // same path as the R key below; watch-replay only makes sense while
+        // the crash dialog is waiting.
+        let mut ui_do_reset = false;
+        match UI_CMD.swap(0, Ordering::Relaxed) {
+            1 => ui_do_reset = true,
+            2 if mode == Mode::CrashDialog => {
+                if let Some(p) = ResimPlayer::new(&recorder) {
+                    replay_player = Some(p);
+                    mode = Mode::Replay;
+                }
+            }
+            _ => {}
+        }
+        // HTML overlay up (menu / pause view): freeze the live sim. Replay
+        // playback is deliberately not gated — a stored replay watched from
+        // the menu plays with no overlay covering it.
+        let ui_paused = UI_PAUSE.load(Ordering::Relaxed) != 0;
+
         // --- Gather this frame's touch input (mobile) ---
         // Device sampling plus the stick-hold gating machine. This is input
         // GENERATION (allowed to be frame-based); the quantized InputState it
@@ -740,7 +796,7 @@ async fn main() {
         let tpos = |t: &Touch| t.position / touch_dpi;
         let sh_now = screen_height();
         let invert = INVERT_STICK.load(Ordering::Relaxed) != 0;
-        let stick_active = matches!(mode, Mode::Flying) && crash_timer <= 0.0;
+        let stick_active = matches!(mode, Mode::Flying) && crash_timer <= 0.0 && !ui_paused;
         let mut ui_tap: Option<Vec2> = None;
         // Keep following / release the claimed stick touch.
         if let Some(id) = stick.id {
@@ -819,7 +875,7 @@ async fn main() {
         };
         // Inputs are commands — the fuel gate lives in the sim. A dead ship
         // (or a paused mode) commands nothing.
-        let input = if mode == Mode::Flying && crash_timer <= 0.0 {
+        let input = if mode == Mode::Flying && crash_timer <= 0.0 && !ui_paused {
             InputState::from_controls(throttle_cmd, rot, steer_x, steer_y, stick_held)
         } else {
             InputState::default()
@@ -835,7 +891,7 @@ async fn main() {
         let mut frame_landed = false;
         let mut frame_scored = false;
         let mut frame_heading_torque = 0.0f32;
-        if mode == Mode::Flying {
+        if mode == Mode::Flying && !ui_paused {
             phys_accum = (phys_accum + get_frame_time()).min(0.05);
             while phys_accum >= PHYSICS_DT {
                 prev_ship = sim.ship_pose();
@@ -894,16 +950,13 @@ async fn main() {
                     play_sound(s, PlaySoundParams { looped: false, volume: 0.9 });
                 }
                 // Terminal keyframe with the impact pose/velocity (the wreck
-                // is already parked and zeroed), then measure what shipping
-                // the blob would cost, raw and deflated.
+                // is already parked and zeroed).
                 recorder.finalize(Keyframe {
                     tick: recorder.ticks(),
                     x: imp.x, y: imp.y, angle: imp.angle,
                     vx: imp.vx, vy: imp.vy, angvel: imp.angvel,
                     fuel: sim.fuel, hull: sim.hull, glow,
                 });
-                let blob = recorder.serialize(BUILD_ID.load(Ordering::Relaxed));
-                blob_sizes = Some((blob.len(), compress(&blob).len()));
                 // Publish for the JS highscore store (top 5 per level).
                 report_run_end(&recorder, sim.max_dist);
             } else {
@@ -928,7 +981,7 @@ async fn main() {
         }
         // Wreck timer → once the explosion has played out, hand over to the
         // crash dialog (fly again / watch replay). Respawn happens from there.
-        if crash_timer > 0.0 {
+        if crash_timer > 0.0 && !ui_paused {
             crash_timer -= get_frame_time();
             if crash_timer <= 0.0 {
                 crash_timer = 0.0;
@@ -936,6 +989,19 @@ async fn main() {
             }
         }
         let crashed = crash_timer > 0.0;
+
+        // Mirror the mode + run distance for the HTML overlay state machine
+        // (the JS side polls ui_state / cur_dist — see index.html).
+        UI_STATE.store(
+            match mode {
+                Mode::Flying if crashed => 1,
+                Mode::Flying => 0,
+                Mode::CrashDialog => 2,
+                Mode::Replay => 3,
+            },
+            Ordering::Relaxed,
+        );
+        CUR_DIST.store(sim.max_dist.to_bits(), Ordering::Relaxed);
 
         let sh = screen_height();
         let sw = screen_width();
@@ -1589,7 +1655,7 @@ async fn main() {
             sw - safe_right - STICK_RADIUS - 24.0,
             sh - safe_bottom - STICK_RADIUS - 28.0,
         );
-        if matches!(mode, Mode::Flying) && !crashed {
+        if matches!(mode, Mode::Flying) && !crashed && !ui_paused {
             if stick.id.is_some() {
                 draw_stick(stick.center, stick.knob, stick.held);
             } else {
@@ -1597,60 +1663,25 @@ async fn main() {
             }
         }
 
-        // Crash dialog / replay overlay / status banners. `do_reset` is
-        // consumed by the reset block below (same path as the R key).
-        let mut do_reset = false;
+        // Crash dialog / replay overlay / status banners. `ui_do_reset` (the
+        // HTML UI's fly-again/restart command) is consumed by the reset block
+        // below, same path as the R key.
         if mode == Mode::CrashDialog {
-            // Dim the scene so the dialog reads over the cave.
+            // On web the HTML game-over screen (index.html) covers this and
+            // drives the choices via ui_command; what's drawn here is the
+            // dim + keyboard fallback for native/dev builds.
             draw_rectangle(0.0, 0.0, sw, sh, Color::from_rgba(0, 0, 0, 130));
             let msg = "CRASHED";
             let fs = 96.0 * ui;
             let dims = measure_text(msg, None, fs as u16, 1.0);
             draw_text(msg, (sw - dims.width) / 2.0, sh * 0.30, fs,
                 Color::from_rgba(255, 90, 60, 255));
-
-            // Two buttons side by side. The in-canvas stick only claims
-            // touches while flying, so during the dialog the whole screen is
-            // tappable — a `ui_tap` (fresh touch or mouse press, physical px)
-            // inside a button rect fires it.
-            let bw = 300.0 * ui;
-            let bh = 84.0 * ui;
-            let gap = 28.0 * ui;
-            let by = sh * 0.36;
-            let button = |x: f32, label: &str, hint: &str| -> bool {
-                let hit = ui_tap.is_some_and(|p| {
-                    p.x >= x && p.x <= x + bw && p.y >= by && p.y <= by + bh
-                });
-                let bg = if hit {
-                    Color::from_rgba(60, 80, 120, 235)
-                } else {
-                    Color::from_rgba(28, 38, 58, 235)
-                };
-                draw_rectangle(x, by, bw, bh, bg);
-                draw_rectangle_lines(x, by, bw, bh, 2.0 * dpi,
-                    Color::from_rgba(190, 200, 218, 255));
-                let lfs = 34.0 * ui;
-                let d = measure_text(label, None, lfs as u16, 1.0);
-                draw_text(label, x + (bw - d.width) / 2.0, by + bh * 0.46, lfs, WHITE);
-                let hfs = 22.0 * ui;
-                let hd = measure_text(hint, None, hfs as u16, 1.0);
-                draw_text(hint, x + (bw - hd.width) / 2.0, by + bh * 0.82, hfs,
-                    Color::from_rgba(170, 180, 200, 255));
-                hit
-            };
-            if button(sw / 2.0 - bw - gap / 2.0, "FLY AGAIN", "[R]") {
-                do_reset = true;
-            }
-            // Hint shows what shipping this run's hybrid replay blob would
-            // cost: serialized size raw → deflated.
-            let replay_hint = match blob_sizes {
-                Some((raw, packed)) => {
-                    format!("[ENTER] · {} → {}", fmt_size(raw), fmt_size(packed))
-                }
-                None => "[ENTER]".to_string(),
-            };
-            let replay_clicked = button(sw / 2.0 + gap / 2.0, "WATCH REPLAY", &replay_hint);
-            if replay_clicked || is_key_pressed(KeyCode::Enter) {
+            let hint = "[R] fly again   ·   [ENTER] watch replay";
+            let hfs = 26.0 * ui;
+            let hd = measure_text(hint, None, hfs as u16, 1.0);
+            draw_text(hint, (sw - hd.width) / 2.0, sh * 0.38, hfs,
+                Color::from_rgba(170, 180, 200, 255));
+            if is_key_pressed(KeyCode::Enter) {
                 // Re-simulate the hybrid recording from its first keyframe.
                 if let Some(p) = ResimPlayer::new(&recorder) {
                     replay_player = Some(p);
@@ -1818,7 +1849,7 @@ async fn main() {
         // button. Also the escape hatch out of the dialog and the replay.
         // Respawn returns to the ORIGINAL spawn (not RESET_X): every run
         // starts from the same place, which is what lets the ghost race you.
-        if is_key_pressed(KeyCode::R) || PAD_RESET.swap(0, Ordering::Relaxed) != 0 || do_reset {
+        if is_key_pressed(KeyCode::R) || PAD_RESET.swap(0, Ordering::Relaxed) != 0 || ui_do_reset {
             // FRESH Sim per run — never reuse the world across recorded runs.
             // Rapier's contact solve depends on collider handle numbering: a
             // reused sim's handle space carries the previous run's history,
@@ -1858,7 +1889,6 @@ async fn main() {
             watch_rec = None;
             glow = 0.0;
             recorder.push_keyframe(sim.keyframe(0, 0.0));
-            blob_sizes = None;
         }
 
         // --- Minimap (ship always centred; pans in BOTH axes) ---

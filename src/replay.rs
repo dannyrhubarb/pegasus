@@ -353,15 +353,6 @@ pub fn decompress(data: &[u8]) -> Option<Vec<u8>> {
     miniz_oxide::inflate::decompress_to_vec(data).ok()
 }
 
-// "512 B" / "3.4 KB" for the dialog button.
-pub fn fmt_size(bytes: usize) -> String {
-    if bytes < 1024 {
-        format!("{bytes} B")
-    } else {
-        format!("{:.1} KB", bytes as f32 / 1024.0)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -494,9 +485,4 @@ mod tests {
         assert_eq!(back, blob);
     }
 
-    #[test]
-    fn fmt_size_picks_sane_units() {
-        assert_eq!(fmt_size(512), "512 B");
-        assert_eq!(fmt_size(1536), "1.5 KB");
-    }
 }
