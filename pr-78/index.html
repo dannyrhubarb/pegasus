@@ -57,20 +57,26 @@
       width: 56px;
       height: 56px;
       border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       background: rgba(8, 16, 34, 0.6);
       border: 2px solid var(--cyan);
       color: var(--cyan);
-      font: 700 22px/52px var(--mono);
-      text-align: center;
       cursor: pointer;
       user-select: none;
       -webkit-user-select: none;
       touch-action: manipulation;
       box-shadow: 0 0 8px rgba(52, 231, 255, 0.5), inset 0 0 8px rgba(52, 231, 255, 0.15);
-      text-shadow: 0 0 8px var(--cyan);
     }
     .cbtn:hover { background: rgba(52, 231, 255, 0.2); }
-    #restart-btn { font-size: 28px; }
+    /* Icons share one size + neon glow so pause and restart read as siblings. */
+    .cbtn .icn {
+      width: 26px;
+      height: 26px;
+      display: block;
+      filter: drop-shadow(0 0 5px var(--cyan));
+    }
 
     /* --- Game menu --------------------------------------------------------
        One fullscreen overlay, one visible .screen at a time. Neon-arcade
@@ -424,8 +430,18 @@
 
   <!-- In-game corner buttons: pause + restart (visible only during play) -->
   <div id="hud-btns">
-    <div id="restart-btn" class="cbtn" role="button" aria-label="Restart" title="Restart">&#10227;</div>
-    <div id="pause-btn" class="cbtn" role="button" aria-label="Pause" title="Pause">&#10073;&#10073;</div>
+    <div id="restart-btn" class="cbtn" role="button" aria-label="Restart" title="Restart">
+      <svg class="icn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <polyline points="21 5 21 10.5 15.5 10.5"></polyline>
+        <path d="M18.4 15a7.5 7.5 0 1 1-1.8-7.8L21 10.5"></path>
+      </svg>
+    </div>
+    <div id="pause-btn" class="cbtn" role="button" aria-label="Pause" title="Pause">
+      <svg class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <rect x="7.2" y="5.5" width="3.4" height="13" rx="1.4"></rect>
+        <rect x="13.4" y="5.5" width="3.4" height="13" rx="1.4"></rect>
+      </svg>
+    </div>
   </div>
 
   <!-- Game menu: open at boot (markup, not JS, so it shows while wasm loads) -->
@@ -590,11 +606,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">e971e30-pr-78</div>
+        <div class="info-value" id="git-rev">e43fa02-pr-78</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-09 06:08 UTC</div>
+        <div class="info-value" id="build-time">2026-07-09 06:20 UTC</div>
       </div>
       <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
       <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
@@ -949,7 +965,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "e971e30-pr-78";
+    const wasmRev = "e43fa02-pr-78";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
