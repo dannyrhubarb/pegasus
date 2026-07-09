@@ -264,20 +264,6 @@ pub extern "C" fn get_best_dist() -> f32 {
     f32::from_bits(BEST_DIST.load(Ordering::Relaxed))
 }
 
-// The serialized recording blob of the last crashed run, exposed to JS so it
-// can be downloaded (offline analysis today; the sharing feature tomorrow).
-// Single-threaded (wasm), so the returned pointer stays valid until the next
-// crash overwrites it.
-static REPLAY_BLOB: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
-#[unsafe(no_mangle)]
-pub extern "C" fn replay_blob_len() -> i32 {
-    REPLAY_BLOB.lock().unwrap().len() as i32
-}
-#[unsafe(no_mangle)]
-pub extern "C" fn replay_blob_ptr() -> *const u8 {
-    REPLAY_BLOB.lock().unwrap().as_ptr()
-}
-
 // --- Highscores & best-run ghost (JS owns the localStorage store) ---
 // When a run ends (destroying crash, or a manual reset while alive), the
 // game publishes it here: deflated recording blob + final |x| distance + a
@@ -918,7 +904,6 @@ async fn main() {
                 });
                 let blob = recorder.serialize(BUILD_ID.load(Ordering::Relaxed));
                 blob_sizes = Some((blob.len(), compress(&blob).len()));
-                *REPLAY_BLOB.lock().unwrap() = blob; // for the download button
                 // Publish for the JS highscore store (top 5 per level).
                 report_run_end(&recorder, sim.max_dist);
             } else {
