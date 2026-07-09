@@ -278,6 +278,108 @@ pub extern "C" fn replay_blob_ptr() -> *const u8 {
     REPLAY_BLOB.lock().unwrap().as_ptr()
 }
 
+// --- Highscores & best-run ghost (JS owns the localStorage store) ---
+// When a run ends (destroying crash, or a manual reset while alive), the
+// game publishes it here: deflated recording blob + final |x| distance + a
+// bumped sequence number. JS polls run_seq(), pulls the blob on change, and
+// maintains the top-5-per-level list (with timestamps) in localStorage —
+// the wasm has no wall clock or persistent storage, so dates and retention
+// live on the JS side.
+static RUN_BLOB: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
+static RUN_DIST: AtomicU32 = AtomicU32::new(0);
+static RUN_SEQ: AtomicU32 = AtomicU32::new(0);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn run_seq() -> u32 {
+    RUN_SEQ.load(Ordering::Relaxed)
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn run_dist() -> f32 {
+    f32::from_bits(RUN_DIST.load(Ordering::Relaxed))
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn run_blob_len() -> i32 {
+    RUN_BLOB.lock().unwrap().len() as i32
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn run_blob_ptr() -> *const u8 {
+    RUN_BLOB.lock().unwrap().as_ptr()
+}
+
+// Publish an ended run for the JS highscore store. Blink-and-gone attempts
+// (< GHOST_MIN_SECS) aren't worth a leaderboard slot.
+fn report_run_end(rec: &Recording, dist: f32) {
+    if rec.ticks() < (GHOST_MIN_SECS / PHYSICS_DT) as u32 {
+        return;
+    }
+    let packed = compress(&rec.serialize(BUILD_ID.load(Ordering::Relaxed)));
+    *RUN_BLOB.lock().unwrap() = packed;
+    RUN_DIST.store(dist.to_bits(), Ordering::Relaxed);
+    RUN_SEQ.fetch_add(1, Ordering::Relaxed);
+}
+
+// Blobs coming BACK from the JS store: watch a stored replay, or race its
+// best run as the ghost. Same buffer-write pattern as load_level: JS asks
+// for a buffer (blob_in_ptr), writes the deflated blob, then calls the
+// consumer; the main loop picks the decoded Recording up at the next frame
+// boundary. Both consumers return 1 on a successful decode, 0 otherwise (a
+// mangled localStorage entry must not panic the game).
+static BLOB_IN: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
+static PENDING_WATCH: std::sync::Mutex<Option<Recording>> = std::sync::Mutex::new(None);
+static PENDING_GHOST: std::sync::Mutex<Option<Recording>> = std::sync::Mutex::new(None);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn blob_in_ptr(len: u32) -> *const u8 {
+    let mut b = BLOB_IN.lock().unwrap();
+    b.clear();
+    b.resize(len as usize, 0);
+    b.as_ptr()
+}
+
+// Deflated bytes -> Recording (the watch_replay_blob / load_ghost_blob
+// decode path). Pure so the round trip is unit-testable.
+fn decode_recording(packed: &[u8]) -> Option<Recording> {
+    let raw = replay::decompress(packed)?;
+    Recording::deserialize(&raw).ok().map(|(rec, _build_id)| rec)
+}
+
+fn decode_blob_in(len: u32) -> Option<Recording> {
+    let b = BLOB_IN.lock().unwrap();
+    let end = (len as usize).min(b.len());
+    decode_recording(&b[..end])
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn watch_replay_blob(len: u32) -> i32 {
+    match decode_blob_in(len) {
+        Some(rec) => {
+            *PENDING_WATCH.lock().unwrap() = Some(rec);
+            1
+        }
+        None => 0,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn load_ghost_blob(len: u32) -> i32 {
+    match decode_blob_in(len) {
+        Some(rec) => {
+            *PENDING_GHOST.lock().unwrap() = Some(rec);
+            1
+        }
+        None => 0,
+    }
+}
+
+// "Race best ghost" toggle (info-overlay checkbox, on by default): whether
+// the top-highscore run re-simulates alongside live play.
+static GHOST_ON: AtomicU32 = AtomicU32::new(1);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_ghost_enabled(on: i32) {
+    GHOST_ON.store(on as u32, Ordering::Relaxed);
+}
+
 // --- Bluetooth / USB game controller bridge (Web Gamepad API, see index.html) ---
 #[unsafe(no_mangle)]
 pub extern "C" fn set_pad_thrust(active: i32) {
@@ -545,13 +647,21 @@ async fn main() {
     recorder.push_keyframe(sim.keyframe(0, 0.0));
     let mut blob_sizes: Option<(usize, usize)> = None; // (raw, deflated) at last crash
 
-    // Ghost of the LAST run: on reset the ended run's hybrid Recording is
-    // adopted and RE-SIMULATED in lockstep with live play — one ghost tick
-    // per live tick, same spawn clock — drawn as a translucent silhouette.
-    // The hybrid recording is the single source of truth for both playback
-    // and the ghost; there is no separate visual buffer.
+    // Ghost of the BEST run: JS pushes the current level's top-highscore
+    // recording (load_ghost_blob) and it is RE-SIMULATED in lockstep with
+    // live play — one ghost tick per live tick, same spawn clock — drawn as
+    // a translucent silhouette. Toggled by the "Race best ghost" checkbox
+    // (GHOST_ON); recreated from ghost_rec at every spawn.
     let mut ghost_rec: Option<Recording> = None;
     let mut ghost_player: Option<ResimPlayer> = None;
+
+    // An externally-loaded replay being watched (a highscore's ▶ button →
+    // watch_replay_blob). While Some, the Replay mode plays THIS recording
+    // instead of the live recorder, and exiting returns to `watch_return`
+    // (the dialog if a wreck is waiting, otherwise flight — physics was
+    // paused throughout, so the interrupted run resumes untouched).
+    let mut watch_rec: Option<Recording> = None;
+    let mut watch_return = Mode::Flying;
 
     // Debris burst at (x, y) — fired at the real crash and again when the
     // replay reaches its end.
@@ -594,8 +704,38 @@ async fn main() {
             ghost_rec = None;
             ghost_player = None;
             replay_player = None;
+            watch_rec = None;
             glow = 0.0;
             blob_sizes = None;
+        }
+
+        // Best-run ghost pushed from JS (the current level's top highscore).
+        // Wrong-level recordings are dropped — the ghost must race THIS
+        // world. Adopted for future spawns; if the live run is still young
+        // the player also starts now and the lockstep loop below catches it
+        // up within one frame (bounded burst), otherwise the racing ghost
+        // (if any) keeps going and the new one appears at the next spawn.
+        if let Some(g) = PENDING_GHOST.lock().unwrap().take()
+            && g.level == sim.level.to_params()
+        {
+            let young = recorder.ticks() <= (30.0 / PHYSICS_DT) as u32;
+            ghost_rec = Some(g);
+            if GHOST_ON.load(Ordering::Relaxed) != 0 && young && mode == Mode::Flying {
+                ghost_player = ghost_rec.as_ref().and_then(ResimPlayer::new);
+            }
+        }
+
+        // A stored replay to watch (highscore ▶). Pauses whatever was
+        // happening — the sim freezes, so the interrupted run resumes when
+        // the replay ends or is skipped.
+        if let Some(rec) = PENDING_WATCH.lock().unwrap().take()
+            && let Some(p) = ResimPlayer::new(&rec)
+        {
+            watch_return = if sim.crashed { Mode::CrashDialog } else { Mode::Flying };
+            crash_timer = 0.0; // skip any remaining wreck pause
+            watch_rec = Some(rec);
+            replay_player = Some(p);
+            mode = Mode::Replay;
         }
 
         // --- Gather this frame's touch input (mobile) ---
@@ -727,15 +867,16 @@ async fn main() {
                 if recorder.record_tick(input) && !destroyed {
                     recorder.push_keyframe(sim.keyframe(recorder.ticks(), glow));
                 }
-                // Ghost: re-simulate the previous run in LOCKSTEP — exactly
-                // one ghost tick per live tick, so both ships fly the same
-                // spawn clock. (A trimmed recording starts at tick > 0; the
-                // ghost then waits for the live run to reach it.)
-                if let (Some(p), Some(r)) = (ghost_player.as_mut(), ghost_rec.as_ref())
-                    && !p.finished
-                    && p.tick < recorder.ticks()
-                {
-                    p.step_one(r);
+                // Ghost: re-simulate the best run in LOCKSTEP — one ghost
+                // tick per live tick, so both ships fly the same spawn
+                // clock. The `while` also absorbs a ghost adopted a moment
+                // after the spawn (bounded catch-up burst, see the adoption
+                // block above). (A trimmed recording starts at tick > 0;
+                // the ghost then waits for the live run to reach it.)
+                if let (Some(p), Some(r)) = (ghost_player.as_mut(), ghost_rec.as_ref()) {
+                    while !p.finished && p.tick < recorder.ticks() {
+                        p.step_one(r);
+                    }
                 }
                 frame_heading_torque = rep.heading_torque;
                 frame_landed = rep.landed;
@@ -778,6 +919,8 @@ async fn main() {
                 let blob = recorder.serialize(BUILD_ID.load(Ordering::Relaxed));
                 blob_sizes = Some((blob.len(), compress(&blob).len()));
                 *REPLAY_BLOB.lock().unwrap() = blob; // for the download button
+                // Publish for the JS highscore store (top 5 per level).
+                report_run_end(&recorder, sim.max_dist);
             } else {
                 // Survivable scrape: a spray of sparks + a quiet thud,
                 // scaled to the damage taken. The ship keeps flying.
@@ -895,12 +1038,19 @@ async fn main() {
         // the destroying impact, then returns to the dialog.
         let mut replay_frame: Option<ReplayFrame> = None;
         if mode == Mode::Replay {
+            // Playback source: an externally-loaded highscore replay when
+            // one is active, else the live recorder (crash-dialog replay).
+            let play_rec = watch_rec.as_ref().unwrap_or(&recorder);
             if let Some(p) = replay_player.as_mut() {
-                let f = p.advance(&recorder, get_frame_time());
+                let f = p.advance(play_rec, get_frame_time());
                 if p.finished {
-                    boom_burst(f.x, f.y, &mut particles);
-                    if let Some(s) = &boom_snd {
-                        play_sound(s, PlaySoundParams { looped: false, volume: 0.9 });
+                    // The boom marks a re-simulated destruction; runs that
+                    // ended by manual reset just stop.
+                    if p.sim.crashed {
+                        boom_burst(f.x, f.y, &mut particles);
+                        if let Some(s) = &boom_snd {
+                            play_sound(s, PlaySoundParams { looped: false, volume: 0.9 });
+                        }
                     }
                 } else {
                     replay_frame = Some(f);
@@ -908,7 +1058,7 @@ async fn main() {
             }
             if replay_player.as_ref().is_none_or(|p| p.finished) {
                 replay_player = None;
-                mode = Mode::CrashDialog;
+                mode = if watch_rec.take().is_some() { watch_return } else { Mode::CrashDialog };
             }
         }
         if let Some(f) = replay_frame {
@@ -925,7 +1075,10 @@ async fn main() {
         // recording's first keyframe, or outside live flight.
         let ghost_pose: Option<(f32, f32, f32)> = match (&ghost_player, mode) {
             (Some(p), Mode::Flying)
-                if !crashed && !p.finished && recorder.ticks() >= p.first_tick =>
+                if GHOST_ON.load(Ordering::Relaxed) != 0
+                    && !crashed
+                    && !p.finished
+                    && recorder.ticks() >= p.first_tick =>
             {
                 Some(p.lerped_pose((phys_accum / PHYSICS_DT).clamp(0.0, 1.0)))
             }
@@ -1563,7 +1716,7 @@ async fn main() {
             draw_stick(stick_park, vec2(isx, isy) * STICK_TRAVEL, inp.stick_held != 0);
             if ui_tap.is_some() {
                 replay_player = None;
-                mode = Mode::CrashDialog;
+                mode = if watch_rec.take().is_some() { watch_return } else { Mode::CrashDialog };
             }
         } else if crashed {
             let msg = "CRASHED";
@@ -1689,6 +1842,11 @@ async fn main() {
             // diverges → chaos amplifies → metres of replay drift (found
             // 2026-07 from a real downloaded replay). A fresh sim makes live
             // and resim identical operation sequences by construction.
+            // Runs ended by a manual reset while alive go to the highscore
+            // store too ("longest flights", not "longest crashes") — a
+            // crashed run was already published at the impact.
+            let ended_alive = !sim.crashed;
+            let ended_dist = sim.max_dist;
             sim = Sim::new(sim.level.clone());
             // Snap the interpolation too, or the camera lerps across the
             // teleport for a frame.
@@ -1696,20 +1854,23 @@ async fn main() {
             crash_timer = 0.0;
             shake = 0.0;
             mode = Mode::Flying;
-            // The ended run's recording becomes the ghost for the next one —
-            // unless it was a blink-and-gone attempt (keep the previous
-            // ghost then). The ghost player re-simulates it from its first
-            // keyframe, in lockstep with the new run.
             let ended = std::mem::replace(
                 &mut recorder,
                 Recording::new(sim_params(), sim.level.to_params(),
                     (HYBRID_MAX_SECS / PHYSICS_DT) as u32),
             );
-            if ended.ticks() >= (GHOST_MIN_SECS / PHYSICS_DT) as u32 {
-                ghost_rec = Some(ended);
+            if ended_alive {
+                report_run_end(&ended, ended_dist);
             }
-            ghost_player = ghost_rec.as_ref().and_then(ResimPlayer::new);
+            // The ghost re-simulates the BEST run (pushed from the JS store)
+            // from its first keyframe, in lockstep with the new run.
+            ghost_player = if GHOST_ON.load(Ordering::Relaxed) != 0 {
+                ghost_rec.as_ref().and_then(ResimPlayer::new)
+            } else {
+                None
+            };
             replay_player = None;
+            watch_rec = None;
             glow = 0.0;
             recorder.push_keyframe(sim.keyframe(0, 0.0));
             blob_sizes = None;
@@ -2339,6 +2500,52 @@ mod tests {
                 assert!(seeded.cave_half_width(x) > 1.0, "seed {seed} pinches at x={x}");
             }
         }
+    }
+
+    #[test]
+    fn stored_highscore_blob_round_trips_into_a_watchable_replay() {
+        // Fly a scripted run on The Glide, serialize + deflate it (exactly
+        // what the JS store keeps in localStorage), then decode it the way
+        // the watch_replay_blob export does and re-play it to the end — the
+        // decoded recording must carry its own level and be fully playable.
+        let level = Level::parse(include_str!("../levels/glide.level"));
+        let mut sim = Sim::new(level.clone());
+        let mut rec = Recording::new(sim_params(), level.to_params(), u32::MAX);
+        rec.push_keyframe(sim.keyframe(0, 0.0));
+        for t in 0..600u32 {
+            let input = if t < 240 {
+                InputState::from_controls(1.0, 0, 0.0, 0.0, false)
+            } else {
+                InputState::default()
+            };
+            let rep = sim.tick(input);
+            let due = rec.record_tick(input);
+            if let Some(imp) = rep.impact.filter(|i| i.destroyed) {
+                rec.finalize(Keyframe {
+                    tick: rec.ticks(), x: imp.x, y: imp.y, angle: imp.angle,
+                    vx: imp.vx, vy: imp.vy, angvel: imp.angvel,
+                    fuel: sim.fuel, hull: sim.hull, glow: input.throttle_f32(),
+                });
+                break;
+            }
+            if due {
+                rec.push_keyframe(sim.keyframe(rec.ticks(), input.throttle_f32()));
+            }
+        }
+        let packed = compress(&rec.serialize(7));
+        let decoded = decode_recording(&packed).expect("stored blob must decode");
+        assert_eq!(decoded.level, level.to_params());
+        assert_eq!(decoded.ticks(), rec.ticks());
+        let mut p = ResimPlayer::new(&decoded).expect("decoded replay must be playable");
+        while !p.finished {
+            p.step_one(&decoded);
+        }
+        assert_eq!(p.tick, decoded.ticks());
+        assert!(!p.snapped, "same-binary playback of a stored blob must not drift");
+
+        // Corrupt data must be rejected, not panic.
+        assert!(decode_recording(&packed[..packed.len() / 2]).is_none());
+        assert!(decode_recording(b"garbage").is_none());
     }
 
     #[test]

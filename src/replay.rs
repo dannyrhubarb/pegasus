@@ -128,9 +128,6 @@ impl SimParams {
         ]
     }
 
-    // Read side (from_array/deserialize/Reader) is only exercised by tests
-    // today; it becomes live code the moment replays leave the device.
-    #[allow(dead_code)]
     fn from_array(a: [f32; Self::N_FIELDS]) -> Self {
         SimParams {
             dt: a[0], gravity_y: a[1], thrust_force: a[2], linear_damping: a[3],
@@ -261,7 +258,6 @@ impl Recording {
         out
     }
 
-    #[allow(dead_code)]
     pub fn deserialize(data: &[u8]) -> Result<(Recording, u32), &'static str> {
         let mut r = Reader { data, pos: 0 };
         if r.bytes(4)? != REPLAY_MAGIC {
@@ -320,13 +316,11 @@ impl Recording {
     }
 }
 
-#[allow(dead_code)]
 struct Reader<'a> {
     data: &'a [u8],
     pos: usize,
 }
 
-#[allow(dead_code)]
 impl<'a> Reader<'a> {
     fn bytes(&mut self, n: usize) -> Result<&'a [u8], &'static str> {
         let s = self.data.get(self.pos..self.pos + n).ok_or("truncated")?;
@@ -347,9 +341,16 @@ impl<'a> Reader<'a> {
     }
 }
 
-// Deflate, level 8 — what the replay blob would ship over the wire as.
+// Deflate, level 8 — the form replay blobs ship/store as (the JS highscore
+// store keeps them base64'd in localStorage).
 pub fn compress(data: &[u8]) -> Vec<u8> {
     miniz_oxide::deflate::compress_to_vec(data, 8)
+}
+
+// Inverse of compress(); None on corrupt input (a mangled localStorage blob
+// must not panic the game).
+pub fn decompress(data: &[u8]) -> Option<Vec<u8>> {
+    miniz_oxide::inflate::decompress_to_vec(data).ok()
 }
 
 // "512 B" / "3.4 KB" for the dialog button.
