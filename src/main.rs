@@ -186,6 +186,47 @@ impl ResimPlayer {
         }
     }
 
+    // Scrub the playback to keyframe `kf_idx` (clamped to the last one with
+    // ticks still left to play — the terminal crash keyframe itself is not a
+    // playable start). The scratch sim is rebuilt FRESH and restored from the
+    // keyframe — the same operation sequence as playing a trimmed recording
+    // from its first keyframe. The effective input at the keyframe is
+    // re-seeded from the event stream, exactly like Recording::trim does at
+    // a cut. The resume is near-exact, not bit-exact: a keyframe stores the
+    // heading as an angle, and Rotation::new(angle) can't reproduce the
+    // original unit-complex rotation to the last bit, so sub-millimetre
+    // drift accumulates (measured ~6e-4 m over 3 s) — far below the 0.5 m
+    // snap threshold, and the per-keyframe drift check + snap fallback
+    // absorbs pathological cases (e.g. a keyframe captured under sustained
+    // contact, where handle numbering matters — see the determinism rules).
+    fn seek_to_keyframe(&mut self, rec: &Recording, kf_idx: usize) {
+        let mut idx = kf_idx.min(rec.keyframes.len().saturating_sub(1));
+        while idx > 0 && rec.keyframes[idx].tick >= self.end_tick {
+            idx -= 1;
+        }
+        let Some(&kf) = rec.keyframes.get(idx) else { return };
+        if kf.tick >= self.end_tick {
+            return; // nothing playable at or after this keyframe
+        }
+        let mut s = sim::Sim::new(world::Level::from_params(&rec.level));
+        s.restore(&kf);
+        self.prev_pose = s.ship_pose();
+        self.sim = s;
+        self.tick = kf.tick;
+        self.event_idx = rec.events.partition_point(|e| e.tick <= kf.tick);
+        self.input = self
+            .event_idx
+            .checked_sub(1)
+            .map_or(InputState::default(), |i| rec.events[i].input);
+        self.kf_idx = idx + 1;
+        self.accum = 0.0;
+        self.glow = kf.glow;
+        self.last_torque = 0.0;
+        self.drift = 0.0;
+        self.snapped = false;
+        self.finished = false;
+    }
+
     fn progress(&self) -> f32 {
         (self.tick - self.first_tick) as f32 / (self.end_tick - self.first_tick).max(1) as f32
     }
@@ -386,6 +427,50 @@ pub extern "C" fn ui_command(cmd: i32) {
 #[unsafe(no_mangle)]
 pub extern "C" fn ui_state() -> i32 {
     UI_STATE.load(Ordering::Relaxed) as i32
+}
+
+// --- Replay transport (the HTML replay bar + in-canvas keys) ---
+// Pause and keyframe-scrub controls for Replay mode. REPLAY_SEEK carries the
+// requested bar position as f32 fraction bits (swap-to-consume; SEEK_NONE
+// sentinel = no request — it's a NaN bit pattern no real fraction produces).
+// REPLAY_POS/REPLAY_LEN are per-frame mirrors for the JS bar, like UI_STATE.
+const SEEK_NONE: u32 = u32::MAX;
+static REPLAY_PAUSED: AtomicU32 = AtomicU32::new(0);
+static REPLAY_SEEK: AtomicU32 = AtomicU32::new(SEEK_NONE);
+static REPLAY_POS: AtomicU32 = AtomicU32::new(0);
+static REPLAY_LEN: AtomicU32 = AtomicU32::new(0);
+
+/// Pause / resume replay playback (the bar's play/pause button). Cleared by
+/// the game whenever a new replay starts.
+#[unsafe(no_mangle)]
+pub extern "C" fn set_replay_paused(on: i32) {
+    REPLAY_PAUSED.store(on as u32, Ordering::Relaxed);
+}
+
+/// Current pause state, so the JS button tracks the in-canvas space-bar
+/// toggle too.
+#[unsafe(no_mangle)]
+pub extern "C" fn replay_paused() -> i32 {
+    REPLAY_PAUSED.load(Ordering::Relaxed) as i32
+}
+
+/// Scrub the replay to `frac` (0..1 of the recording); the game snaps it to
+/// the nearest keyframe at or before that point and re-sims from there.
+#[unsafe(no_mangle)]
+pub extern "C" fn replay_seek(frac: f32) {
+    REPLAY_SEEK.store(frac.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+}
+
+/// Playback position as a fraction 0..1 (bar knob) and total length in
+/// seconds (time label). Valid while ui_state() == 3.
+#[unsafe(no_mangle)]
+pub extern "C" fn replay_pos() -> f32 {
+    f32::from_bits(REPLAY_POS.load(Ordering::Relaxed))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn replay_len() -> f32 {
+    f32::from_bits(REPLAY_LEN.load(Ordering::Relaxed))
 }
 
 /// The current run's distance (farthest |x| reached), for the game-over
@@ -785,6 +870,8 @@ async fn main() {
             watch_rec = Some(rec);
             replay_player = Some(p);
             mode = Mode::Replay;
+            REPLAY_PAUSED.store(0, Ordering::Relaxed);
+            REPLAY_SEEK.store(SEEK_NONE, Ordering::Relaxed);
         }
 
         // One-shot HTML-UI commands (menu buttons). Reset flows through the
@@ -797,6 +884,8 @@ async fn main() {
                 if let Some(p) = ResimPlayer::new(&recorder) {
                     replay_player = Some(p);
                     mode = Mode::Replay;
+                    REPLAY_PAUSED.store(0, Ordering::Relaxed);
+                    REPLAY_SEEK.store(SEEK_NONE, Ordering::Relaxed);
                 }
             }
             _ => {}
@@ -1127,7 +1216,41 @@ async fn main() {
             // one is active, else the live recorder (crash-dialog replay).
             let play_rec = watch_rec.as_ref().unwrap_or(&recorder);
             if let Some(p) = replay_player.as_mut() {
-                let f = p.advance(play_rec, get_frame_time());
+                // Transport controls: play/pause + keyframe scrubbing, from
+                // the HTML replay bar (atomics) or the keyboard (space =
+                // pause, ←/→ = one keyframe — the native/dev fallback).
+                if is_key_pressed(KeyCode::Space) {
+                    REPLAY_PAUSED.fetch_xor(1, Ordering::Relaxed);
+                }
+                let seek_bits = REPLAY_SEEK.swap(SEEK_NONE, Ordering::Relaxed);
+                let kf_step = is_key_pressed(KeyCode::Right) as i64
+                    - is_key_pressed(KeyCode::Left) as i64;
+                if seek_bits != SEEK_NONE {
+                    // Bar position → tick → the keyframe at or before it.
+                    let span = (p.end_tick - p.first_tick) as f32;
+                    let target = p.first_tick
+                        + (f32::from_bits(seek_bits).clamp(0.0, 1.0) * span) as u32;
+                    let idx = play_rec
+                        .keyframes
+                        .partition_point(|k| k.tick <= target)
+                        .saturating_sub(1);
+                    p.seek_to_keyframe(play_rec, idx);
+                } else if kf_step != 0 {
+                    let cur = play_rec
+                        .keyframes
+                        .partition_point(|k| k.tick <= p.tick)
+                        .saturating_sub(1) as i64;
+                    p.seek_to_keyframe(play_rec, (cur + kf_step).max(0) as usize);
+                }
+                // Paused playback still renders: advance(0) re-simulates
+                // nothing and returns the frozen interpolated frame.
+                let paused = REPLAY_PAUSED.load(Ordering::Relaxed) != 0;
+                let f = p.advance(play_rec, if paused { 0.0 } else { get_frame_time() });
+                REPLAY_POS.store(p.progress().to_bits(), Ordering::Relaxed);
+                REPLAY_LEN.store(
+                    (((p.end_tick - p.first_tick) as f32) * PHYSICS_DT).to_bits(),
+                    Ordering::Relaxed,
+                );
                 if p.finished {
                     // The boom marks a re-simulated destruction; runs that
                     // ended by manual reset just stop.
@@ -1730,19 +1853,22 @@ async fn main() {
                 if let Some(p) = ResimPlayer::new(&recorder) {
                     replay_player = Some(p);
                     mode = Mode::Replay;
+                    REPLAY_PAUSED.store(0, Ordering::Relaxed);
+                    REPLAY_SEEK.store(SEEK_NONE, Ordering::Relaxed);
                 }
             }
         } else if mode == Mode::Replay {
             // Pulsing banner + progress bar; any click/tap (above the stick
             // zone) skips back to the dialog, R skips straight to a respawn.
             let pulse = 180.0 + (get_time() * 4.0).sin() as f32 * 60.0;
-            let msg = "REPLAY";
+            let paused = REPLAY_PAUSED.load(Ordering::Relaxed) != 0;
+            let msg = if paused { "REPLAY · PAUSED" } else { "REPLAY" };
             let fs = 48.0 * ui;
             let dims = measure_text(msg, None, fs as u16, 1.0);
             let msg_y = sh * 0.16;
             draw_text(msg, (sw - dims.width) / 2.0, msg_y, fs,
-                Color::from_rgba(255, 220, 120, pulse as u8));
-            let hint = "tap to skip";
+                Color::from_rgba(255, 220, 120, if paused { 220 } else { pulse as u8 }));
+            let hint = "tap to skip · [space] pause · [< >] scrub";
             let hfs = 24.0 * ui;
             let hd = measure_text(hint, None, hfs as u16, 1.0);
             draw_text(hint, (sw - hd.width) / 2.0, msg_y + 34.0 * ui, hfs,
@@ -2483,6 +2609,71 @@ mod tests {
         assert!(p.finished, "player never finished (tick {} / {})", p.tick, rec.ticks());
         assert!(p.drift < 1e-3, "keyframe drift {} m", p.drift);
         assert!(!p.snapped, "SNAP engaged — recording diverges from replay");
+    }
+
+    #[test]
+    fn seeking_to_a_keyframe_resumes_without_snapping() {
+        // Record a steered airborne flight, then scrub: a fresh player seeks
+        // FORWARD to keyframe 3, and a second plays partway and seeks BACK
+        // to keyframe 1. Both must re-sim the remainder well within the snap
+        // threshold (the keyframe's angle→Rotation round-trip costs sub-mm
+        // float drift — see seek_to_keyframe) and never engage the fallback.
+        let script = |tick: u32| -> InputState {
+            let f = tick as f32 * 0.015;
+            InputState::from_controls(0.6, 0, f.sin() * 0.7, -(f * 0.8).cos() * 0.5, true)
+        };
+        let mut sim = Sim::new(lvl());
+        let mut rec = Recording::new(sim_params(), lvl().to_params(), u32::MAX);
+        rec.push_keyframe(sim.keyframe(0, 0.0));
+        for t in 0..6 * KEYFRAME_EVERY {
+            let input = script(t);
+            let rep = sim.tick(input);
+            let due = rec.record_tick(input);
+            if rep.impact.filter(|i| i.destroyed).is_some() {
+                rec.finalize(sim.keyframe(rec.ticks(), input.throttle_f32()));
+                break;
+            }
+            if due {
+                rec.push_keyframe(sim.keyframe(rec.ticks(), input.throttle_f32()));
+            }
+        }
+        assert!(rec.keyframes.len() >= 5, "flight too short: {} keyframes", rec.keyframes.len());
+
+        // Forward scrub from a fresh player.
+        let mut p = ResimPlayer::new(&rec).expect("player");
+        p.seek_to_keyframe(&rec, 3);
+        assert_eq!(p.tick, rec.keyframes[3].tick);
+        while !p.finished {
+            p.step_one(&rec);
+        }
+        assert_eq!(p.tick, rec.ticks());
+        assert!(p.drift < 0.05, "forward-seek drift {} m", p.drift);
+        assert!(!p.snapped, "fallback snap engaged after a forward seek");
+
+        // Backward scrub after playing partway past keyframe 2.
+        let mut p = ResimPlayer::new(&rec).expect("player");
+        for _ in 0..(2 * KEYFRAME_EVERY + 40) {
+            p.step_one(&rec);
+        }
+        p.seek_to_keyframe(&rec, 1);
+        assert_eq!(p.tick, rec.keyframes[1].tick);
+        while !p.finished {
+            p.step_one(&rec);
+        }
+        assert!(p.drift < 0.05, "backward-seek drift {} m", p.drift);
+        assert!(!p.snapped, "fallback snap engaged after a backward seek");
+
+        // Seeking past the end clamps to the last keyframe that still has
+        // ticks to play — a scrub to the bar's far right shows the finale
+        // instead of doing nothing.
+        let mut p = ResimPlayer::new(&rec).expect("player");
+        p.seek_to_keyframe(&rec, rec.keyframes.len() + 5);
+        assert!(p.tick < rec.ticks());
+        assert!(!p.finished);
+        while !p.finished {
+            p.step_one(&rec);
+        }
+        assert_eq!(p.tick, rec.ticks());
     }
 
     #[test]

@@ -182,6 +182,17 @@ screen on desktop.
   1 wreck / 2 crash dialog / 3 replay) and `sim.max_dist`. JS polls at 200 ms:
   state 2 with no screen open ⇒ show scr-gameover; a menu-launched replay
   (state 3) returns to scr-scores when it ends without a wreck waiting.
+- **Replay transport**: `set_replay_paused(i32)` / `replay_paused() -> i32`
+  (shared pause state — the HTML button and the in-canvas space-bar toggle
+  both drive it, so the button icon polls the game), `replay_seek(f32)`
+  (bar fraction 0..1; swap-to-consume `REPLAY_SEEK` atomic with a NaN-bits
+  `SEEK_NONE` sentinel), `replay_pos() -> f32` / `replay_len() -> f32`
+  (per-frame mirrors: progress fraction + recording length in seconds).
+  The `#replay-bar` HTML overlay (amber play/pause button + range slider +
+  time label) shows while `ui_state() == 3` with no menu screen open, polls
+  at 100 ms, swallows mousedown/touchstart (a canvas tap skips the replay),
+  and dedupes drag seeks on the snapped keyframe second so a drag doesn't
+  rebuild the scratch sim for sub-keyframe knob moves.
 - **Exit to menu** ends the run via `ui_command(1)` (a reset while alive
   banks it in the high scores — "longest flights"); the fresh ship waits,
   paused, behind the menu; Fly unpauses.
@@ -681,6 +692,24 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   that ended by reset (no wreck) skips the terminal boom.
   `ResimPlayer::step_one` is the shared per-tick core: `advance()` drives it
   on the wall clock for WATCH REPLAY; the ghost calls it in lockstep.
+- **Transport controls (play/pause + keyframe scrubbing)**: playback can be
+  paused (`advance(rec, 0.0)` re-simulates nothing and returns the frozen
+  interpolated frame) and scrubbed to any of the recording's 1 Hz keyframes.
+  `ResimPlayer::seek_to_keyframe` rebuilds the scratch sim FRESH and
+  restores the target keyframe — the same op sequence as playing a trimmed
+  recording from its first keyframe — and re-seeds the effective input from
+  the event stream exactly like `Recording::trim` does at a cut. The resume
+  is near-exact, not bit-exact (the keyframe's angle→`Rotation::new`
+  round-trip costs sub-mm drift, measured ~6e-4 m over 3 s — far below the
+  0.5 m snap threshold; unit test
+  `seeking_to_a_keyframe_resumes_without_snapping`). A seek past the end
+  clamps to the last keyframe with ticks left to play (the terminal crash
+  keyframe is not a playable start), so scrubbing to the bar's far right
+  shows the finale. Controls: the HTML `#replay-bar` (see the bridge
+  section below) or, in-canvas (native/dev fallback), space = pause and
+  ←/→ = ±1 keyframe; the banner reads "REPLAY · PAUSED" while paused. Pause
+  and any pending seek are reset whenever a new replay starts (all three
+  `Mode::Replay` entry points).
 
 ### Hybrid recording (`src/replay.rs`) — the single replay format
 A `Recording` captures each spawn→crash run as **inputs + params +
