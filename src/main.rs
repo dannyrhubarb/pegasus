@@ -675,6 +675,12 @@ async fn main() {
     // Wreck timer (> 0 → crashed: input dead, ship hidden; hands over to the
     // crash dialog when it hits 0). Impact detection itself lives in the sim.
     let mut crash_timer = 0.0f32;
+    // Armed-but-idle (#76): a freshly spawned run holds still — no sim.tick,
+    // no record_tick — until the first non-neutral input, so every recording
+    // (and the ghost's lockstep clock) starts at the pilot's first action,
+    // not with the ship sitting at spawn. Keyframe 0 (pushed at recorder
+    // creation) is the spawn state; tick 1 is the first commanded tick.
+    let mut run_started = false;
     let mut mode = Mode::Flying;
     // Instant-replay ring buffer (one frame per physics step) and the
     // playback cursor, in fractional frame indices.
@@ -741,6 +747,7 @@ async fn main() {
             shake = 0.0;
             phys_accum = 0.0;
             mode = Mode::Flying;
+            run_started = false;
             recorder = Recording::new(sim_params(), sim.level.to_params(),
                 (HYBRID_MAX_SECS / PHYSICS_DT) as u32);
             recorder.push_keyframe(sim.keyframe(0, 0.0));
@@ -910,7 +917,15 @@ async fn main() {
         let mut frame_landed = false;
         let mut frame_scored = false;
         let mut frame_heading_torque = 0.0f32;
-        if mode == Mode::Flying && !ui_paused {
+        // First input starts the run clock. The gate lives HERE, outside
+        // Sim::tick — input gathering is frame-level, and the sim must stay
+        // a pure function of the input stream it is actually fed (see the
+        // determinism rules): resim never sees the armed-idle wait because
+        // it was never ticked or recorded.
+        if !run_started && !input.is_neutral() {
+            run_started = true;
+        }
+        if mode == Mode::Flying && !ui_paused && run_started {
             phys_accum = (phys_accum + get_frame_time()).min(0.05);
             while phys_accum >= PHYSICS_DT {
                 prev_ship = sim.ship_pose();
@@ -1899,6 +1914,7 @@ async fn main() {
             crash_timer = 0.0;
             shake = 0.0;
             mode = Mode::Flying;
+            run_started = false;
             let ended = std::mem::replace(
                 &mut recorder,
                 Recording::new(sim_params(), sim.level.to_params(),

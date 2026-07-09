@@ -54,6 +54,13 @@ impl InputState {
         self.throttle as f32 / 255.0
     }
 
+    // No command at all — not even a stick touch. The main loop holds a
+    // freshly spawned run armed-but-idle until the first non-neutral input
+    // (the run clock starts at the pilot's first action, not at spawn).
+    pub fn is_neutral(&self) -> bool {
+        *self == InputState::default()
+    }
+
     pub fn steer_f32(&self) -> (f32, f32) {
         (self.steer_x as f32 / 127.0, self.steer_y as f32 / 127.0)
     }
@@ -377,6 +384,18 @@ mod tests {
             x: tick as f32 * 0.1, y: 5.0, angle: 0.3, vx: 1.0, vy: -0.5,
             angvel: 0.0, fuel: 90.0, hull: 100.0, glow: 0.7,
         }
+    }
+
+    #[test]
+    fn neutral_means_no_command_at_all() {
+        assert!(InputState::default().is_neutral());
+        // Each command on its own must arm the run — including a bare stick
+        // touch (held, dead-centre: no throttle yet, no steer vector).
+        assert!(!InputState { throttle: 1, ..Default::default() }.is_neutral());
+        assert!(!InputState { rot: -1, ..Default::default() }.is_neutral());
+        assert!(!InputState { steer_x: 3, ..Default::default() }.is_neutral());
+        assert!(!InputState { steer_y: -3, ..Default::default() }.is_neutral());
+        assert!(!InputState { stick_held: 1, ..Default::default() }.is_neutral());
     }
 
     #[test]

@@ -637,6 +637,16 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   (`crash_timer <= 0`) records the tick's input + periodic keyframes; the
   impact tick itself is captured. Reset adopts the ended recording as the
   ghost and starts a fresh one.
+- **Armed-but-idle start (#76)**: after spawn/reset/level-load the run holds
+  still — no `sim.tick`, no `record_tick`, `phys_accum` drained — until the
+  first non-neutral `InputState` (`is_neutral()` in replay.rs: any throttle,
+  rotation, or bare stick touch arms it). Keyframe 0 = the spawn state,
+  tick 1 = the first commanded tick, so replays begin with action and the
+  ghost's lockstep clock (`recorder.ticks()`) stays fair automatically. The
+  `run_started` gate lives in the frame loop **outside** `Sim::tick` (input
+  gathering is frame-level; the sim stays a pure function of the input
+  stream — resim never sees the wait because it was never ticked or
+  recorded).
 - **Crash dialog**: in-canvas it's now only a dimmed backdrop + "CRASHED" +
   keyboard hints — on web the **HTML game-over screen** covers it and drives
   the choices through the menu bridge (`ui_command`: 1 = fly again → the
