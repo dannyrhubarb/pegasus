@@ -98,12 +98,16 @@ Four input paths feed the same physics, combined in the main loop:
     until the nose settles within `FLIP_DONE_RAD (~20°)` — the gate resets
     the ramp, so post-flip thrust also fades in. (There is no separate JET
     thrust-only button any more — stick-hold covers one-handed play.)
-  - **Floating**: a touch below `STICK_ZONE = 0.55` of the viewport height
-    (only while flying) spawns the stick centred under the finger and claims
-    that touch id; other fresh touches become `ui_tap`s for the crash-dialog
-    / replay-skip hit-testing. Release parks the stick bottom-right as a
-    translucent ghost. Positions are physical px (`touches()` and
-    `screen_*()` share that space; a mouse press maps in via `× dpi`).
+  - **Floating**: while flying, a fresh touch **anywhere on screen** spawns
+    the stick centred under the finger and claims that touch id — the whole
+    canvas is the flight-control surface (the pause/restart buttons are HTML
+    and swallow their own taps, so they never reach the canvas). The old
+    lower-`STICK_ZONE` restriction was a leftover from the in-canvas
+    crash-dialog buttons (now HTML) and is gone. During the dialog/replay
+    `stick_active` is false, so fresh touches become `ui_tap`s (replay skip).
+    Release parks the stick bottom-right as a translucent ghost. Positions
+    are physical px (`touches()` and `screen_*()` share that space; a mouse
+    press maps in via `× dpi`).
 - **Game controller** (BT/USB, web): `index.html` polls the **Web Gamepad API**
   each `requestAnimationFrame` and forwards to exported `set_pad_thrust(i32)` /
   `set_pad_torque(f32)` / `set_pad_reset()`. Mapping (standard layout): thrust =
