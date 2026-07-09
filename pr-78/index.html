@@ -1,0 +1,1062 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Pegasus — Moon Lander</title>
+  <link rel="manifest" href="./manifest.json">
+  <meta name="theme-color" content="#14141e">
+  <!-- iOS home screen support -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Pegasus">
+  <link rel="apple-touch-icon" href="./icon-180.png">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { overflow: hidden; background: #14141e; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+
+    /* The attitude stick is drawn IN-CANVAS by the game (macroquad touch
+       API); no DOM element. touch-action:none on the canvas stops iOS
+       scroll/zoom gestures from hijacking flight touches. */
+    canvas { touch-action: none; }
+
+    :root {
+      --text: #dde9ff;
+      --dim: #8ba8d6;
+      --faint: #6c84ad;
+      --line: rgba(140, 200, 255, 0.55);
+      --panel: rgba(24, 40, 72, 0.75);
+      --panel-hi: rgba(60, 110, 190, 0.55);
+      --amber: #ffbe5a;
+      --mono: "SF Mono", "Menlo", "Consolas", monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    /* --- In-game corner buttons (pause + restart) -------------------------
+       The only HTML visible during flight. Round, translucent, clear of the
+       notch; they swallow mousedown/touchstart so a tap never reaches the
+       canvas (which would fire the thruster). Hidden while the menu is up. */
+    #hud-btns {
+      position: fixed;
+      top: calc(env(safe-area-inset-top) + 12px);
+      right: calc(env(safe-area-inset-right) + 12px);
+      display: none; /* shown when the menu closes */
+      gap: 10px;
+      z-index: 10;
+    }
+    #hud-btns.on { display: flex; }
+    .cbtn {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: rgba(40, 60, 100, 0.55);
+      border: 1.5px solid rgba(180, 210, 255, 0.7);
+      color: rgba(220, 235, 255, 0.95);
+      font: 700 17px/37px var(--sans);
+      text-align: center;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+    }
+    .cbtn:hover { background: rgba(80, 140, 220, 0.7); }
+    #restart-btn { font-size: 22px; }
+
+    /* --- Game menu --------------------------------------------------------
+       One fullscreen overlay, one visible .screen at a time. Styled to match
+       the game: deep-space navy, slate-blue lines, amber accents — and no
+       native-looking form elements (custom toggle switches below). */
+    #menu {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background:
+        radial-gradient(120% 90% at 50% 10%, rgba(38, 58, 100, 0.55), rgba(0, 0, 0, 0) 60%),
+        rgba(10, 16, 30, 0.94);
+      color: var(--text);
+      font-family: var(--sans);
+      z-index: 20;
+      pointer-events: all;
+    }
+    #menu.open { display: flex; }
+    .screen {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      width: 100%;
+      max-height: 100%;
+      overflow-y: auto;
+      padding: max(env(safe-area-inset-top), 28px) 24px max(env(safe-area-inset-bottom), 28px);
+      text-align: center;
+    }
+    .screen.on { display: flex; }
+
+    .title {
+      font-size: clamp(40px, 9vw, 72px);
+      font-weight: 800;
+      letter-spacing: 0.18em;
+      margin-right: -0.18em; /* recentre: tracking pads the right edge */
+      color: #ffffff;
+      text-shadow: 0 0 24px rgba(110, 193, 255, 0.55);
+    }
+    .subtitle {
+      font-size: clamp(13px, 3vw, 17px);
+      letter-spacing: 0.5em;
+      margin-right: -0.5em;
+      color: var(--dim);
+      margin-bottom: 14px;
+    }
+    .h2 {
+      font-size: clamp(22px, 5vw, 30px);
+      font-weight: 700;
+      letter-spacing: 0.25em;
+      margin-right: -0.25em;
+      margin-bottom: 8px;
+    }
+    .title.crash {
+      font-size: clamp(34px, 8vw, 60px);
+      color: #ff5a3c;
+      text-shadow: 0 0 24px rgba(255, 90, 60, 0.45);
+    }
+
+    .mbtn {
+      width: min(340px, 84vw);
+      padding: 14px 18px;
+      border: 1.5px solid var(--line);
+      border-radius: 14px;
+      background: var(--panel);
+      color: var(--text);
+      font: 700 17px/1.2 var(--sans);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+    }
+    .mbtn:hover { background: var(--panel-hi); }
+    .mbtn.primary {
+      border-color: var(--amber);
+      color: var(--amber);
+      text-shadow: 0 0 14px rgba(255, 190, 90, 0.45);
+    }
+    .mbtn.back {
+      width: auto;
+      padding: 10px 22px;
+      border-radius: 22px;
+      font-size: 14px;
+      color: var(--dim);
+      margin-top: 10px;
+    }
+    .hint { font-size: 14px; color: var(--faint); }
+
+    /* Rows shared by the level list and the high-score list */
+    .rowlist {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      width: min(440px, 88vw);
+    }
+    .rowlist li, .rowlist .row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--panel);
+      border: 1.5px solid rgba(140, 200, 255, 0.35);
+      border-radius: 12px;
+      padding: 12px 14px;
+      font-size: clamp(15px, 3.2vw, 18px);
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .rowlist .row:hover { background: var(--panel-hi); }
+    .rowlist .row.sel {
+      border-color: var(--amber);
+      box-shadow: 0 0 12px rgba(255, 190, 90, 0.25) inset;
+    }
+    .rowlist .row .lname { flex: 1; text-align: left; font-weight: 700; letter-spacing: 0.06em; }
+    .rowlist .row .lbest { color: var(--dim); font-family: var(--mono); font-size: 0.85em; }
+    #scores-list .rank { color: var(--faint); width: 1.4em; }
+    #scores-list .dist { font-weight: 700; min-width: 4.5em; text-align: right; font-family: var(--mono); }
+    #scores-list .when { color: var(--dim); flex: 1; text-align: right; font-size: 0.8em; }
+    #scores-list .watch {
+      font: 600 13px/1 var(--sans);
+      color: var(--text);
+      background: rgba(60, 110, 190, 0.5);
+      border: 1.5px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+    #scores-list .watch:hover { background: rgba(60, 110, 190, 0.8); }
+
+    /* Settings rows: custom toggle switches, no native checkboxes */
+    .setrow {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      width: min(340px, 84vw);
+      background: var(--panel);
+      border: 1.5px solid rgba(140, 200, 255, 0.35);
+      border-radius: 12px;
+      padding: 12px 14px;
+      font-size: clamp(15px, 3.4vw, 18px);
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .setrow input { display: none; }
+    .setrow .tgl {
+      flex: 0 0 auto;
+      width: 50px;
+      height: 28px;
+      border-radius: 14px;
+      border: 1.5px solid var(--line);
+      background: rgba(10, 18, 36, 0.9);
+      position: relative;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .setrow .tgl::after {
+      content: "";
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 19px;
+      height: 19px;
+      border-radius: 50%;
+      background: var(--dim);
+      transition: left 0.15s, background 0.15s;
+    }
+    .setrow input:checked + .tgl {
+      background: rgba(80, 150, 230, 0.45);
+      border-color: #6ec1ff;
+    }
+    .setrow input:checked + .tgl::after {
+      left: 25px;
+      background: #ffffff;
+    }
+
+    /* About rows */
+    .info-row { font-size: clamp(15px, 3.4vw, 20px); }
+    .info-label { color: var(--dim); margin-bottom: 4px; }
+    .info-value { font-family: var(--mono); font-size: clamp(17px, 4vw, 26px); color: #fff; }
+
+    /* Game-over stats */
+    #go-stats {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-bottom: 10px;
+    }
+    #go-dist { font: 700 clamp(30px, 8vw, 48px)/1.1 var(--mono); color: #fff; }
+    #go-best { font-size: clamp(14px, 3.2vw, 17px); color: var(--dim); }
+
+    /* "New build available" toast — GitHub Pages caches index.html for
+       ~10 min, so a fresh deploy can serve a stale page; version.json is
+       fetched with the cache bypassed and a mismatch shows this. */
+    #update-toast {
+      position: fixed;
+      top: calc(env(safe-area-inset-top) + 64px);
+      left: 50%;
+      transform: translateX(-50%) translateY(-16px);
+      background: rgba(24, 40, 72, 0.95);
+      border: 1.5px solid rgba(140, 200, 255, 0.8);
+      border-radius: 24px;
+      color: #dde9ff;
+      font: 600 15px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 12px 20px;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      pointer-events: all;
+      z-index: 30;
+      opacity: 0;
+      transition: opacity 0.3s, transform 0.3s;
+    }
+    #update-toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+  </style>
+</head>
+<body>
+  <canvas id="glcanvas" tabindex="1"></canvas>
+
+  <!-- Probe elements to read the safe-area insets in CSS pixels (all four sides) -->
+  <div id="safe-area-probe" style="position:fixed;top:0;left:0;height:env(safe-area-inset-top);width:env(safe-area-inset-left);pointer-events:none;"></div>
+  <div id="safe-area-probe-br" style="position:fixed;bottom:0;right:0;height:env(safe-area-inset-bottom);width:env(safe-area-inset-right);pointer-events:none;"></div>
+
+  <!-- In-game corner buttons: pause + restart (visible only during play) -->
+  <div id="hud-btns">
+    <div id="restart-btn" class="cbtn" role="button" aria-label="Restart" title="Restart">&#10227;</div>
+    <div id="pause-btn" class="cbtn" role="button" aria-label="Pause" title="Pause">&#10073;&#10073;</div>
+  </div>
+
+  <!-- Game menu: open at boot (markup, not JS, so it shows while wasm loads) -->
+  <div id="menu" class="open" role="dialog" aria-modal="true">
+
+    <div class="screen on" id="scr-home">
+      <div class="title">PEGASUS</div>
+      <div class="subtitle">MOON LANDER</div>
+      <div class="mbtn primary" id="btn-fly">Fly</div>
+      <div class="mbtn" data-goto="scr-levels">Levels</div>
+      <div class="mbtn" data-goto="scr-scores">High scores</div>
+      <div class="mbtn" data-goto="scr-settings">Settings</div>
+      <div class="mbtn" data-goto="scr-about">About</div>
+    </div>
+
+    <div class="screen" id="scr-levels">
+      <div class="h2">LEVELS</div>
+      <div class="rowlist" id="level-list"></div>
+      <div class="hint" id="level-none">Level list unavailable — flying the built-in level</div>
+      <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
+    </div>
+
+    <div class="screen" id="scr-scores">
+      <div class="h2">HIGH SCORES</div>
+      <div class="hint" id="scores-level"></div>
+      <ol class="rowlist" id="scores-list"></ol>
+      <div class="hint" id="scores-empty">No flights recorded yet</div>
+      <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
+    </div>
+
+    <div class="screen" id="scr-settings">
+      <div class="h2">SETTINGS</div>
+      <label class="setrow" id="vel-toggle-row">
+        <span>Velocity vector</span>
+        <input type="checkbox" id="vel-toggle"><span class="tgl"></span>
+      </label>
+      <label class="setrow" id="inv-toggle-row">
+        <span>Invert stick</span>
+        <input type="checkbox" id="inv-toggle"><span class="tgl"></span>
+      </label>
+      <label class="setrow" id="ghost-toggle-row">
+        <span>Race best ghost</span>
+        <input type="checkbox" id="ghost-toggle"><span class="tgl"></span>
+      </label>
+      <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
+    </div>
+
+    <div class="screen" id="scr-about">
+      <div class="h2">ABOUT</div>
+      <div class="info-row">
+        <div class="info-label">Build revision</div>
+        <div class="info-value" id="git-rev">f860bb3-pr-78</div>
+      </div>
+      <div class="info-row">
+        <div class="info-label">Build time</div>
+        <div class="info-value" id="build-time">2026-07-09 05:33 UTC</div>
+      </div>
+      <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
+      <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
+    </div>
+
+    <div class="screen" id="scr-pause">
+      <div class="h2">PAUSED</div>
+      <div class="mbtn primary" id="btn-resume">Resume</div>
+      <div class="mbtn" id="btn-exit">Exit to menu</div>
+    </div>
+
+    <div class="screen" id="scr-gameover">
+      <div class="title crash">CRASHED</div>
+      <div id="go-stats">
+        <span id="go-dist"></span>
+        <span id="go-best"></span>
+      </div>
+      <div class="mbtn primary" id="btn-again">Fly again</div>
+      <div class="mbtn" id="btn-replay">Watch replay</div>
+      <div class="mbtn" id="btn-gomenu">Main menu</div>
+    </div>
+
+  </div>
+
+  <!-- Stale-cache reload toast (hidden until a newer version.json is seen) -->
+  <div id="update-toast" role="button">⟳ New build available — tap to reload</div>
+
+  <script>
+    // Boot guard — deliberately in its OWN <script> tag: script tags parse
+    // independently, so a SyntaxError in the bundle or the main inline
+    // script below cannot kill this one (that failure mode shipped once:
+    // a redeclared bundle global silently killed the whole main script and
+    // the page showed only HTML chrome with no error anywhere). Shows any
+    // script error on screen and offers a cache-bypass reload if the wasm
+    // hasn't started.
+    (function () {
+      var box = null;
+      function show(msg) {
+        if (!box) {
+          box = document.createElement("div");
+          box.style.cssText = "position:fixed;left:12px;right:12px;bottom:12px;" +
+            "z-index:99;background:rgba(130,25,25,0.93);color:#fff;" +
+            "font:13px/1.45 -apple-system,BlinkMacSystemFont,sans-serif;" +
+            "padding:10px 14px;border-radius:10px;white-space:pre-wrap;";
+          box.addEventListener("click", function () {
+            location.replace(location.pathname + "?fresh=" + Date.now());
+          });
+          document.body.appendChild(box);
+        }
+        box.textContent = msg + "\n(tap here to reload the latest build)";
+      }
+      // Rust panics print their message + location via console.error just
+      // before the wasm traps, but the error event that follows is muted to a
+      // bare "Script error." (no file/line) on iOS Safari — wasm frames fail
+      // its same-origin check. Mirror the last console.error so the banner
+      // can show the real panic instead. Installed here (before the bundle
+      // loads) so the bundle's console_error import routes through it.
+      var lastConsoleError = "";
+      var origConsoleError = console.error;
+      console.error = function () {
+        try {
+          lastConsoleError =
+            Array.prototype.map.call(arguments, String).join(" ").slice(0, 300);
+        } catch (_) { /* never let logging break the logger */ }
+        return origConsoleError.apply(console, arguments);
+      };
+      window.addEventListener("error", function (e) {
+        // Fully-anonymous error (no filename) with no console.error trace:
+        // cannot be ours. Same-origin scripts always report file:line, and a
+        // wasm panic always logs through the panic hook first. What does land
+        // here is Safari-injected third-party JS — reproduced live: opening
+        // the iOS share sheet runs share/action extensions' preprocessing
+        // scripts in the page, and any error they throw arrives as a muted
+        // "Script error." Don't paint the banner over that noise.
+        if (!e.filename && !lastConsoleError) return;
+        var msg = "Script error: " + (e.message || "unknown") +
+          (e.filename ? "\n" + e.filename.split("/").pop() + ":" + e.lineno : "");
+        // Anonymous or wasm-trap error: iOS Safari mutes wasm errors to a
+        // bare "Script error." (no filename); Chrome attributes them to the
+        // .wasm URL but the message is just "unreachable". Either way the
+        // last console.error (the panic hook's output) is the real cause.
+        if ((!e.filename || /\.wasm(\?|$)/.test(e.filename)) && lastConsoleError) {
+          msg += "\n" + lastConsoleError;
+        }
+        show(msg);
+      });
+      window.addEventListener("unhandledrejection", function (e) {
+        if (e.reason == null) return; // contentless → same third-party noise rule
+        show("Unhandled promise rejection: " + String(e.reason).slice(0, 300));
+      });
+      setTimeout(function () {
+        if (typeof wasm_exports === "undefined" || !wasm_exports) {
+          show("Game failed to start (wasm not running after 8 s).");
+        }
+      }, 8000);
+    })();
+  </script>
+  <script src="./mq_js_bundle.js"></script>
+  <script>
+    function call(name, ...args) {
+      if (typeof wasm_exports !== "undefined" && wasm_exports[name]) {
+        wasm_exports[name](...args);
+      }
+    }
+
+    // --- Attitude stick + main engine ---
+    // The floating attitude stick is drawn and read IN-CANVAS by the game
+    // (macroquad touch API, mouse-synthesis disabled). No DOM stick, no
+    // document touch handlers — holding the stick lights the engine. The
+    // only touch setting forwarded from here is Invert stick (wired below).
+
+    // --- Bluetooth / USB game controller (Web Gamepad API) ---
+    // A controller paired with the device shows up in navigator.getGamepads().
+    // We poll it each animation frame and forward to dedicated WASM exports
+    // (set_pad_*), which are combined with touch/keyboard inside the game.
+    //   Thrust   : A / Cross (0), R2 trigger (7), or D-pad up (12)
+    //   Steer    : left stick X (axes[0], dead-zoned) or D-pad left/right (14/15)
+    //   Reset    : Start (9) or Y / Triangle (3)
+    // Standard mapping is assumed (the common layout for BT pads in browsers).
+    const STICK_DEADZONE = 0.18;
+    let padPolling = false;
+    let prevResetPressed = false;
+
+    function firstGamepad() {
+      const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+      for (const p of pads) if (p) return p;
+      return null;
+    }
+
+    function pollGamepad() {
+      const pad = firstGamepad();
+      if (!pad) {
+        // Controller dropped out — release any held inputs and stop polling.
+        call("set_pad_thrust", 0);
+        call("set_pad_torque", 0);
+        prevResetPressed = false;
+        padPolling = false;
+        return;
+      }
+
+      const btn = i => pad.buttons[i] && pad.buttons[i].pressed;
+      const val = i => (pad.buttons[i] ? pad.buttons[i].value : 0);
+
+      // Thrust: A button, R2 trigger (analog → treat >0.3 as on), or D-pad up.
+      const thrust = (btn(0) || val(7) > 0.3 || btn(12)) ? 1 : 0;
+      call("set_pad_thrust", thrust);
+
+      // Steering: analog left stick with a dead-zone, rescaled so it still
+      // reaches ±1 past the dead-zone. D-pad overrides to full deflection.
+      let x = pad.axes[0] || 0;
+      if (Math.abs(x) < STICK_DEADZONE) {
+        x = 0;
+      } else {
+        x = (x - Math.sign(x) * STICK_DEADZONE) / (1 - STICK_DEADZONE);
+      }
+      if (btn(14)) x = -1;
+      else if (btn(15)) x = 1;
+      call("set_pad_torque", Math.max(-1, Math.min(1, x)));
+
+      // Reset: edge-triggered so a held button fires once.
+      const resetPressed = btn(9) || btn(3);
+      if (resetPressed && !prevResetPressed) call("set_pad_reset");
+      prevResetPressed = resetPressed;
+
+      requestAnimationFrame(pollGamepad);
+    }
+
+    function startPadPolling() {
+      if (padPolling) return;
+      padPolling = true;
+      requestAnimationFrame(pollGamepad);
+    }
+
+    window.addEventListener("gamepadconnected", startPadPolling);
+    // Some browsers report an already-connected pad without firing the event
+    // (e.g. after a reload), so probe once the WASM exports are ready too.
+    if (firstGamepad()) startPadPolling();
+
+    // Report the safe-area insets (all four sides) to the game, in CSS px.
+    // The canvas is 100vh, so it extends UNDER the floating browser toolbar;
+    // env(safe-area-inset-bottom) only covers the home indicator, so the
+    // bottom inset also folds in the toolbar height measured via
+    // visualViewport (window height minus the actually-visible height).
+    const safeProbe = document.getElementById("safe-area-probe");
+    const safeProbeBR = document.getElementById("safe-area-probe-br");
+    function reportSafeArea() {
+      const tl = safeProbe.getBoundingClientRect();
+      const br = safeProbeBR.getBoundingClientRect();
+      const vv = window.visualViewport;
+      // The canvas is 100vh = the LARGE viewport (toolbar retracted); vh units
+      // don't shrink when the toolbar shows. visualViewport.height is the
+      // ACTUALLY visible height. Their difference is what the floating toolbar
+      // + home indicator hide at the bottom. (window.innerHeight is unreliable
+      // here — it often already equals visualViewport.height.)
+      let obscuredBottom = 0;
+      if (vv) {
+        const canvas = document.getElementById("glcanvas");
+        const ch = canvas ? canvas.getBoundingClientRect().height : window.innerHeight;
+        obscuredBottom = Math.max(0, Math.round(ch - vv.height - vv.offsetTop));
+      }
+      const bottom = Math.max(br.height, obscuredBottom);
+      call("set_safe_area", tl.height, tl.width, bottom, br.width);
+    }
+    window.addEventListener("resize", reportSafeArea);
+    window.addEventListener("orientationchange", () => setTimeout(reportSafeArea, 300));
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", reportSafeArea);
+      window.visualViewport.addEventListener("scroll", reportSafeArea);
+    }
+    // The WASM exports aren't ready immediately; poll briefly until it loads.
+    const safeAreaTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_safe_area) {
+        reportSafeArea();
+        clearInterval(safeAreaTimer);
+      }
+    }, 200);
+
+    // =====================================================================
+    // Game menu state machine
+    // =====================================================================
+    // One overlay (#menu), one visible .screen. `overlay` is the open
+    // screen's id, or null while playing. The wasm side is driven through
+    // set_ui_pause (freeze the live sim while any screen is up) and
+    // ui_command (1 = reset / fly again, 2 = watch the last run's replay),
+    // and observed through ui_state (0 flying / 1 wreck / 2 crash dialog /
+    // 3 replay) + cur_dist — see the bridge block in src/main.rs.
+    const menuEl = document.getElementById("menu");
+    const hudBtns = document.getElementById("hud-btns");
+    let overlay = "scr-home"; // matches the markup's boot state
+    let wantPause = 1;        // re-asserted once the exports load
+
+    function setPause(on) {
+      wantPause = on;
+      call("set_ui_pause", on);
+    }
+    const pauseTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_ui_pause) {
+        wasm_exports.set_ui_pause(wantPause);
+        clearInterval(pauseTimer);
+      }
+    }, 200);
+
+    function showScreen(id) {
+      overlay = id;
+      menuEl.classList.add("open");
+      hudBtns.classList.remove("on");
+      menuEl.querySelectorAll(".screen").forEach(s =>
+        s.classList.toggle("on", s.id === id));
+      setPause(1);
+    }
+    function closeMenu() {
+      overlay = null;
+      menuEl.classList.remove("open");
+      hudBtns.classList.add("on");
+      setPause(0);
+    }
+
+    // Taps inside the menu / corner buttons must never reach the canvas
+    // (mousedown fires the thruster on desktop).
+    const swallow = e => e.stopPropagation();
+    ["mousedown", "touchstart"].forEach(ev => {
+      menuEl.addEventListener(ev, swallow);
+      hudBtns.addEventListener(ev, swallow);
+    });
+
+    // Plain navigation buttons (Levels / High scores / Settings / About / Back).
+    menuEl.querySelectorAll("[data-goto]").forEach(el =>
+      el.addEventListener("click", () => showScreen(el.dataset.goto)));
+
+    // Home / pause / game-over actions.
+    document.getElementById("btn-fly").addEventListener("click", closeMenu);
+    document.getElementById("btn-resume").addEventListener("click", closeMenu);
+    document.getElementById("btn-exit").addEventListener("click", () => {
+      // Abandoning the run ends it (a reset while alive also banks it in the
+      // high scores — "longest flights"); the fresh ship waits, paused,
+      // behind the menu.
+      call("ui_command", 1);
+      showScreen("scr-home");
+    });
+    document.getElementById("btn-again").addEventListener("click", () => {
+      call("ui_command", 1);
+      closeMenu();
+    });
+    document.getElementById("btn-replay").addEventListener("click", () => {
+      call("ui_command", 2);
+      closeMenu(); // state flips to replay; the poll below brings us back
+    });
+    document.getElementById("btn-gomenu").addEventListener("click", () => {
+      call("ui_command", 1);
+      showScreen("scr-home");
+    });
+
+    // In-game corner buttons.
+    const pauseBtn = document.getElementById("pause-btn");
+    const restartBtn = document.getElementById("restart-btn");
+    function onTap(el, fn) {
+      el.addEventListener("click", e => { e.stopPropagation(); fn(); });
+      el.addEventListener("touchstart", e => {
+        e.preventDefault();
+        e.stopPropagation();
+        fn();
+      }, { passive: false });
+    }
+    onTap(pauseBtn, () => showScreen("scr-pause"));
+    onTap(restartBtn, () => call("ui_command", 1));
+
+    // Esc toggles the pause view (desktop nicety).
+    window.addEventListener("keydown", e => {
+      if (e.key !== "Escape") return;
+      if (overlay === null) showScreen("scr-pause");
+      else if (overlay === "scr-pause") closeMenu();
+    });
+
+    // Watch the game's mode: a finished crash (state 2) with no overlay up
+    // becomes the game-over screen; a replay watched from the menu (state 3)
+    // returns to the menu when it ends mid-flight (a wreck waiting shows the
+    // game-over screen through the state-2 branch instead).
+    const goDist = document.getElementById("go-dist");
+    const goBest = document.getElementById("go-best");
+    let prevState = 0;
+    let watchFromMenu = false;
+    setInterval(() => {
+      if (typeof wasm_exports === "undefined" || !wasm_exports.ui_state) return;
+      const st = wasm_exports.ui_state();
+      if (st === 2 && overlay === null) {
+        goDist.textContent = Math.round(wasm_exports.cur_dist()) + " m";
+        goBest.textContent = "best " + Math.round(wasm_exports.get_best_dist()) + " m";
+        showScreen("scr-gameover");
+      }
+      if (watchFromMenu && prevState === 3 && st !== 3) {
+        watchFromMenu = false;
+        if (st !== 2) showScreen("scr-scores");
+      }
+      prevState = st;
+    }, 200);
+
+    // If the deploy-time placeholders weren't substituted (e.g. opened locally),
+    // show a friendly fallback instead of the raw token.
+    // sed replaces the placeholders everywhere including in string literals,
+    // so compare with startsWith("__") rather than a literal match.
+    const gitRev = document.getElementById("git-rev");
+    const buildTime = document.getElementById("build-time");
+    if (gitRev.textContent.trim().startsWith("__")) {
+      gitRev.textContent = "dev (local build)";
+    }
+    if (buildTime.textContent.trim().startsWith("__")) {
+      buildTime.textContent = "dev (local build)";
+    }
+
+    // Cache-bust the wasm with the deploy revision so a fresh deploy never
+    // serves a stale binary from the browser/CDN cache. Locally the
+    // placeholder is untouched (sed only runs at deploy) → plain URL.
+    const wasmRev = "f860bb3-pr-78";
+    load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
+
+    // Stamp the deploy revision into the game (first 8 hex chars of the git
+    // hash → u32) so serialized replay blobs record which build flew them.
+    // 0 = local dev build. Exports aren't ready immediately; retry like the
+    // velocity-toggle probe below.
+    const buildId = wasmRev.startsWith("__")
+      ? 0
+      : (parseInt(wasmRev.slice(0, 8), 16) || 0) >>> 0;
+    const buildIdTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_build_id) {
+        wasm_exports.set_build_id(buildId);
+        clearInterval(buildIdTimer);
+      }
+    }, 200);
+
+    // --- Stale-cache detection ---
+    // GitHub Pages caches index.html for ~10 minutes, so right after a deploy
+    // this page (and the ?v= it carries) can be the PREVIOUS build. Compare
+    // the baked-in revision against version.json fetched with the cache
+    // bypassed; on mismatch show a reload toast. Reloading navigates to a
+    // ?fresh=<ts> URL, which skips the cached HTML entirely.
+    const updateToast = document.getElementById("update-toast");
+    let lastVersionCheck = 0;
+
+    // Navigate to a ?fresh=<ts> URL: a unique query string bypasses the
+    // cached copy of index.html (a plain reload would re-serve it).
+    function freshReload() {
+      location.replace(location.pathname + "?fresh=" + Date.now());
+    }
+
+    function checkVersion() {
+      if (wasmRev.startsWith("__")) return;          // local dev: no version.json
+      const now = Date.now();
+      if (now - lastVersionCheck < 30000) return;    // throttle
+      lastVersionCheck = now;
+      fetch("./version.json?nocache=" + now, { cache: "no-store" })
+        .then(r => (r.ok ? r.json() : null))
+        .then(v => {
+          if (v && v.revision && v.revision !== wasmRev) {
+            updateToast.classList.add("show");
+          }
+        })
+        .catch(() => {});                            // offline / pre-toast deploys: ignore
+    }
+
+    updateToast.addEventListener("mousedown", e => e.stopPropagation());
+    updateToast.addEventListener("click", e => {
+      e.stopPropagation();
+      freshReload();
+    });
+    updateToast.addEventListener("touchstart", e => {
+      e.preventDefault();
+      e.stopPropagation();
+      freshReload();
+    }, { passive: false });
+
+    // Velocity-vector toggle: forwarded to the game, persisted per device.
+    const velToggle = document.getElementById("vel-toggle");
+    velToggle.checked = localStorage.getItem("pegasus_show_vel") === "1";
+    function applyVelSetting() {
+      call("set_show_velocity", velToggle.checked ? 1 : 0);
+    }
+    velToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_show_vel", velToggle.checked ? "1" : "0");
+      applyVelSetting();
+    });
+    // The WASM exports aren't ready immediately; apply the saved value once
+    // they are (same pattern as the safe-area probe).
+    const velTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_show_velocity) {
+        applyVelSetting();
+        clearInterval(velTimer);
+      }
+    }, 200);
+
+    // Invert-stick toggle: negates the commanded nose direction in-game
+    // (push down = nose up). Forwarded to the WASM `set_invert_stick` export
+    // and persisted per device; re-applied once the exports load (same
+    // pattern as the velocity toggle).
+    const invToggle = document.getElementById("inv-toggle");
+    invToggle.checked = localStorage.getItem("pegasus_invert_stick") === "1";
+    function applyInvSetting() {
+      call("set_invert_stick", invToggle.checked ? 1 : 0);
+    }
+    invToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_invert_stick", invToggle.checked ? "1" : "0");
+      applyInvSetting();
+    });
+    const invTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_invert_stick) {
+        applyInvSetting();
+        clearInterval(invTimer);
+      }
+    }, 200);
+
+    // --- Level picker ---
+    // Levels are DATA files (levels/*.level) fetched at runtime, so new
+    // levels deploy without recompiling the wasm. levels/manifest.json lists
+    // them in menu order; each file's `name =` line labels its row. The
+    // selected level's text is written into a wasm-side buffer
+    // (level_buf_ptr + load_level) and the game restarts on it. The choice
+    // persists in localStorage, as does the best distance per level file
+    // (mirrored from the get_best_dist export below). If the manifest can't
+    // be fetched the list stays empty (with a hint) and the game keeps its
+    // built-in level.
+    const levelList = document.getElementById("level-list");
+    const levelNone = document.getElementById("level-none");
+    const scoresLevelEl = document.getElementById("scores-level");
+    const levelTexts = {};        // file -> level text
+    const levelNames = {};        // file -> display name
+    const levelFiles = [];        // manifest order
+    let currentLevelFile = null;  // set once the level actually reached wasm
+
+    function bestFor(file) {
+      return parseFloat(localStorage.getItem("pegasus_best_" + file) || "0");
+    }
+
+    function renderLevels() {
+      levelList.textContent = "";
+      for (const file of levelFiles) {
+        const row = document.createElement("div");
+        row.className = "row" + (file === currentLevelFile ? " sel" : "");
+        const name = document.createElement("span");
+        name.className = "lname";
+        name.textContent = levelNames[file];
+        const best = document.createElement("span");
+        best.className = "lbest";
+        const b = bestFor(file);
+        best.textContent = b > 0 ? "best " + Math.round(b) + " m" : "—";
+        row.append(name, best);
+        row.addEventListener("click", () => {
+          localStorage.setItem("pegasus_level", file);
+          pushLevel(file);
+        });
+        levelList.appendChild(row);
+      }
+    }
+
+    function pushLevel(file) {
+      const text = levelTexts[file];
+      if (text === undefined) return;
+      const push = () => {
+        if (typeof wasm_exports === "undefined" || !wasm_exports.load_level) return false;
+        collectEndedRun(); // bank any just-ended run under the OLD level first
+        const bytes = new TextEncoder().encode(text);
+        const ptr = wasm_exports.level_buf_ptr(bytes.length);
+        new Uint8Array(wasm_memory.buffer, ptr, bytes.length).set(bytes);
+        wasm_exports.load_level(bytes.length); // also clears the in-game best
+        const best = bestFor(file);
+        if (best > 0) wasm_exports.set_best_dist(best);
+        currentLevelFile = file;
+        renderLevels();
+        renderScores();
+        pushGhost();
+        return true;
+      };
+      // Exports may not be ready yet (startup restore) — retry like the
+      // other setting probes.
+      if (!push()) {
+        const t = setInterval(() => { if (push()) clearInterval(t); }, 200);
+      }
+    }
+
+    fetch("levels/manifest.json?nocache=" + Date.now(), { cache: "no-store" })
+      .then(r => (r.ok ? r.json() : null))
+      .then(async m => {
+        if (!m || !Array.isArray(m.levels)) return;
+        for (const file of m.levels) {
+          try {
+            const r = await fetch("levels/" + file + "?nocache=" + Date.now(), { cache: "no-store" });
+            if (!r.ok) continue;
+            const text = await r.text();
+            levelTexts[file] = text;
+            levelNames[file] =
+              ((text.match(/^\s*name\s*=\s*(.+)$/m) || [])[1] || file).trim();
+            levelFiles.push(file);
+          } catch (e) { /* skip an unfetchable level */ }
+        }
+        if (!levelFiles.length) return;
+        levelNone.style.display = "none";
+        const saved = localStorage.getItem("pegasus_level");
+        const start = levelTexts[saved] !== undefined ? saved : levelFiles[0];
+        pushLevel(start);
+      })
+      .catch(() => {}); // local dev without a server: keep the built-in level
+
+    // Mirror the in-game best distance into localStorage (keyed per level
+    // file), so the Distance high score survives reloads.
+    setInterval(() => {
+      if (!currentLevelFile) return;
+      if (typeof wasm_exports === "undefined" || !wasm_exports.get_best_dist) return;
+      const best = wasm_exports.get_best_dist();
+      const key = "pegasus_best_" + currentLevelFile;
+      if (best > parseFloat(localStorage.getItem(key) || "0")) {
+        localStorage.setItem(key, String(best));
+      }
+    }, 2000);
+
+    // --- High scores (top 5 longest flights per level) ---
+    // The game publishes every ended run (crash, or a manual reset while
+    // alive) as a deflated recording blob + final distance + a bumped
+    // sequence number. We poll the sequence, keep the 5 best per level in
+    // localStorage (with a timestamp — the wasm has no wall clock), render
+    // them in the High scores screen, and push the #1 recording back into
+    // the game as the "best run" ghost. The ▶ button pushes a stored blob
+    // back through watch_replay_blob, which re-simulates it — in the level
+    // it was flown in, which the blob carries in its header.
+    const scoresList = document.getElementById("scores-list");
+    const scoresEmpty = document.getElementById("scores-empty");
+
+    function loadScores(file) {
+      try {
+        const raw = localStorage.getItem("pegasus_scores_" + file);
+        const arr = raw ? JSON.parse(raw) : [];
+        return Array.isArray(arr) ? arr : [];
+      } catch (e) { return []; }
+    }
+    function saveScores(file, arr) {
+      try { localStorage.setItem("pegasus_scores_" + file, JSON.stringify(arr)); }
+      catch (e) { /* quota — the game just keeps playing without the store */ }
+    }
+    // Uint8Array <-> base64 (chunked: String.fromCharCode has an argument
+    // limit, and replay blobs can reach hundreds of KB).
+    function b64FromBytes(bytes) {
+      let out = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) {
+        out += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      }
+      return btoa(out);
+    }
+    function bytesFromB64(b64) {
+      const str = atob(b64);
+      const out = new Uint8Array(str.length);
+      for (let i = 0; i < str.length; i++) out[i] = str.charCodeAt(i);
+      return out;
+    }
+
+    function pushBlobToWasm(entry, exportName) {
+      if (typeof wasm_exports === "undefined" || !wasm_exports[exportName]) return false;
+      const bytes = bytesFromB64(entry.b);
+      const ptr = wasm_exports.blob_in_ptr(bytes.length);
+      new Uint8Array(wasm_memory.buffer, ptr, bytes.length).set(bytes);
+      return wasm_exports[exportName](bytes.length) === 1;
+    }
+
+    // The current level's best run becomes the in-game ghost (the game
+    // ignores it while the "Race best ghost" toggle is off, and drops
+    // recordings whose level doesn't match).
+    function pushGhost() {
+      if (!currentLevelFile) return;
+      const best = loadScores(currentLevelFile)[0];
+      if (best) pushBlobToWasm(best, "load_ghost_blob");
+    }
+
+    function renderScores() {
+      const scores = currentLevelFile ? loadScores(currentLevelFile) : [];
+      scoresLevelEl.textContent = currentLevelFile
+        ? (levelNames[currentLevelFile] || "") : "";
+      scoresList.textContent = "";
+      scoresEmpty.style.display = scores.length ? "none" : "";
+      scores.forEach((entry, i) => {
+        const li = document.createElement("li");
+        const rank = document.createElement("span");
+        rank.className = "rank";
+        rank.textContent = (i + 1) + ".";
+        const dist = document.createElement("span");
+        dist.className = "dist";
+        dist.textContent = Math.round(entry.d) + " m";
+        const when = document.createElement("span");
+        when.className = "when";
+        when.textContent = new Date(entry.t).toLocaleString(undefined, {
+          dateStyle: "short", timeStyle: "short",
+        });
+        const watch = document.createElement("button");
+        watch.className = "watch";
+        watch.textContent = "▶ watch";
+        watch.addEventListener("click", e => {
+          e.stopPropagation();
+          if (pushBlobToWasm(entry, "watch_replay_blob")) {
+            watchFromMenu = true;
+            closeMenu(); // the ui_state poll returns here when it ends
+          }
+        });
+        li.append(rank, dist, when, watch);
+        scoresList.appendChild(li);
+      });
+    }
+
+    // Bank a newly ended run into the store. Called on a short poll and
+    // right before a level switch (so the run lands under the level it was
+    // actually flown on).
+    let lastRunSeq = 0;
+    function collectEndedRun() {
+      if (!currentLevelFile) return;
+      if (typeof wasm_exports === "undefined" || !wasm_exports.run_seq) return;
+      const seq = wasm_exports.run_seq();
+      if (seq === lastRunSeq) return;
+      lastRunSeq = seq;
+      const len = wasm_exports.run_blob_len();
+      if (!len) return;
+      const bytes = new Uint8Array(wasm_memory.buffer, wasm_exports.run_blob_ptr(), len).slice();
+      const entry = { d: wasm_exports.run_dist(), t: Date.now(), b: b64FromBytes(bytes) };
+      const scores = loadScores(currentLevelFile);
+      scores.push(entry);
+      scores.sort((a, b) => b.d - a.d);
+      const top = scores.slice(0, 5);
+      saveScores(currentLevelFile, top);
+      renderScores();
+      renderLevels(); // the per-level best shown in the list may have moved
+      if (top[0] === entry) pushGhost(); // a new record races next spawn
+    }
+    setInterval(collectEndedRun, 500);
+
+    // "Race best ghost" toggle (on by default), same pattern as the others.
+    const ghostToggle = document.getElementById("ghost-toggle");
+    ghostToggle.checked = localStorage.getItem("pegasus_ghost") !== "0";
+    function applyGhostSetting() {
+      call("set_ghost_enabled", ghostToggle.checked ? 1 : 0);
+    }
+    ghostToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_ghost", ghostToggle.checked ? "1" : "0");
+      applyGhostSetting();
+    });
+    const ghostTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_ghost_enabled) {
+        applyGhostSetting();
+        clearInterval(ghostTimer);
+      }
+    }, 200);
+
+    // Manual reload button in the About screen — same ?fresh= mechanism as
+    // the toast, for when you want the newest build without waiting.
+    const forceReload = document.getElementById("force-reload");
+    forceReload.addEventListener("click", e => {
+      e.stopPropagation();
+      freshReload();
+    });
+
+    // Trigger the check on load, then on every plausible "came back to this
+    // page" signal AND on a slow interval — visibilitychange alone never
+    // fires in an iOS in-app webview that simply stays open, which is
+    // exactly where a stale page lingers longest. The 30 s throttle in
+    // checkVersion keeps the overlapping triggers cheap.
+    checkVersion();
+    setInterval(checkVersion, 60000);
+    window.addEventListener("focus", checkVersion);
+    window.addEventListener("pageshow", checkVersion);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") checkVersion();
+    });
+  </script>
+</body>
+</html>
