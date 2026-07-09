@@ -599,6 +599,10 @@
         <span>Race best ghost</span>
         <input type="checkbox" id="ghost-toggle"><span class="tgl"></span>
       </label>
+      <label class="setrow" id="debug-toggle-row">
+        <span>Debug HUD</span>
+        <input type="checkbox" id="debug-toggle"><span class="tgl"></span>
+      </label>
       <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
     </div>
 
@@ -606,11 +610,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">f6793a0</div>
+        <div class="info-value" id="git-rev">f91ed0f</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-09 06:41 UTC</div>
+        <div class="info-value" id="build-time">2026-07-09 08:29 UTC</div>
       </div>
       <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
       <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
@@ -965,7 +969,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "f6793a0";
+    const wasmRev = "f91ed0f";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -1312,6 +1316,24 @@
       if (typeof wasm_exports !== "undefined" && wasm_exports.set_ghost_enabled) {
         applyGhostSetting();
         clearInterval(ghostTimer);
+      }
+    }, 200);
+
+    // "Debug HUD" toggle (OFF by default): shows the developer telemetry line
+    // + the minimap. Same plumbing as the others.
+    const debugToggle = document.getElementById("debug-toggle");
+    debugToggle.checked = localStorage.getItem("pegasus_debug_hud") === "1";
+    function applyDebugSetting() {
+      call("set_debug_hud", debugToggle.checked ? 1 : 0);
+    }
+    debugToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_debug_hud", debugToggle.checked ? "1" : "0");
+      applyDebugSetting();
+    });
+    const debugTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_debug_hud) {
+        applyDebugSetting();
+        clearInterval(debugTimer);
       }
     }, 200);
 
