@@ -143,8 +143,10 @@ while the wasm loads):
 - **scr-levels**: level rows (name + stored best) replacing the old
   `<select>`; tapping pushes the level (see "Levels") and highlights it.
 - **scr-scores**: top 5 per level with ▶ watch buttons (see "High scores").
-- **scr-settings**: **Velocity vector** (`#vel-toggle-row`), **Invert stick**
-  (`#inv-toggle-row`), **Race best ghost** (`#ghost-toggle-row`, on by
+- **scr-settings**: **Sound** (`#sound-toggle-row`, `pegasus_sound`, **off by
+  default** → `set_sound_enabled` → `SOUND_ON`; off mutes the thruster loop
+  and skips boom playback), **Velocity vector** (`#vel-toggle-row`), **Invert
+  stick** (`#inv-toggle-row`), **Race best ghost** (`#ghost-toggle-row`, on by
   default) as styled toggles; same localStorage → export → atomic plumbing.
 - **scr-about**: build **git revision** + **build time** (deploy-time `sed`
   of `__GIT_REVISION__` / `__BUILD_TIME__` placeholders by `build-site`;
@@ -507,6 +509,10 @@ Two sounds, both **synthesised in memory at startup** (`wav_from_samples` +
 `thruster_wav`/`boom_wav`, driven by the deterministic `Rng`) — no asset files:
 a 1 s low-passed noise loop for the engine (started muted+looped; volume set to
 `glow * 0.6` each frame) and a 0.9 s darkening noise burst played on crash.
+**Gated by the Sound setting** (`SOUND_ON` atomic, **off by default** →
+`set_sound_enabled` export, `pegasus_sound` in localStorage): off holds the
+thruster loop at volume 0 and skips every boom play. Sound stays OFF until
+the player enables it in the menu's Settings screen.
 The macroquad `audio` feature is **wasm-only** (`[target.'cfg(target_arch =
 "wasm32")'.dependencies]` in Cargo.toml) because quad-snd needs ALSA to link on
 native Linux; native builds get macroquad's dummy backend (same API, silent),

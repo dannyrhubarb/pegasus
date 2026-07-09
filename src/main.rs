@@ -428,6 +428,15 @@ pub extern "C" fn set_show_velocity(on: i32) {
     SHOW_VEL.store(on as u32, Ordering::Relaxed);
 }
 
+// Sound (settings toggle, OFF by default): the engine rumble loop + the
+// crash boom. Off keeps the thruster loop muted and skips boom playback.
+static SOUND_ON: AtomicU32 = AtomicU32::new(0);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_sound_enabled(on: i32) {
+    SOUND_ON.store(on as u32, Ordering::Relaxed);
+}
+
 // Deploy git revision (first 8 hex chars parsed to a u32 by index.html),
 // stamped into serialized replay blobs so a future re-sim/verifier knows
 // which build flew the run. 0 = local dev build.
@@ -946,7 +955,7 @@ async fn main() {
                 crash_timer = CRASH_DIALOG_DELAY;
                 // Debris burst at the crash site.
                 boom_burst(imp.x, imp.y, &mut particles);
-                if let Some(s) = &boom_snd {
+                if SOUND_ON.load(Ordering::Relaxed) != 0 && let Some(s) = &boom_snd {
                     play_sound(s, PlaySoundParams { looped: false, volume: 0.9 });
                 }
                 // Terminal keyframe with the impact pose/velocity (the wreck
@@ -974,7 +983,7 @@ async fn main() {
                         kind: 3,
                     });
                 }
-                if let Some(s) = &boom_snd {
+                if SOUND_ON.load(Ordering::Relaxed) != 0 && let Some(s) = &boom_snd {
                     play_sound(s, PlaySoundParams { looped: false, volume: 0.25 });
                 }
             }
@@ -1099,7 +1108,7 @@ async fn main() {
                     // ended by manual reset just stop.
                     if p.sim.crashed {
                         boom_burst(f.x, f.y, &mut particles);
-                        if let Some(s) = &boom_snd {
+                        if SOUND_ON.load(Ordering::Relaxed) != 0 && let Some(s) = &boom_snd {
                             play_sound(s, PlaySoundParams { looped: false, volume: 0.9 });
                         }
                     }
@@ -1156,7 +1165,8 @@ async fn main() {
             glow = f.glow;
         }
         if let Some(s) = &thruster_snd {
-            set_sound_volume(s, glow * 0.6);
+            let vol = if SOUND_ON.load(Ordering::Relaxed) != 0 { glow * 0.6 } else { 0.0 };
+            set_sound_volume(s, vol);
         }
 
         // Column/layer ranges for the wall meshes below. Rendering derives
