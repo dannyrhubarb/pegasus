@@ -151,7 +151,9 @@ while the wasm loads):
   default** → `set_sound_enabled` → `SOUND_ON`; off mutes the thruster loop
   and skips boom playback), **Velocity vector** (`#vel-toggle-row`), **Invert
   stick** (`#inv-toggle-row`), **Race best ghost** (`#ghost-toggle-row`, on by
-  default) as styled toggles; same localStorage → export → atomic plumbing.
+  default), **Debug HUD** (`#debug-toggle-row`, `pegasus_debug_hud`, **off by
+  default** → `set_debug_hud` → `DEBUG_HUD`; shows the telemetry text line —
+  see "HUD") as styled toggles; same localStorage → export → atomic plumbing.
 - **scr-about**: build **git revision** + **build time** (deploy-time `sed`
   of `__GIT_REVISION__` / `__BUILD_TIME__` placeholders by `build-site`;
   local fallback "dev (local build)" via `startsWith("__")`) and the
@@ -236,7 +238,7 @@ generator — all world generation is `Level` methods, so a level IS the world:
 | Key | Values | Effect |
 |-----|--------|--------|
 | `name` | text | Cosmetic (picker label, not in replay headers) |
-| `scoring` | `pads` / `distance` | Pads: +100 per first landing. Distance: score = max \|x\| reached (`Sim::max_dist`; HUD shows `dist=`/`best=`) |
+| `scoring` | `pads` / `distance` | Pads: +100 per first landing. Distance: score = max \|x\| reached (`Sim::max_dist`; the big HUD readout shows it, `best` beneath) |
 | `shafts` | on/off | Off: `seg_in_opening` is always false (sealed cave), no shaft colliders load, minimap skips the carve |
 | `obstacles` | on/off | Off: `obstacle_spec` returns None everywhere (pads then skip the boulder-overlap check) |
 | `pad_spacing` | 40–2000 (clamped) | Metres between pad slots (`PAD_SPACING = 130` is the default) |
@@ -328,7 +330,7 @@ gradient. (Previously a warm-brown set `80/64/50 · 118/95/72 · 150/120/88`.)
 - `glow`: smoothed 0→1 float, exponentially approaches the throttle with factor 0.12 per frame.
 - Thrust applies upward force along the ship's heading via Rapier `add_force`, scaled by the throttle (max force 8.0).
 - The body carries `linear_damping(0.2)` — imperceptible at landing speeds, but it caps how much momentum piles up on long burns/free-falls.
-- **Velocity vector** (opt-in, **off by default**): an arrow drawn from the ship along its momentum, length grows with speed, color = green ≤ 1 m/s (landable) / amber ≤ `CRASH_DV_SOFT` (damage-free touch) / red above (damaging); hidden under 0.25 m/s and while crashed. Toggled by the "Velocity vector" toggle in the menu's Settings screen → exported `set_show_velocity(i32)` → `SHOW_VEL` atomic; the choice persists per device in `localStorage` (`pegasus_show_vel`) and is re-applied once the WASM exports load. The HUD line always appends `v=…` in the same danger color regardless of the toggle.
+- **Velocity vector** (opt-in, **off by default**): an arrow drawn from the ship along its momentum, length grows with speed, color = green ≤ 1 m/s (landable) / amber ≤ `CRASH_DV_SOFT` (damage-free touch) / red above (damaging); hidden under 0.25 m/s and while crashed. Toggled by the "Velocity vector" toggle in the menu's Settings screen → exported `set_show_velocity(i32)` → `SHOW_VEL` atomic; the choice persists per device in `localStorage` (`pegasus_show_vel`) and is re-applied once the WASM exports load. The Debug HUD telemetry line appends `v=…` in the same danger color (the arrow toggle and the Debug HUD are independent).
 - `light_radius` and warm tint both scale with `glow`, producing the radial light effect on cave walls.
 
 ## macroquad 0.4.15 material API (verified from vendored source)
@@ -404,8 +406,8 @@ stack vertically, connected by **vertical shafts** that punch through ceiling +
 floor at deterministic x positions. A shaft is a continuous vertical tunnel
 crossing every layer, so climbing (or falling) one always brings you back to
 "the same" cave — the vertical analogue of the `PERIOD` x-wrap. The ship's y
-just grows; nothing teleports. HUD shows the current layer as `lvl=N`
-(`ship_layer = round(cam_y / V_PERIOD)`).
+just grows; nothing teleports. The Debug HUD shows the current layer as
+`lvl=N` (`ship_layer = round(cam_y / V_PERIOD)`).
 
 ### Placement (all pure `Level` methods, `src/world.rs`)
 - `shaft_open_seg(s)` — opening start segment for slot `s`: every
@@ -523,6 +525,25 @@ native Linux; native builds get macroquad's dummy backend (same API, silent),
 so `cargo build`/`cargo test` need no system packages. Browsers unmute the
 AudioContext on the first user gesture (handled by the miniquad JS bundle).
 
+## HUD
+
+Cleaned up 2026-07. The top-left column, top to bottom: the **minimap**
+(480×160), the **fuel & hull gauges** just below it (big fuel-drop / heart
+icons; see "Fuel"), then the **primary readout** — the run **distance**
+(`{max_dist} m`, or the **score** on pads levels), **big** (`100*ui`, the
+best `0.36×` beneath), **left-aligned** to the column's left edge (`mm_ox`,
+plus a `20*ui` margin) and **shrunk to the minimap width** so long numbers
+stay inside the column. (It's drawn in the gauge block, after the bars are
+laid out, so it can sit below them.) All HUD text/icon sizes are `× ui`, and
+`ui` folds in `dpi`, so they scale correctly on high-DPI screens.
+
+Only the **telemetry TEXT line** is behind the **Debug HUD** setting
+(`DEBUG_HUD` atomic ← `set_debug_hud`, off by default): `dist=/best=/x=/lvl=/
+cave-progress/FPS` + the numeric `v=` speed, at the `252*ui` baseline. The
+velocity *vector arrow* is its own separate opt-in (`SHOW_VEL`), unaffected.
+(Earlier this cleanup also hid the minimap behind Debug HUD, but the minimap
+is gameplay, not telemetry — it stays always-on.)
+
 ## Fuel
 
 `FUEL_MAX = 100`; the main engine burns `FUEL_BURN_MAIN = 3.5/s` at **full
@@ -530,9 +551,18 @@ throttle** (~28 s of continuous thrust; partial throttle burns proportionally),
 RCS burns `FUEL_BURN_RCS = 1.2/s`. `thrusting_now` and the
 RCS gates (`rcs_ok`) require `fuel > 0` — an empty tank kills engine, RCS,
 particles and glow, and shows "OUT OF FUEL — [R] RESET" (reset and respawn
-refill). HUD: slim gauge bar directly under the minimap (green > 50%, amber
-> 25%, red below), with the **hull gauge** in a matching bar just beneath it;
-the HUD text line sits at the `252*ui` baseline to clear both.
+refill). HUD: slim always-on gauge bar with a **fuel-drop icon** to its left,
+warm-amber identity (gold > 50%, amber > 25%, red below), and the **hull
+gauge** in a matching bar just beneath it (a **red heart icon** + red bar,
+brighter red when critically low ≤ 25%) — top-left, directly under the
+minimap and matching its width. Both bars carry a **percentage readout**
+**between the icon and the bar** — sized to match the "BEST" label
+(`small_fs`, both computed together up front so the gauges can reuse it),
+bold via an 8-direction dark outline (green > 50% / amber > 25% / red below)
+— independent of the bar's own fill color, which stays fuel-amber /
+hull-red regardless. The bar itself starts after a fixed-width reservation
+(sized to fit "100%") so both gauges' bars line up regardless of the actual
+value. See "HUD".
 
 ## Landing pads & scoring
 
@@ -574,8 +604,8 @@ full crash flow. Damage is **graduated**, not binary:
 
 Hull is repaired while parked on a pad (`HULL_REPAIR_PER_S = 20`, alongside
 refueling — the banner reads REFUELING, or REPAIRING once fuel is full) and
-restored by reset/respawn. HUD: a second slim gauge bar (blue-grey → amber →
-red) directly under the fuel bar.
+restored by reset/respawn. HUD: a second slim gauge bar (red heart icon +
+red bar, brighter red when critically low) directly under the fuel bar.
 
 On destruction: 70 explosion particles (`kind 3`, ~1.1 s life), the wreck is
 parked (`set_gravity_scale(0)`, velocities zeroed) so the camera holds still,
