@@ -52,7 +52,7 @@ push-retry loop for concurrent deploys):
 - `src/ship_mesh.rs` — `SHIP_TRIS` / `SHIP_DETAILS` data tables extracted from the Flash SWF
 - `src/audio.rs` — in-memory WAV synthesis (`wav_from_samples`, `thruster_wav`, `boom_wav`)
 - `levels/` — **runtime level data**: `*.level` files (`key = value`) + `manifest.json` (menu order), fetched by `index.html` and pushed into the wasm — new levels deploy with no recompile (see "Levels")
-- `index.html` — web wrapper, safe-area insets, settings checkboxes, **level picker**, **info overlay**, **gamepad polling**, and a **boot guard** (touch/stick input moved in-canvas — no touch handlers here any more): a small standalone `<script>` tag ahead of the bundle (script tags parse independently, so no error in the bundle/main script can kill it) that paints any script error on screen with file:line and offers a tap-to-reload if `wasm_exports` is missing 8 s after load. Keep it first and self-contained. It also wraps `console.error` (installed ahead of the bundle, so the wasm `console_error` import routes through it) and appends the last logged error to the banner when the error event is anonymous or attributed to the `.wasm` file — **a Rust panic reaches JS as an opaque trap** (`RuntimeError: unreachable`; iOS Safari mutes it further to a bare "Script error." with no filename, because wasm frames fail its same-origin check), and the only useful description is the panic-hook line logged just before the trap (`src/main.rs` installs `std::panic::set_hook` → `error!("{}", info)`; the *default* hook prints the useless Debug form `PanicHookInfo { payload: Any { .. }, … }`). Unhandled promise rejections get the same banner (skipped when `reason` is null). **Fully-anonymous errors (no filename AND no console.error trace) are deliberately ignored**: same-origin scripts always carry file:line and a wasm panic always logs via the hook first, so the only things that land there are Safari-injected third-party scripts — reproduced live on iOS: opening the **share sheet** runs share/action extensions' preprocessing JS in the page, and an error in any of them arrives as a muted "Script error." (this was the mystery banner of 2026-07-06, seen right after the Pegasus rename and initially blamed on it).
+- `index.html` — web wrapper, safe-area insets, the **HTML game menu** (start / pause / game-over screens, level picker, settings, high scores, about — see "Game menu"), **gamepad polling**, and a **boot guard** (touch/stick input moved in-canvas — no touch handlers here any more): a small standalone `<script>` tag ahead of the bundle (script tags parse independently, so no error in the bundle/main script can kill it) that paints any script error on screen with file:line and offers a tap-to-reload if `wasm_exports` is missing 8 s after load. Keep it first and self-contained. It also wraps `console.error` (installed ahead of the bundle, so the wasm `console_error` import routes through it) and appends the last logged error to the banner when the error event is anonymous or attributed to the `.wasm` file — **a Rust panic reaches JS as an opaque trap** (`RuntimeError: unreachable`; iOS Safari mutes it further to a bare "Script error." with no filename, because wasm frames fail its same-origin check), and the only useful description is the panic-hook line logged just before the trap (`src/main.rs` installs `std::panic::set_hook` → `error!("{}", info)`; the *default* hook prints the useless Debug form `PanicHookInfo { payload: Any { .. }, … }`). Unhandled promise rejections get the same banner (skipped when `reason` is null). **Fully-anonymous errors (no filename AND no console.error trace) are deliberately ignored**: same-origin scripts always carry file:line and a wasm panic always logs via the hook first, so the only things that land there are Safari-injected third-party scripts — reproduced live on iOS: opening the **share sheet** runs share/action extensions' preprocessing JS in the page, and an error in any of them arrives as a muted "Script error." (this was the mystery banner of 2026-07-06, seen right after the Pegasus rename and initially blamed on it).
 - `mq_js_bundle.js` — **vendored** miniquad/quad-snd JS loader (from not-fl3/miniquad-samples). Pinned in-repo so deploys don't depend on a third-party host; includes the audio backend. Update it deliberately if macroquad is upgraded. **Gotcha**: it declares globals at top level (`const canvas`, `var gl`, `wasm_exports`, `function load`, …) that share the page's global scope — redeclaring any of them in `index.html`'s inline script is a SyntaxError that silently kills the *whole* inline script (no `load()` → no wasm, page shows only the HTML chrome). Pick distinct names and check the bundle before adding top-level identifiers.
 
 ## Input sources
@@ -123,27 +123,64 @@ stick's **heading control** (PD to a commanded angle, pure `add_torque`);
 rate control wins while actively held. `PAD_RESET` is a swap-to-consume flag
 so a held reset button fires exactly once.
 
-## Info overlay (web only)
-A fixed top-right "i" button (`#info-btn`) opens a fullscreen `#info-overlay`
-(HTML/CSS, not drawn in-canvas — so it stays crisp/readable at any size). It
-shows the build's **git revision** and **build time**. Both are injected at
-deploy time: `index.html` ships with the literal placeholders `__GIT_REVISION__`
-and `__BUILD_TIME__`, and the `Assemble site` step in
-`.github/workflows/deploy.yml` runs `sed` to replace them with
-`$(git rev-parse --short HEAD)` and `$(date -u +"%Y-%m-%d %H:%M UTC")`
-respectively. Opened locally without that substitution, the JS falls back to
-"dev (local build)" for each (detected via `startsWith("__")`). Button/overlay handlers `stopPropagation` on `mousedown` so a desktop
-click doesn't bleed through to the canvas and fire the thruster.
+## Game menu (web only, HTML)
+The whole out-of-flight UI is one fullscreen HTML overlay (`#menu` in
+`index.html` — HTML/CSS, not drawn in-canvas, so it stays crisp at any size),
+styled as a **neon vector arcade**: dark CRT base, a drifting perspective
+grid (`#menu::before`), a scanline+vignette+sweep overlay (`.crt`, always the
+last child of `#menu`, `pointer-events:none` so it never eats a tap), chunky
+monospace lettering with layered `text-shadow` glow (no webfonts/CDNs — the
+repo stays self-contained), and **custom neon toggle switches — no native
+form elements**. Palette in `:root` (`--cyan`/`--magenta`/`--amber`/
+`--green`). Respects `prefers-reduced-motion`. One `.screen` is visible at a
+time; the page **boots with the main menu open** (markup, not JS, so it shows
+while the wasm loads):
+- **scr-home**: PEGASUS title + the **animated ship hero** (`.ship-hero`, the
+  real vector ship — same geometry as `icon.svg` / `src/ship_mesh.rs` —
+  inlined so it ships with `index.html`; bobs, flame flickers; hidden under
+  `max-height:560px` so landscape phones keep the Fly button above the fold)
+  + Fly / Levels / High scores / Settings / About.
+- **scr-levels**: level rows (name + stored best) replacing the old
+  `<select>`; tapping pushes the level (see "Levels") and highlights it.
+- **scr-scores**: top 5 per level with ▶ watch buttons (see "High scores").
+- **scr-settings**: **Velocity vector** (`#vel-toggle-row`), **Invert stick**
+  (`#inv-toggle-row`), **Race best ghost** (`#ghost-toggle-row`, on by
+  default) as styled toggles; same localStorage → export → atomic plumbing.
+- **scr-about**: build **git revision** + **build time** (deploy-time `sed`
+  of `__GIT_REVISION__` / `__BUILD_TIME__` placeholders by `build-site`;
+  local fallback "dev (local build)" via `startsWith("__")`) and the
+  **⟳ Reload latest build** button (`#force-reload`, same `?fresh=<ts>`
+  bypass as the toast below).
+- **scr-pause**: Resume / Exit to menu. **scr-gameover**: CRASHED + run
+  distance + best, Fly again / Watch replay / Main menu.
 
-The overlay also hosts the **level picker** (`#level-row`, see "Levels"),
-the settings checkboxes — **Velocity vector** (`#vel-toggle-row`), **Invert
-stick** (`#inv-toggle-row`) and **Race best ghost** (`#ghost-toggle-row`,
-`pegasus_ghost`, on by default → `set_ghost_enabled`) — the **High scores**
-list (`#scores-block`, top 5 per level with a ▶ watch button each, see "High
-scores & watching stored replays"), and a **⟳ Reload latest build** button
-(`#force-reload`). All rows `stopPropagation` but *no* `preventDefault`
-(that would kill the checkbox click); the reload button is the manual
-cache-bypass (same `?fresh=<ts>` navigation as the toast below).
+During flight the only HTML is two corner buttons (`#hud-btns`, top-right):
+**⏸ pause** (opens scr-pause) and **⟳ restart** (same path as the R key).
+The menu container and the corner buttons swallow `mousedown`/`touchstart`
+(`stopPropagation`, no `preventDefault` — that would kill label clicks) so
+taps never reach the canvas and fire the thruster. Esc toggles the pause
+screen on desktop.
+
+### wasm ↔ JS menu bridge (`src/main.rs`)
+- `set_ui_pause(i32)` → `UI_PAUSE`: any open screen freezes the live sim —
+  the physics/stick/input paths are gated on `!ui_paused` and `phys_accum`
+  drains, so no catch-up burst fires on resume. **Replay playback is NOT
+  gated** — a stored replay watched from the menu plays uncovered.
+- `ui_command(i32)` → `UI_CMD` (swap-to-consume): 1 = reset/fly-again (joins
+  the R-key reset path via `ui_do_reset`), 2 = watch the last crashed run's
+  replay (only honoured in `CrashDialog`).
+- `ui_state() -> i32` / `cur_dist() -> f32`: per-frame mirrors (`UI_STATE`,
+  `CUR_DIST` — exports can't read loop locals) of the mode (0 flying /
+  1 wreck / 2 crash dialog / 3 replay) and `sim.max_dist`. JS polls at 200 ms:
+  state 2 with no screen open ⇒ show scr-gameover; a menu-launched replay
+  (state 3) returns to scr-scores when it ends without a wreck waiting.
+- **Exit to menu** ends the run via `ui_command(1)` (a reset while alive
+  banks it in the high scores — "longest flights"); the fresh ship waits,
+  paused, behind the menu; Fly unpauses.
+The in-canvas crash dialog is now just a dim + "CRASHED" + keyboard hints
+(R / Enter still work — that's also the native/dev fallback); its tappable
+buttons and the blob-size hint moved into the HTML game-over screen (sizes
+were dropped; `fmt_size` was removed with them).
 
 ### Stale-cache reload toast
 GitHub Pages caches `index.html` for ~10 min, so right after a deploy the
@@ -157,7 +194,7 @@ against its baked-in revision. On mismatch `#update-toast` slides in ("New
 build available — tap to reload"); tapping navigates to
 `location.pathname + "?fresh=<ts>"`, which bypasses the cached HTML. Skipped
 entirely in local dev (placeholder revision) and on 404 (pre-toast deploys),
-and the toast swallows `mousedown` like the info button so it can't fire the
+and the toast swallows `mousedown` like the menu so it can't fire the
 thruster.
 
 **Hard-won caveat (2026-07): query strings do NOT reliably bust the cache.**
@@ -285,7 +322,7 @@ gradient. (Previously a warm-brown set `80/64/50 · 118/95/72 · 150/120/88`.)
 - `glow`: smoothed 0→1 float, exponentially approaches the throttle with factor 0.12 per frame.
 - Thrust applies upward force along the ship's heading via Rapier `add_force`, scaled by the throttle (max force 8.0).
 - The body carries `linear_damping(0.2)` — imperceptible at landing speeds, but it caps how much momentum piles up on long burns/free-falls.
-- **Velocity vector** (opt-in, **off by default**): an arrow drawn from the ship along its momentum, length grows with speed, color = green ≤ 1 m/s (landable) / amber ≤ `CRASH_DV_SOFT` (damage-free touch) / red above (damaging); hidden under 0.25 m/s and while crashed. Toggled by the "Velocity vector" checkbox in the info overlay → exported `set_show_velocity(i32)` → `SHOW_VEL` atomic; the choice persists per device in `localStorage` (`pegasus_show_vel`) and is re-applied once the WASM exports load. The HUD line always appends `v=…` in the same danger color regardless of the toggle.
+- **Velocity vector** (opt-in, **off by default**): an arrow drawn from the ship along its momentum, length grows with speed, color = green ≤ 1 m/s (landable) / amber ≤ `CRASH_DV_SOFT` (damage-free touch) / red above (damaging); hidden under 0.25 m/s and while crashed. Toggled by the "Velocity vector" toggle in the menu's Settings screen → exported `set_show_velocity(i32)` → `SHOW_VEL` atomic; the choice persists per device in `localStorage` (`pegasus_show_vel`) and is re-applied once the WASM exports load. The HUD line always appends `v=…` in the same danger color regardless of the toggle.
 - `light_radius` and warm tint both scale with `glow`, producing the radial light effect on cave walls.
 
 ## macroquad 0.4.15 material API (verified from vendored source)
@@ -534,7 +571,8 @@ On destruction: 70 explosion particles (`kind 3`, ~1.1 s life), the wreck is
 parked (`set_gravity_scale(0)`, velocities zeroed) so the camera holds still,
 input is dead (`crashed` gates thrust/RCS and ship rendering), and a "CRASHED"
 banner shows. After `CRASH_DIALOG_DELAY = 1.5 s` the **crash dialog** takes
-over (see below); respawn happens from its FLY AGAIN action (or the R key,
+over (see below; on web the HTML game-over screen sits on top of it);
+respawn happens from its Fly-again action (or the R key,
 which works from any mode) and returns to **`SPAWN_X` = 0, the original
 spawn** — every run shares the ghost's start line. (`RESET_X` = 64 remains
 in world.rs purely as an obstacle-clearance anchor; changing it would
@@ -559,13 +597,11 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   (`crash_timer <= 0`) records the tick's input + periodic keyframes; the
   impact tick itself is captured. Reset adopts the ended recording as the
   ghost and starts a fresh one.
-- **Crash dialog**: dimmed backdrop, in-canvas buttons **FLY AGAIN [R]** /
-  **WATCH REPLAY [ENTER]** drawn at `sh*0.36`. Hit-testing uses `ui_tap` (a
-  fresh touch OR a mouse press, physical px) — the in-canvas stick only
-  claims touches *while flying*, so during the dialog the whole screen is
-  tappable (the old "keep buttons above the lower 45%" rule is gone with the
-  JS stick handler). FLY AGAIN sets `do_reset`, consumed by the same reset
-  block as the R key. WATCH REPLAY is a no-op unless the recording has ticks.
+- **Crash dialog**: in-canvas it's now only a dimmed backdrop + "CRASHED" +
+  keyboard hints — on web the **HTML game-over screen** covers it and drives
+  the choices through the menu bridge (`ui_command`: 1 = fly again → the
+  same reset block as the R key, 2 = watch replay), while R / Enter remain
+  as the native/dev fallback. `ui_tap` still exists for the replay skip.
 - **Playback is RE-SIM DRIVEN** (`ResimPlayer` in main.rs): WATCH REPLAY
   re-runs the hybrid recording's input events through a **scratch `Sim`**
   paced by the render clock — the machinery a replay shared from another
@@ -622,9 +658,10 @@ for now:
   safety net, not an expected limit: a ghost needs the run from its spawn,
   so the recording must not lose t = 0 on normal-length runs. (A trimmed
   recording's ghost appears once the live run reaches its first keyframe.)
-- On destruction the blob is serialized (+ `compress` = `miniz_oxide` deflate,
-  the repo's only new dependency) and the WATCH REPLAY button hint shows both
-  sizes: `[ENTER] · <raw> → <deflated>`.
+- On destruction the blob is serialized + deflated (`compress` =
+  `miniz_oxide`, the repo's only new dependency) and published via
+  `report_run_end` (the old on-dialog size receipt is gone with the
+  in-canvas buttons).
 - `sim::resim(&Recording)` re-runs the events through a fresh `Sim` and
   reproduces the recorded keyframes **bit-exactly** (unit test
   `resim_reproduces_a_scripted_flight_bit_exactly`; `glow` is render-side
@@ -668,7 +705,7 @@ The ghost renders as a translucent hull silhouette (`SHIP_TRIS`, no
 flame/details) at `lerped_pose(alpha)` with the live interpolation alpha,
 plus a pale-blue minimap dot; it vanishes at its own crash tick
 (`finished`). Hidden while the current ship is a wreck. Toggled by the
-**"Race best ghost"** overlay checkbox (`set_ghost_enabled` → `GHOST_ON`,
+**"Race best ghost"** Settings toggle (`set_ghost_enabled` → `GHOST_ON`,
 on by default): off drops `ghost_player` and skips `ghost_pose`. A
 mismatched-level recording is ignored (the ghost must race THIS world).
 Cost: one extra `Sim::tick` per physics step during flight (~2× physics,
@@ -679,7 +716,7 @@ windows around the ghost's position).
 The top **5 longest flights per level** live in `localStorage`
 (`pegasus_scores_<file>`, JS-owned — the wasm has no wall clock or
 persistent storage), each entry `{d: distance, t: epoch-ms, b: base64
-deflated recording blob}`, listed in the info overlay with a **▶ watch**
+deflated recording blob}`, listed in the menu's High-scores screen with a **▶ watch**
 button. The wasm↔JS contract:
 - **Publish**: every ended run worth keeping (destroying crash, OR a manual
   reset while still alive — "longest flights", not "longest crashes") calls
