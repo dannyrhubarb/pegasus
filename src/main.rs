@@ -500,14 +500,13 @@ const FLIP_DONE_RAD: f32 = 0.35; // ~20°
 // `mouse_position()` report (both = raw / dpi_scale). NOTE: macroquad's
 // `touches()` returns RAW physical px (it does NOT divide by dpi like
 // mouse_position does), so touch positions are divided by dpi in the gather
-// before reaching this struct. A touch in the lower STICK_ZONE spawns the
+// before reaching this struct. While flying, a touch ANYWHERE spawns the
 // stick under the finger; release parks it bottom-right. Deflection
 // direction = commanded nose direction (screen convention, y down); STICK_DZ
 // is a radial dead-zone rescaled so the rim still reaches 1. Holding the
 // stick — even centred — lights the main engine through the flick/flip gating.
 const STICK_TRAVEL: f32 = 60.0;  // logical px from centre = full deflection
 const STICK_DZ: f32 = 0.15;      // radial dead-zone (rescaled)
-const STICK_ZONE: f32 = 0.55;    // touches below this fraction of height grab the stick
 const STICK_RADIUS: f32 = 85.0;  // logical px, ring radius (matches the old 170px element)
 const STICK_KNOB_R: f32 = 32.0;  // logical px, knob radius
 
@@ -795,15 +794,15 @@ async fn main() {
         // produces is what the sim consumes per tick AND what the recorder
         // stores, so live play and resim see bit-identical inputs.
         //
-        // The floating stick claims one touch in the lower STICK_ZONE while
-        // flying; every OTHER fresh touch (upper zone, or any zone during the
-        // dialog/replay) becomes a `ui_tap` for in-canvas button hit-testing.
-        // `touches()` reports RAW physical px, so divide by dpi to reach the
-        // LOGICAL space that `screen_*()`, `mouse_position()` and all drawing
-        // use; a real mouse press is already in that space.
+        // The floating stick claims the first fresh touch anywhere on screen
+        // while flying (the whole canvas is the flight-control surface — the
+        // pause/restart buttons are HTML and swallow their own taps); during
+        // the dialog/replay `stick_active` is false, so every fresh touch
+        // becomes a `ui_tap` (replay skip). `touches()` reports RAW physical
+        // px, so divide by dpi to reach the LOGICAL space that `screen_*()`,
+        // `mouse_position()` and all drawing use; a mouse press is already there.
         let touch_dpi = screen_dpi_scale();
         let tpos = |t: &Touch| t.position / touch_dpi;
-        let sh_now = screen_height();
         let invert = INVERT_STICK.load(Ordering::Relaxed) != 0;
         let stick_active = matches!(mode, Mode::Flying) && crash_timer <= 0.0 && !ui_paused;
         let mut ui_tap: Option<Vec2> = None;
@@ -824,7 +823,7 @@ async fn main() {
                 continue;
             }
             let p = tpos(&t);
-            if stick_active && p.y > sh_now * STICK_ZONE && stick.id.is_none() {
+            if stick_active && stick.id.is_none() {
                 stick.id = Some(t.id);
                 stick.center = p;
                 stick.held = true;
