@@ -567,6 +567,10 @@
 
     <div class="screen" id="scr-settings">
       <div class="h2">SETTINGS</div>
+      <label class="setrow" id="sound-toggle-row">
+        <span>Sound</span>
+        <input type="checkbox" id="sound-toggle"><span class="tgl"></span>
+      </label>
       <label class="setrow" id="vel-toggle-row">
         <span>Velocity vector</span>
         <input type="checkbox" id="vel-toggle"><span class="tgl"></span>
@@ -586,11 +590,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">30432ab-pr-78</div>
+        <div class="info-value" id="git-rev">e667ee8-pr-78</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-09 05:53 UTC</div>
+        <div class="info-value" id="build-time">2026-07-09 06:02 UTC</div>
       </div>
       <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
       <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
@@ -945,7 +949,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "30432ab-pr-78";
+    const wasmRev = "e667ee8-pr-78";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -1002,6 +1006,24 @@
       e.stopPropagation();
       freshReload();
     }, { passive: false });
+
+    // Sound toggle: OFF by default (only "1" enables it). Forwarded to the
+    // game, persisted per device; re-applied once the exports load.
+    const soundToggle = document.getElementById("sound-toggle");
+    soundToggle.checked = localStorage.getItem("pegasus_sound") === "1";
+    function applySoundSetting() {
+      call("set_sound_enabled", soundToggle.checked ? 1 : 0);
+    }
+    soundToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_sound", soundToggle.checked ? "1" : "0");
+      applySoundSetting();
+    });
+    const soundTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_sound_enabled) {
+        applySoundSetting();
+        clearInterval(soundTimer);
+      }
+    }, 200);
 
     // Velocity-vector toggle: forwarded to the game, persisted per device.
     const velToggle = document.getElementById("vel-toggle");
