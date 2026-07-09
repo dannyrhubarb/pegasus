@@ -119,9 +119,51 @@
       padding: 8px 12px;
       cursor: pointer;
     }
-    /* Settings rows: velocity-vector arrow + invert-stick toggle */
+    /* High scores: top 5 longest flights for the selected level, from
+       localStorage (see the script) — each row has a watch-replay button. */
+    #scores-block {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      align-items: center;
+    }
+    #scores-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: clamp(14px, 3vw, 18px);
+      color: #dde9ff;
+      min-width: min(420px, 86vw);
+    }
+    #scores-list li {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(24, 40, 72, 0.5);
+      border: 1px solid rgba(140, 200, 255, 0.35);
+      border-radius: 10px;
+      padding: 6px 10px;
+    }
+    #scores-list .rank { color: #6c84ad; width: 1.4em; }
+    #scores-list .dist { font-weight: 700; min-width: 4.5em; text-align: right; }
+    #scores-list .when { color: #9fb3d9; flex: 1; text-align: right; font-size: 0.85em; }
+    #scores-list .watch {
+      font: 600 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: #dde9ff;
+      background: rgba(60, 110, 190, 0.5);
+      border: 1px solid rgba(140, 200, 255, 0.8);
+      border-radius: 8px;
+      padding: 7px 12px;
+      cursor: pointer;
+    }
+    #scores-list .watch:hover { background: rgba(60, 110, 190, 0.8); }
+    #scores-empty { color: #6c84ad; font-size: clamp(13px, 2.8vw, 16px); }
+
+    /* Settings rows: velocity-vector arrow + invert-stick + ghost toggles */
     #vel-toggle-row,
-    #inv-toggle-row {
+    #inv-toggle-row,
+    #ghost-toggle-row {
       display: flex;
       align-items: center;
       gap: 10px;
@@ -132,7 +174,8 @@
       -webkit-user-select: none;
     }
     #vel-toggle-row input,
-    #inv-toggle-row input {
+    #inv-toggle-row input,
+    #ghost-toggle-row input {
       width: 20px;
       height: 20px;
       accent-color: #6ec1ff;
@@ -215,6 +258,15 @@
       <input type="checkbox" id="inv-toggle">
       Invert stick
     </label>
+    <label id="ghost-toggle-row">
+      <input type="checkbox" id="ghost-toggle">
+      Race best ghost
+    </label>
+    <div id="scores-block">
+      <div class="info-label">High scores</div>
+      <ol id="scores-list"></ol>
+      <div id="scores-empty">No flights recorded yet</div>
+    </div>
     <div id="force-reload" role="button">&#10227; Reload latest build</div>
     <div class="info-hint">Tap anywhere to close</div>
   </div>
@@ -584,6 +636,7 @@
       if (text === undefined) return;
       const push = () => {
         if (typeof wasm_exports === "undefined" || !wasm_exports.load_level) return false;
+        collectEndedRun(); // bank any just-ended run under the OLD level first
         const bytes = new TextEncoder().encode(text);
         const ptr = wasm_exports.level_buf_ptr(bytes.length);
         new Uint8Array(wasm_memory.buffer, ptr, bytes.length).set(bytes);
@@ -591,6 +644,8 @@
         const best = parseFloat(localStorage.getItem("pegasus_best_" + file) || "0");
         if (best > 0) wasm_exports.set_best_dist(best);
         currentLevelFile = file;
+        renderScores();
+        pushGhost();
         return true;
       };
       // Exports may not be ready yet (startup restore) — retry like the
@@ -644,6 +699,140 @@
         localStorage.setItem(key, String(best));
       }
     }, 2000);
+
+    // --- High scores (top 5 longest flights per level) ---
+    // The game publishes every ended run (crash, or a manual reset while
+    // alive) as a deflated recording blob + final distance + a bumped
+    // sequence number. We poll the sequence, keep the 5 best per level in
+    // localStorage (with a timestamp — the wasm has no wall clock), render
+    // them in the overlay, and push the #1 recording back into the game as
+    // the "best run" ghost. The ▶ button pushes a stored blob back through
+    // watch_replay_blob, which re-simulates it — in the level it was flown
+    // in, which the blob carries in its header.
+    const scoresList = document.getElementById("scores-list");
+    const scoresEmpty = document.getElementById("scores-empty");
+    const scoresBlock = document.getElementById("scores-block");
+
+    function loadScores(file) {
+      try {
+        const raw = localStorage.getItem("pegasus_scores_" + file);
+        const arr = raw ? JSON.parse(raw) : [];
+        return Array.isArray(arr) ? arr : [];
+      } catch (e) { return []; }
+    }
+    function saveScores(file, arr) {
+      try { localStorage.setItem("pegasus_scores_" + file, JSON.stringify(arr)); }
+      catch (e) { /* quota — the game just keeps playing without the store */ }
+    }
+    // Uint8Array <-> base64 (chunked: String.fromCharCode has an argument
+    // limit, and replay blobs can reach hundreds of KB).
+    function b64FromBytes(bytes) {
+      let out = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) {
+        out += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      }
+      return btoa(out);
+    }
+    function bytesFromB64(b64) {
+      const str = atob(b64);
+      const out = new Uint8Array(str.length);
+      for (let i = 0; i < str.length; i++) out[i] = str.charCodeAt(i);
+      return out;
+    }
+
+    function pushBlobToWasm(entry, exportName) {
+      if (typeof wasm_exports === "undefined" || !wasm_exports[exportName]) return false;
+      const bytes = bytesFromB64(entry.b);
+      const ptr = wasm_exports.blob_in_ptr(bytes.length);
+      new Uint8Array(wasm_memory.buffer, ptr, bytes.length).set(bytes);
+      return wasm_exports[exportName](bytes.length) === 1;
+    }
+
+    // The current level's best run becomes the in-game ghost (the game
+    // ignores it while the "Race best ghost" toggle is off, and drops
+    // recordings whose level doesn't match).
+    function pushGhost() {
+      if (!currentLevelFile) return;
+      const best = loadScores(currentLevelFile)[0];
+      if (best) pushBlobToWasm(best, "load_ghost_blob");
+    }
+
+    function renderScores() {
+      const scores = currentLevelFile ? loadScores(currentLevelFile) : [];
+      scoresList.textContent = "";
+      scoresEmpty.style.display = scores.length ? "none" : "";
+      scores.forEach((entry, i) => {
+        const li = document.createElement("li");
+        const rank = document.createElement("span");
+        rank.className = "rank";
+        rank.textContent = (i + 1) + ".";
+        const dist = document.createElement("span");
+        dist.className = "dist";
+        dist.textContent = Math.round(entry.d) + " m";
+        const when = document.createElement("span");
+        when.className = "when";
+        when.textContent = new Date(entry.t).toLocaleString(undefined, {
+          dateStyle: "short", timeStyle: "short",
+        });
+        const watch = document.createElement("button");
+        watch.className = "watch";
+        watch.textContent = "▶ watch";
+        watch.addEventListener("click", e => {
+          e.stopPropagation();
+          if (pushBlobToWasm(entry, "watch_replay_blob")) {
+            infoOverlay.classList.remove("open");
+          }
+        });
+        li.append(rank, dist, when, watch);
+        scoresList.appendChild(li);
+      });
+    }
+    ["mousedown", "click", "touchstart"].forEach(ev =>
+      scoresBlock.addEventListener(ev, e => e.stopPropagation()));
+
+    // Bank a newly ended run into the store. Called on a short poll and
+    // right before a level switch (so the run lands under the level it was
+    // actually flown on).
+    let lastRunSeq = 0;
+    function collectEndedRun() {
+      if (!currentLevelFile) return;
+      if (typeof wasm_exports === "undefined" || !wasm_exports.run_seq) return;
+      const seq = wasm_exports.run_seq();
+      if (seq === lastRunSeq) return;
+      lastRunSeq = seq;
+      const len = wasm_exports.run_blob_len();
+      if (!len) return;
+      const bytes = new Uint8Array(wasm_memory.buffer, wasm_exports.run_blob_ptr(), len).slice();
+      const entry = { d: wasm_exports.run_dist(), t: Date.now(), b: b64FromBytes(bytes) };
+      const scores = loadScores(currentLevelFile);
+      scores.push(entry);
+      scores.sort((a, b) => b.d - a.d);
+      const top = scores.slice(0, 5);
+      saveScores(currentLevelFile, top);
+      renderScores();
+      if (top[0] === entry) pushGhost(); // a new record races next spawn
+    }
+    setInterval(collectEndedRun, 500);
+
+    // "Race best ghost" toggle (on by default), same pattern as the others.
+    const ghostToggle = document.getElementById("ghost-toggle");
+    const ghostRow = document.getElementById("ghost-toggle-row");
+    ghostToggle.checked = localStorage.getItem("pegasus_ghost") !== "0";
+    function applyGhostSetting() {
+      call("set_ghost_enabled", ghostToggle.checked ? 1 : 0);
+    }
+    ghostToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_ghost", ghostToggle.checked ? "1" : "0");
+      applyGhostSetting();
+    });
+    ["mousedown", "click", "touchstart"].forEach(ev =>
+      ghostRow.addEventListener(ev, e => e.stopPropagation()));
+    const ghostTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_ghost_enabled) {
+        applyGhostSetting();
+        clearInterval(ghostTimer);
+      }
+    }, 200);
 
     // DEBUG (replay-drift investigation): show the download button once a run
     // has crashed (a recording blob is available), and download it on tap.

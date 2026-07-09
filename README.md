@@ -33,8 +33,14 @@ runtime and selectable from the ⓘ info overlay — adding a level means adding
 - **The Caves** — the original shafted, pad-scoring world, kept as the
   demo/experimentation level.
 
-See the "Levels" section in `CLAUDE.md` for the file format and how the level
-parameters ride in every replay recording.
+Each level keeps its **top 5 longest flights** (with date/time and a ▶ button
+to watch the recorded replay) in the info overlay, and the best run races
+alongside you as a translucent **ghost** — toggle it with the "Race best
+ghost" checkbox. Scores and replays persist per device in `localStorage`.
+
+See the "Levels" and "High scores" sections in `CLAUDE.md` for the file
+format, the score/replay store, and how the level parameters ride in every
+replay recording.
 
 ## Development
 

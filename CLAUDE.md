@@ -135,12 +135,15 @@ respectively. Opened locally without that substitution, the JS falls back to
 "dev (local build)" for each (detected via `startsWith("__")`). Button/overlay handlers `stopPropagation` on `mousedown` so a desktop
 click doesn't bleed through to the canvas and fire the thruster.
 
-The overlay also hosts the settings checkboxes — **Velocity vector**
-(`#vel-toggle-row`) and **Invert stick** (`#inv-toggle-row`); both
-`stopPropagation` but *no* `preventDefault`, which
-would kill the checkbox click — and a **⟳ Reload latest build** button (`#force-reload`) —
-the manual cache-bypass: same `?fresh=<ts>` navigation as the toast below,
-for when you don't want to wait for detection.
+The overlay also hosts the **level picker** (`#level-row`, see "Levels"),
+the settings checkboxes — **Velocity vector** (`#vel-toggle-row`), **Invert
+stick** (`#inv-toggle-row`) and **Race best ghost** (`#ghost-toggle-row`,
+`pegasus_ghost`, on by default → `set_ghost_enabled`) — the **High scores**
+list (`#scores-block`, top 5 per level with a ▶ watch button each, see "High
+scores & watching stored replays"), and a **⟳ Reload latest build** button
+(`#force-reload`). All rows `stopPropagation` but *no* `preventDefault`
+(that would kill the checkbox click); the reload button is the manual
+cache-bypass (same `?fresh=<ts>` navigation as the toast below).
 
 ### Stale-cache reload toast
 GitHub Pages caches `index.html` for ~10 min, so right after a deploy the
@@ -585,7 +588,11 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   play and replay is a follow-up, see #67.) The destroying impact is
   re-simulated, ends the playback (boom +
   dialog); a `ui_tap` skips back to the dialog, R skips straight to respawn.
-  WATCH REPLAY is a no-op if the recording has no ticks.
+  WATCH REPLAY is a no-op if the recording has no ticks. **The same `Replay`
+  mode also plays stored highscore replays** (see "High scores"): the ▶
+  button sets `watch_rec` and playback sources from it instead of the live
+  recorder, returning to `watch_return` (dialog or flight) on finish — a run
+  that ended by reset (no wreck) skips the terminal boom.
   `ResimPlayer::step_one` is the shared per-tick core: `advance()` drives it
   on the wall clock for WATCH REPLAY; the ghost calls it in lockstep.
 
@@ -649,19 +656,55 @@ Live play and resim must perform IDENTICAL operation sequences:
 - `Date`-like nondeterminism (macroquad `gen_range`) is allowed ONLY in
   cosmetics (particles, shake); nothing in `sim.rs` may use it.
 
-### Ghost of the last run (re-sim driven)
-On reset the ended run's `Recording` (if ≥ `GHOST_MIN_SECS = 2 s` of ticks)
-becomes `ghost_rec`, and a second `ResimPlayer` re-simulates it in
-**LOCKSTEP** with live play: exactly one `step_one` per live `sim.tick`
-(gated `p.tick < recorder.ticks()`), so both ships fly the same spawn clock
-and stay in sync through pauses (dialog/replay freeze live ticks → the
-ghost freezes too). The ghost renders as a translucent hull silhouette
-(`SHIP_TRIS`, no flame/details) at `lerped_pose(alpha)` with the live
-interpolation alpha, plus a pale-blue minimap dot; it vanishes at its own
-crash tick (`finished`). Hidden while the current ship is a wreck. Cost:
-one extra `Sim::tick` per physics step during flight (~2× physics, still
-tiny next to rendering; the ghost sim maintains its own collider windows
-around the ghost's position).
+### Ghost of the BEST run (re-sim driven)
+`ghost_rec` is the current level's **top-highscore** recording, pushed from
+JS (`load_ghost_blob`, see "High scores"): the game keeps the racing ghost
+recording, and a `ResimPlayer` re-simulates it in **LOCKSTEP** with live
+play — `while p.tick < recorder.ticks()` per live `sim.tick` (a `while`,
+not an `if`, so a ghost adopted a moment after the spawn catches up in one
+bounded burst), so both ships fly the same spawn clock and stay in sync
+through pauses (dialog/replay freeze live ticks → the ghost freezes too).
+The ghost renders as a translucent hull silhouette (`SHIP_TRIS`, no
+flame/details) at `lerped_pose(alpha)` with the live interpolation alpha,
+plus a pale-blue minimap dot; it vanishes at its own crash tick
+(`finished`). Hidden while the current ship is a wreck. Toggled by the
+**"Race best ghost"** overlay checkbox (`set_ghost_enabled` → `GHOST_ON`,
+on by default): off drops `ghost_player` and skips `ghost_pose`. A
+mismatched-level recording is ignored (the ghost must race THIS world).
+Cost: one extra `Sim::tick` per physics step during flight (~2× physics,
+still tiny next to rendering; the ghost sim maintains its own collider
+windows around the ghost's position).
+
+### High scores & watching stored replays
+The top **5 longest flights per level** live in `localStorage`
+(`pegasus_scores_<file>`, JS-owned — the wasm has no wall clock or
+persistent storage), each entry `{d: distance, t: epoch-ms, b: base64
+deflated recording blob}`, listed in the info overlay with a **▶ watch**
+button. The wasm↔JS contract:
+- **Publish**: every ended run worth keeping (destroying crash, OR a manual
+  reset while still alive — "longest flights", not "longest crashes") calls
+  `report_run_end` → serialize + deflate into `RUN_BLOB`, `RUN_DIST` =
+  `max_dist`, and bumps `RUN_SEQ`. JS polls `run_seq()` every 500 ms
+  (and once more right before a level switch, so the run banks under the
+  level it was flown on), pulls the blob on change, inserts into the sorted
+  top-5, and re-renders. Runs < `GHOST_MIN_SECS` aren't published.
+- **Watch**: the ▶ button base64-decodes a stored blob into the wasm buffer
+  (`blob_in_ptr` + `watch_replay_blob`), which `decompress` + `deserialize`
+  into `PENDING_WATCH`. The main loop plays it through the SAME `Replay`
+  mode / `ResimPlayer` as the crash-dialog replay, but sourced from
+  `watch_rec` instead of the live recorder — and since a stored blob
+  carries its own `LevelParams` header, the scratch sim rebuilds the world
+  it was flown in. Watching **pauses** the interrupted run (physics is
+  frozen in non-`Flying` modes) and returns to `watch_return` (dialog if a
+  wreck is waiting, else flight) on finish/skip, so a mid-flight "watch"
+  resumes untouched. A run that ended by reset (not a crash) skips the boom
+  at playback end.
+- **Ghost**: the #1 entry is pushed back via `load_ghost_blob` (see above).
+- `decode_recording` (decompress → deserialize) rejects corrupt blobs
+  (returns None, never panics) — a mangled `localStorage` entry can't crash
+  the game. Unit-tested end-to-end
+  (`stored_highscore_blob_round_trips_into_a_watchable_replay`): fly →
+  serialize + deflate → decode → re-play to the end, drift 0.
 
 ## Physics notes
 
