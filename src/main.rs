@@ -1,7 +1,7 @@
 use macroquad::audio::{load_sound_from_bytes, play_sound, set_sound_volume, PlaySoundParams};
 use macroquad::prelude::*;
 use macroquad::rand::gen_range;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 
 mod audio;
 mod render;
@@ -192,13 +192,12 @@ impl ResimPlayer {
     // keyframe — the same operation sequence as playing a trimmed recording
     // from its first keyframe. The effective input at the keyframe is
     // re-seeded from the event stream, exactly like Recording::trim does at
-    // a cut. The resume is near-exact, not bit-exact: a keyframe stores the
-    // heading as an angle, and Rotation::new(angle) can't reproduce the
-    // original unit-complex rotation to the last bit, so sub-millimetre
-    // drift accumulates (measured ~6e-4 m over 3 s) — far below the 0.5 m
-    // snap threshold, and the per-keyframe drift check + snap fallback
-    // absorbs pathological cases (e.g. a keyframe captured under sustained
-    // contact, where handle numbering matters — see the determinism rules).
+    // a cut. Since format v3, keyframes carry the body's exact unit-complex
+    // rotation and the land timer, so restoring an airborne keyframe resumes
+    // BIT-EXACTLY (unit-tested). A keyframe captured under sustained contact
+    // can still diverge (Rapier's warm-start caches and handle numbering
+    // aren't in the keyframe — see the determinism rules); that's what the
+    // per-keyframe drift check + 0.5 m snap fallback absorbs.
     fn seek_to_keyframe(&mut self, rec: &Recording, kf_idx: usize) {
         let mut idx = kf_idx.min(rec.keyframes.len().saturating_sub(1));
         while idx > 0 && rec.keyframes[idx].tick >= self.end_tick {
@@ -437,6 +436,9 @@ pub extern "C" fn ui_state() -> i32 {
 const SEEK_NONE: u32 = u32::MAX;
 static REPLAY_PAUSED: AtomicU32 = AtomicU32::new(0);
 static REPLAY_SEEK: AtomicU32 = AtomicU32::new(SEEK_NONE);
+// Relative keyframe steps (the bar's ⏮/⏭ buttons). fetch_add so taps landing
+// within one frame accumulate; the loop consumes with swap(0).
+static REPLAY_STEP: AtomicI32 = AtomicI32::new(0);
 static REPLAY_POS: AtomicU32 = AtomicU32::new(0);
 static REPLAY_LEN: AtomicU32 = AtomicU32::new(0);
 
@@ -459,6 +461,13 @@ pub extern "C" fn replay_paused() -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn replay_seek(frac: f32) {
     REPLAY_SEEK.store(frac.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+}
+
+/// Step the replay by whole keyframes (±1 from the bar's ⏮/⏭ buttons —
+/// the same seek the in-canvas arrow keys perform).
+#[unsafe(no_mangle)]
+pub extern "C" fn replay_step(delta: i32) {
+    REPLAY_STEP.fetch_add(delta, Ordering::Relaxed);
 }
 
 /// Playback position as a fraction 0..1 (bar knob) and total length in
@@ -871,6 +880,7 @@ async fn main() {
             replay_player = Some(p);
             mode = Mode::Replay;
             REPLAY_PAUSED.store(0, Ordering::Relaxed);
+            REPLAY_STEP.store(0, Ordering::Relaxed);
             REPLAY_SEEK.store(SEEK_NONE, Ordering::Relaxed);
         }
 
@@ -885,6 +895,7 @@ async fn main() {
                     replay_player = Some(p);
                     mode = Mode::Replay;
                     REPLAY_PAUSED.store(0, Ordering::Relaxed);
+                    REPLAY_STEP.store(0, Ordering::Relaxed);
                     REPLAY_SEEK.store(SEEK_NONE, Ordering::Relaxed);
                 }
             }
@@ -1076,9 +1087,10 @@ async fn main() {
                 // is already parked and zeroed).
                 recorder.finalize(Keyframe {
                     tick: recorder.ticks(),
-                    x: imp.x, y: imp.y, angle: imp.angle,
+                    x: imp.x, y: imp.y, rot_re: imp.rot_re, rot_im: imp.rot_im,
                     vx: imp.vx, vy: imp.vy, angvel: imp.angvel,
                     fuel: sim.fuel, hull: sim.hull, glow,
+                    land_timer: 0.0, // a destroying tick always zeroes it
                 });
                 // Publish for the JS highscore store (top 5 per level).
                 report_run_end(&recorder, sim.max_dist);
@@ -1224,7 +1236,8 @@ async fn main() {
                 }
                 let seek_bits = REPLAY_SEEK.swap(SEEK_NONE, Ordering::Relaxed);
                 let kf_step = is_key_pressed(KeyCode::Right) as i64
-                    - is_key_pressed(KeyCode::Left) as i64;
+                    - is_key_pressed(KeyCode::Left) as i64
+                    + REPLAY_STEP.swap(0, Ordering::Relaxed) as i64;
                 if seek_bits != SEEK_NONE {
                     // Bar position → tick → the keyframe at or before it.
                     let span = (p.end_tick - p.first_tick) as f32;
@@ -1854,6 +1867,7 @@ async fn main() {
                     replay_player = Some(p);
                     mode = Mode::Replay;
                     REPLAY_PAUSED.store(0, Ordering::Relaxed);
+                    REPLAY_STEP.store(0, Ordering::Relaxed);
                     REPLAY_SEEK.store(SEEK_NONE, Ordering::Relaxed);
                 }
             }
@@ -2535,9 +2549,10 @@ mod tests {
             if let Some(imp) = rep.impact.filter(|i| i.destroyed) {
                 rec.finalize(Keyframe {
                     tick: rec.ticks(),
-                    x: imp.x, y: imp.y, angle: imp.angle,
+                    x: imp.x, y: imp.y, rot_re: imp.rot_re, rot_im: imp.rot_im,
                     vx: imp.vx, vy: imp.vy, angvel: imp.angvel,
                     fuel: s.fuel, hull: s.hull, glow: 0.0,
+                    land_timer: 0.0,
                 });
                 break;
             }
@@ -2612,15 +2627,26 @@ mod tests {
     }
 
     #[test]
-    fn seeking_to_a_keyframe_resumes_without_snapping() {
-        // Record a steered airborne flight, then scrub: a fresh player seeks
-        // FORWARD to keyframe 3, and a second plays partway and seeks BACK
-        // to keyframe 1. Both must re-sim the remainder well within the snap
-        // threshold (the keyframe's angle→Rotation round-trip costs sub-mm
-        // float drift — see seek_to_keyframe) and never engage the fallback.
+    fn seeking_to_a_keyframe_resumes_bit_exactly() {
+        // Record a CONTACT-FREE flight (climb off the pad, then hover with a
+        // gentle steer wobble — the full-hull assert below guards that it
+        // never even scrapes), then scrub: a fresh player seeks FORWARD to
+        // keyframe 3, and a second plays partway and seeks BACK to keyframe
+        // 1. v3 keyframes carry the exact rotation + land timer, so both
+        // must re-sim the airborne remainder with ZERO keyframe drift and
+        // never engage the snap fallback. (A flight that touches rock is NOT
+        // zero-drift after a seek: contact solving depends on Rapier
+        // warm-start caches and handle numbering, which a keyframe can't
+        // carry — that case is what the 0.5 m snap fallback absorbs.)
         let script = |tick: u32| -> InputState {
-            let f = tick as f32 * 0.015;
-            InputState::from_controls(0.6, 0, f.sin() * 0.7, -(f * 0.8).cos() * 0.5, true)
+            if tick < 60 {
+                return InputState::from_controls(0.6, 0, 0.0, 0.0, false); // lift off
+            }
+            // Hover (TWR ≈ 7.5 → hover throttle ≈ 0.13) with a small steer
+            // wobble so the PD heading controller stays busy.
+            let throttle = if (tick / 90) % 2 == 0 { 0.16 } else { 0.10 };
+            let f = tick as f32 * 0.01;
+            InputState::from_controls(throttle, 0, f.sin() * 0.15, -0.9, true)
         };
         let mut sim = Sim::new(lvl());
         let mut rec = Recording::new(sim_params(), lvl().to_params(), u32::MAX);
@@ -2629,14 +2655,12 @@ mod tests {
             let input = script(t);
             let rep = sim.tick(input);
             let due = rec.record_tick(input);
-            if rep.impact.filter(|i| i.destroyed).is_some() {
-                rec.finalize(sim.keyframe(rec.ticks(), input.throttle_f32()));
-                break;
-            }
+            assert!(rep.impact.is_none(), "test flight hit rock at tick {t}");
             if due {
                 rec.push_keyframe(sim.keyframe(rec.ticks(), input.throttle_f32()));
             }
         }
+        assert_eq!(sim.hull, HULL_MAX, "test flight scraped — not contact-free");
         assert!(rec.keyframes.len() >= 5, "flight too short: {} keyframes", rec.keyframes.len());
 
         // Forward scrub from a fresh player.
@@ -2647,7 +2671,7 @@ mod tests {
             p.step_one(&rec);
         }
         assert_eq!(p.tick, rec.ticks());
-        assert!(p.drift < 0.05, "forward-seek drift {} m", p.drift);
+        assert_eq!(p.drift, 0.0, "forward-seek drift");
         assert!(!p.snapped, "fallback snap engaged after a forward seek");
 
         // Backward scrub after playing partway past keyframe 2.
@@ -2660,7 +2684,7 @@ mod tests {
         while !p.finished {
             p.step_one(&rec);
         }
-        assert!(p.drift < 0.05, "backward-seek drift {} m", p.drift);
+        assert_eq!(p.drift, 0.0, "backward-seek drift");
         assert!(!p.snapped, "fallback snap engaged after a backward seek");
 
         // Seeking past the end clamps to the last keyframe that still has
@@ -2877,9 +2901,11 @@ mod tests {
             let due = rec.record_tick(input);
             if let Some(imp) = rep.impact.filter(|i| i.destroyed) {
                 rec.finalize(Keyframe {
-                    tick: rec.ticks(), x: imp.x, y: imp.y, angle: imp.angle,
+                    tick: rec.ticks(), x: imp.x, y: imp.y,
+                    rot_re: imp.rot_re, rot_im: imp.rot_im,
                     vx: imp.vx, vy: imp.vy, angvel: imp.angvel,
                     fuel: sim.fuel, hull: sim.hull, glow: input.throttle_f32(),
+                    land_timer: 0.0,
                 });
                 break;
             }

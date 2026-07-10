@@ -186,13 +186,18 @@ screen on desktop.
   (shared pause state — the HTML button and the in-canvas space-bar toggle
   both drive it, so the button icon polls the game), `replay_seek(f32)`
   (bar fraction 0..1; swap-to-consume `REPLAY_SEEK` atomic with a NaN-bits
-  `SEEK_NONE` sentinel), `replay_pos() -> f32` / `replay_len() -> f32`
-  (per-frame mirrors: progress fraction + recording length in seconds).
-  The `#replay-bar` HTML overlay (amber play/pause button + range slider +
-  time label) shows while `ui_state() == 3` with no menu screen open, polls
-  at 100 ms, swallows mousedown/touchstart (a canvas tap skips the replay),
-  and dedupes drag seeks on the snapped keyframe second so a drag doesn't
-  rebuild the scratch sim for sub-keyframe knob moves.
+  `SEEK_NONE` sentinel), `replay_step(i32)` (±1-keyframe steps; fetch_add
+  so same-frame taps accumulate, consumed with the arrow-key steps),
+  `replay_pos() -> f32` / `replay_len() -> f32` (per-frame mirrors:
+  progress fraction + recording length in seconds). The `#replay-bar` HTML
+  overlay (amber ⏮ / play-pause / ⏭ buttons + range slider + time label —
+  the slider input is bar-height with an oversized 28 px thumb so it's
+  grabbable on touch, the visible 6 px track is drawn by the track
+  pseudo-elements, and the time label hides under 480 px) shows while
+  `ui_state() == 3` with no menu screen open, polls at 100 ms, swallows
+  mousedown/touchstart (a canvas tap skips the replay), and dedupes drag
+  seeks on the snapped keyframe second so a drag doesn't rebuild the
+  scratch sim for sub-keyframe knob moves.
 - **Exit to menu** ends the run via `ui_command(1)` (a reset while alive
   banks it in the high scores — "longest flights"); the fresh ship waits,
   paused, behind the menu; Fly unpauses.
@@ -283,7 +288,7 @@ pushes the stored value back via `set_best_dist()` after every level load
 
 **Replays**: physics depends on the level, so the recording header carries
 `LevelParams` (scoring/shafts/obstacles/pad_spacing/seed — NOT the cosmetic
-name; `REPLAY_FORMAT_VERSION` bumped to 2) and `resim`/`ResimPlayer` rebuild
+name; added in format v2, current version is v3) and `resim`/`ResimPlayer` rebuild
 the level from the header (`Level::from_params`) — a replay re-runs in the
 world it was flown in, unit-tested bit-exact on a non-demo level too
 (`resim_reproduces_on_a_custom_level_bit_exactly`).
@@ -698,11 +703,15 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   `ResimPlayer::seek_to_keyframe` rebuilds the scratch sim FRESH and
   restores the target keyframe — the same op sequence as playing a trimmed
   recording from its first keyframe — and re-seeds the effective input from
-  the event stream exactly like `Recording::trim` does at a cut. The resume
-  is near-exact, not bit-exact (the keyframe's angle→`Rotation::new`
-  round-trip costs sub-mm drift, measured ~6e-4 m over 3 s — far below the
-  0.5 m snap threshold; unit test
-  `seeking_to_a_keyframe_resumes_without_snapping`). A seek past the end
+  the event stream exactly like `Recording::trim` does at a cut. Since
+  format v3 a keyframe carries the body's EXACT unit-complex rotation
+  (restored via `Rotation::new_unchecked` — `Rotation::new(angle)` cost
+  sub-mm round-trip drift) plus `land_timer`, so restoring an airborne
+  keyframe resumes BIT-EXACTLY (unit test
+  `seeking_to_a_keyframe_resumes_bit_exactly`). A keyframe captured under
+  sustained contact can still diverge (Rapier warm-start caches / handle
+  numbering aren't in the keyframe) — absorbed by the per-keyframe drift
+  check + 0.5 m snap fallback. A seek past the end
   clamps to the last keyframe with ticks left to play (the terminal crash
   keyframe is not a playable start), so scrubbing to the bar's far right
   shows the finale. Controls: the HTML `#replay-bar` (see the bridge
@@ -721,16 +730,22 @@ for now:
   pushed only on change — the frame's quantized `input` is recorded by
   `record_tick` in the stepping loop.
 - **Keyframes** every `KEYFRAME_EVERY = 120` ticks (1 Hz): full sim state
-  (pose, velocities, fuel, hull, glow) for future drift detection / seeking /
-  fallback playback, plus a terminal keyframe at the impact (`finalize`).
+  (position, EXACT unit-complex rotation re/im — not an angle, see the
+  `Keyframe` doc comment — velocities, fuel, hull, glow, land_timer; 48 B)
+  for drift detection / transport seeking / fallback playback, plus a
+  terminal keyframe at the impact (`finalize`).
 - **Header**: `SimParams` — every physics constant, built by `sim_params()`
   from the (now module-level) consts `GRAVITY_Y`, `THRUST_FORCE`,
   `LINEAR_DAMPING`, `ANGULAR_DAMPING`, `RCS_FORCE`, PD gains, fuel/crash/hull
   numbers — plus `LevelParams` (the world half: scoring/shafts/obstacles/
-  pad_spacing/seed, format v2) so resim rebuilds the exact world — and a
+  pad_spacing/seed) so resim rebuilds the exact world — and a
   **build id**: index.html parses the first 8 hex chars of
   the deploy revision to a u32 and pushes it via the `set_build_id` export
-  (0 = local dev). Bump `REPLAY_FORMAT_VERSION` when the layout changes.
+  (0 = local dev). Bump `REPLAY_FORMAT_VERSION` when the layout changes
+  (v3: exact rotation + land_timer in keyframes). **No backward
+  compatibility while iterating** — `deserialize` rejects other versions,
+  so pre-v3 localStorage blobs stop decoding (watch/ghost buttons no-op
+  gracefully); add version-tolerant reads when the game is released.
 - Trimming keeps the retained window **starting at a keyframe** with the
   effective input re-seeded there, so it stays replayable after the cap.
   The window is `HYBRID_MAX_SECS = 60 min` (~1 MB/h worst case) — a memory
