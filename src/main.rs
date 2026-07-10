@@ -1394,8 +1394,16 @@ async fn main() {
         if let Some(f) = replay_frame {
             glow = f.glow;
         }
+        // A paused replay freezes cosmetic time too (see the particle clock
+        // below); the engine hum mutes with it.
+        let replay_paused_now =
+            mode == Mode::Replay && REPLAY_PAUSED.load(Ordering::Relaxed) != 0;
         if let Some(s) = &thruster_snd {
-            let vol = if SOUND_ON.load(Ordering::Relaxed) != 0 { glow * 0.6 } else { 0.0 };
+            let vol = if SOUND_ON.load(Ordering::Relaxed) != 0 && !replay_paused_now {
+                glow * 0.6
+            } else {
+                0.0
+            };
             set_sound_volume(s, vol);
         }
 
@@ -1990,10 +1998,10 @@ async fn main() {
             // next commit — for both live play and replay, see #67.)
             let inp = replay_player.as_ref().map(|p| p.current_input()).unwrap_or_default();
             let (isx, isy) = inp.steer_f32();
-            // Raised above the parked home so the HTML replay bar (two rows,
-            // ~132 CSS px incl. its bottom offset — logical px == CSS px)
-            // never covers the recorded-input stick.
-            let replay_stick_home = stick_park - vec2(0.0, 130.0);
+            // Raised above the parked home so the HTML replay bar (three
+            // rows, ~155 CSS px incl. its bottom offset — logical px ==
+            // CSS px) never covers the recorded-input stick.
+            let replay_stick_home = stick_park - vec2(0.0, 150.0);
             draw_stick(replay_stick_home, vec2(isx, isy) * STICK_TRAVEL, inp.stick_held != 0);
             if ui_tap.is_some() {
                 replay_player = None;
@@ -2029,7 +2037,25 @@ async fn main() {
         // --- Particle emission ---
         // (Forces, fuel burn and the heading controller all run per tick in
         // the sim; this section is purely cosmetic.)
-        let dt = get_frame_time();
+        //
+        // Cosmetic clock: during replay playback particles advance in SIM
+        // time — scaled by the playback rate, frozen while paused — because
+        // particle velocities are world-space: with the camera pinned to a
+        // frozen/slowed ship, wall-clock particles inherit the ship's world
+        // velocity and the exhaust plume streams AHEAD of it (seen live as
+        // "thrust goes forward" when pausing mid-burn). Emission below is
+        // gated on dt > 0 so a paused frame doesn't pile particles at the
+        // nozzle.
+        let dt = if mode == Mode::Replay {
+            if replay_paused_now {
+                0.0
+            } else {
+                get_frame_time().min(0.05)
+                    * f32::from_bits(REPLAY_SPEED.load(Ordering::Relaxed))
+            }
+        } else {
+            get_frame_time()
+        };
 
         // Which RCS nozzle is puffing: live command + the sim's last applied
         // heading torque while flying, the recorded side during playback.
@@ -2050,7 +2076,7 @@ async fn main() {
             Some(_) => 0.0,
             None => throttle_fx,
         };
-        if exhaust > 0.0 {
+        if dt > 0.0 && exhaust > 0.0 {
             for _ in 0..(8.0 * exhaust).ceil() as i32 {
                 let spread = gen_range(-0.25f32, 0.25);
                 let (px, py) = lp(spread * 0.45, -0.72);
@@ -2071,7 +2097,7 @@ async fn main() {
         // torque, so negative heading torque puffs the LEFT nozzle and
         // positive the RIGHT (threshold keeps small trim corrections silent).
         // Coords are in scaled world units — lp() does NOT apply SHIP_SCALE.
-        if puff_left {
+        if dt > 0.0 && puff_left {
             for _ in 0..3 {
                 let spread = gen_range(-0.15f32, 0.15);
                 let (px, py) = lp(-0.30, -0.71);   // left leg nozzle (gold accent, scaled)
@@ -2084,7 +2110,7 @@ async fn main() {
                 });
             }
         }
-        if puff_right {
+        if dt > 0.0 && puff_right {
             for _ in 0..3 {
                 let spread = gen_range(-0.15f32, 0.15);
                 let (px, py) = lp(0.30, -0.71);    // right leg nozzle (gold accent, scaled)

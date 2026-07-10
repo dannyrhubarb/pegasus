@@ -190,7 +190,7 @@
       cursor: pointer;
     }
     #rp-time {
-      font-size: 11px; /* m:ss.t / m:ss.t fits the portrait side zone */
+      font-size: 12px;
       color: var(--dim);
       white-space: nowrap;
       font-variant-numeric: tabular-nums;
@@ -598,7 +598,7 @@
        + seek slider (visible while a replay plays) -->
   <div id="replay-bar">
     <div class="rp-row">
-      <div class="rp-side"><div id="rp-time">0:00.0 / 0:00.0</div></div>
+      <div class="rp-side"></div>
       <div class="rp-transport">
         <div id="rp-back" class="cbtn rp-btn rp-step" role="button" aria-label="Step 0.1 s back" title="Step 0.1 s back (hold to repeat)">
           <svg class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -628,6 +628,9 @@
     </div>
     <div class="rp-row">
       <input id="rp-seek" type="range" min="0" max="1000" step="1" value="0" aria-label="Replay position">
+    </div>
+    <div class="rp-row">
+      <div id="rp-time">0:00.0 / 0:00.0</div>
     </div>
     <div id="rp-speed-menu" role="menu" aria-label="Playback speed">
       <div class="rp-speed-opt" role="menuitem" data-speed="0.25">¼×</div>

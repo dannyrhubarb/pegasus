@@ -194,14 +194,15 @@ screen on desktop.
   button label polls the game so the in-canvas S-key cycle stays in sync),
   `replay_pos() -> f32` / `replay_len() -> f32` (per-frame mirrors:
   progress fraction + recording length in seconds). The `#replay-bar` HTML
-  overlay is TWO ROWS (`.rp-row`): on top the `m:ss.t` time label left
-  (tenths, so steps visibly move the clock), the amber ⏮ / play-pause / ⏭
+  overlay is THREE ROWS (`.rp-row`): on top the amber ⏮ / play-pause / ⏭
   cluster dead-centre (the flanking `.rp-side` zones share `flex: 1 1 0`,
-  which is what centres it) and the speed button right — it opens the
-  `#rp-speed-menu` picker panel (absolute, anchored above the bar) rather
-  than cycling; the full-width range slider sits beneath — the slider
-  input is row-height with an oversized 28 px thumb so it's grabbable on
-  touch, the visible 6 px track drawn by the track pseudo-elements. Shows
+  which is what centres it — the left one is an empty spacer) and the
+  speed button right — it opens the `#rp-speed-menu` picker panel
+  (absolute, anchored above the bar) rather than cycling; the full-width
+  range slider in the middle (row-height input with an oversized 28 px
+  thumb so it's grabbable on touch, the visible 6 px track drawn by the
+  track pseudo-elements); the `m:ss.t` time label on its own bottom row
+  (tenths, so steps visibly move the clock). Shows
   while `ui_state() == 3` with no menu screen open, polls at 100 ms,
   swallows mousedown/touchstart (a canvas tap skips the replay), and
   dedupes drag seeks per slider position (at most one seek per rendered
@@ -691,8 +692,8 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   cursor passes: the overlay shows `re-simulated from inputs · drift N m`,
   and drift > `SNAP_DRIFT_M = 0.5` snaps to the keyframe (the graceful
   fallback for recordings from a different build/params — zero on the same
-  binary, unit-tested). The **stick is drawn raised 130 px above its parked home**
-  (`stick_park`, bottom-right — the two-row HTML replay bar occupies the
+  binary, unit-tested). The **stick is drawn raised 150 px above its parked home**
+  (`stick_park`, bottom-right — the three-row HTML replay bar occupies the
   parked spot) animated by the input driving the re-sim —
   knob at the recorded deflection, amber while held — so a replay shows the
   pilot's hand where the live stick sits. (A throttle meter for both live
@@ -729,7 +730,12 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   `tick_stepping_matches_continuous_playback_bit_exactly`). Transport
   steps are 0.1 s of sim (12 ticks — the bar's ⏮/⏭, hold-to-repeat at
   ~10/s ≈ a realtime shuttle; ←/→ in-canvas) and AUTO-PAUSE playback;
-  the underlying seek stays tick-exact. Since
+  the underlying seek stays tick-exact. **Cosmetic clock**: particle
+  update dt runs in replay SIM time (× speed, 0 while paused, emission
+  gated on dt > 0) — particle velocities are world-space, so wall-clock
+  particles around a frozen/slowed ship inherit its world velocity and
+  the exhaust plume streams AHEAD of it (the "thrust goes forward on
+  pause" bug); the engine hum also mutes while paused. Since
   format v3 a keyframe carries the body's EXACT unit-complex rotation
   (restored via `Rotation::new_unchecked` — `Rotation::new(angle)` cost
   sub-mm round-trip drift) plus `land_timer`, so restoring an airborne
