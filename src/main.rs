@@ -1909,10 +1909,11 @@ async fn main() {
         // dialog shows no ship — it was just destroyed.
         let ship_visible = match mode {
             Mode::Flying => !crashed,
-            // A finished replay pauses on its final frame — the hull stays
-            // visible at the impact pose (there's no debris burst to stand
-            // in for it; the boom sound marks the destruction).
-            Mode::Replay => true,
+            // The hull vanishes in the replayed explosion, like live play
+            // (the scratch sim's crashed flag is set exactly at the
+            // destroying tick; scrubbing back rebuilds a fresh sim, so the
+            // ship reappears automatically).
+            Mode::Replay => !replay_player.as_ref().is_some_and(|p| p.sim.crashed),
             Mode::CrashDialog => false,
         };
 
@@ -2088,11 +2089,11 @@ async fn main() {
             let (isx, isy) = inp.steer_f32();
             // Half size, tucked into the corner with tighter margins than
             // the full-size park spot, and clear of the HTML replay bar
-            // (~166 CSS px incl. its bottom offset; logical px == CSS px).
+            // (~154 CSS px incl. its bottom offset; logical px == CSS px).
             let r = STICK_RADIUS * 0.5;
             let replay_stick_home = vec2(
                 sw - safe_right - r - 12.0,
-                sh - safe_bottom - r - 185.0,
+                sh - safe_bottom - r - 168.0,
             );
             draw_stick(replay_stick_home, vec2(isx, isy) * STICK_TRAVEL,
                 inp.stick_held != 0, 0.5);
@@ -2136,19 +2137,23 @@ async fn main() {
         // gated on dt > 0 so a paused frame doesn't pile particles at the
         // nozzle.
         let dt = if mode == Mode::Replay {
+            let cosmetic = get_frame_time().min(0.05)
+                * f32::from_bits(REPLAY_SPEED.load(Ordering::Relaxed));
             if replay_paused_now {
-                // The ending grace: debris/plume keep animating on the wall
-                // clock briefly after the finish auto-pause (see the
-                // replay_boom_timer note above), then time truly stops.
-                if replay_boom_timer > 0.0 { get_frame_time() } else { 0.0 }
+                // The ending grace: debris/plume keep animating briefly
+                // after the finish auto-pause (see the replay_boom_timer
+                // note above) — in COSMETIC time, so the explosion respects
+                // the playback speed — then time truly stops.
+                if replay_boom_timer > 0.0 { cosmetic } else { 0.0 }
             } else {
-                get_frame_time().min(0.05)
-                    * f32::from_bits(REPLAY_SPEED.load(Ordering::Relaxed))
+                cosmetic
             }
         } else {
             get_frame_time()
         };
-        replay_boom_timer = (replay_boom_timer - get_frame_time()).max(0.0);
+        // Counts down in the same clock the particles advance by, so a ¼×
+        // ending gets its full slow-motion play-out.
+        replay_boom_timer = (replay_boom_timer - dt).max(0.0);
         // Emission needs cosmetic time AND live playback — during the ending
         // grace the frozen ship must not keep spraying exhaust.
         let emit_cosmetics = dt > 0.0 && !replay_paused_now;

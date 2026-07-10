@@ -701,7 +701,7 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   and drift > `SNAP_DRIFT_M = 0.5` snaps to the keyframe (the graceful
   fallback for recordings from a different build/params — zero on the same
   binary, unit-tested). The **stick is drawn HALF SIZE, tucked into the bottom-right
-  corner with tighter margins than the full-size park spot and ~185 CSS px
+  corner with tighter margins than the full-size park spot and ~168 CSS px
   up, clear of the three-row HTML replay bar** animated by the input driving the re-sim —
   knob at the recorded deflection, amber while held — so a replay shows the
   pilot's hand where the live stick sits. (A throttle meter for both live
@@ -710,12 +710,15 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   dialog). **Reaching the end does NOT exit**: playback PAUSES on the
   final frame, but the ending still ANIMATES — the destroying impact
   bursts its debris (+ boom sound) and the plume fades during a ~1.2 s
-  `replay_boom_timer` grace in which particle time keeps running on the
-  wall clock while EMISSION stays off (`emit_cosmetics` — a frozen ship
-  must not keep spraying exhaust), then the freeze is total on a clean
-  frame; the ending re-fires if the finale is replayed after a scrub
-  back. The hull stays visible at the impact pose, stepping ⏭ past the
-  final tick is a no-op (same-tick seeks return early — they used to
+  `replay_boom_timer` grace in which particle time keeps running in
+  COSMETIC time (× playback speed — a ¼× ending plays out in slow
+  motion; the timer counts down in the same clock) while EMISSION stays
+  off (`emit_cosmetics` — a frozen ship must not keep spraying exhaust),
+  then the freeze is total on a clean frame; the ending re-fires if the
+  finale is replayed after a scrub back. The hull VANISHES in the
+  replayed explosion like live play (the scratch sim's `crashed` flag;
+  scrubbing back rebuilds a fresh sim, so it reappears), stepping ⏭ past
+  the final tick is a no-op (same-tick seeks return early — they used to
   re-seek the last interval and resurrect the plume),
   and **hitting play on the last frame restarts from the top** (the finish
   auto-pauses, so finished-and-unpaused can only mean the user pressed
