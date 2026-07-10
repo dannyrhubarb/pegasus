@@ -2715,7 +2715,7 @@ mod tests {
             }
             // Hover (TWR ≈ 7.5 → hover throttle ≈ 0.13) with a small steer
             // wobble so the PD heading controller stays busy.
-            let throttle = if (tick / 90) % 2 == 0 { 0.16 } else { 0.10 };
+            let throttle = if (tick / 90).is_multiple_of(2) { 0.16 } else { 0.10 };
             let f = tick as f32 * 0.01;
             InputState::from_controls(throttle, 0, f.sin() * 0.15, -0.9, true)
         };

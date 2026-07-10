@@ -131,7 +131,7 @@ pub struct TickReport {
 // pose/velocity because a destroying impact parks the wreck immediately —
 // by the time the frame loop sees the report, the body is zeroed. The
 // heading is the exact unit-complex rotation so the terminal keyframe built
-// from it stays bit-faithful (angle() derives the angle where needed).
+// from it stays bit-faithful.
 #[derive(Clone, Copy)]
 pub struct Impact {
     pub dv: f32,
@@ -144,12 +144,6 @@ pub struct Impact {
     pub rot_re: f32,
     pub rot_im: f32,
     pub angvel: f32,
-}
-
-impl Impact {
-    pub fn angle(&self) -> f32 {
-        self.rot_im.atan2(self.rot_re)
-    }
 }
 
 pub struct Sim {
