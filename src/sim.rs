@@ -86,13 +86,15 @@ pub fn spawn_keyframe(level: &Level, x: f32) -> Keyframe {
         tick: 0,
         x,
         y: level.stand_y(x),
-        angle: 0.0,
+        rot_re: 1.0, // upright: unit complex for angle 0
+        rot_im: 0.0,
         vx: 0.0,
         vy: 0.0,
         angvel: 0.0,
         fuel: FUEL_MAX,
         hull: HULL_MAX,
         glow: 0.0,
+        land_timer: 0.0,
     }
 }
 
@@ -127,7 +129,9 @@ pub struct TickReport {
 
 // An impact this tick (dv above CRASH_DV_SOFT). Carries the post-impact
 // pose/velocity because a destroying impact parks the wreck immediately —
-// by the time the frame loop sees the report, the body is zeroed.
+// by the time the frame loop sees the report, the body is zeroed. The
+// heading is the exact unit-complex rotation so the terminal keyframe built
+// from it stays bit-faithful.
 #[derive(Clone, Copy)]
 pub struct Impact {
     pub dv: f32,
@@ -137,7 +141,8 @@ pub struct Impact {
     pub y: f32,
     pub vx: f32,
     pub vy: f32,
-    pub angle: f32,
+    pub rot_re: f32,
+    pub rot_im: f32,
     pub angvel: f32,
 }
 
@@ -262,13 +267,19 @@ impl Sim {
         let rb = self.bodies.get_mut(self.ship).unwrap();
         rb.set_gravity_scale(1.0, true);
         rb.set_translation(vector![kf.x, kf.y], true);
-        rb.set_rotation(Rotation::new(kf.angle), true);
+        // new_unchecked, NOT Rotation::new / from_complex: the keyframe holds
+        // the body's original unit complex verbatim, and any re-normalisation
+        // or angle round-trip would change its bits (= sub-mm restore drift).
+        rb.set_rotation(
+            Rotation::new_unchecked(rapier2d::na::Complex::new(kf.rot_re, kf.rot_im)),
+            true,
+        );
         rb.set_linvel(vector![kf.vx, kf.vy], true);
         rb.set_angvel(kf.angvel, true);
         self.fuel = kf.fuel;
         self.hull = kf.hull;
         self.crashed = false;
-        self.land_timer = 0.0;
+        self.land_timer = kf.land_timer;
         self.max_dist = kf.x.abs();
         self.prev_vel = (kf.vx, kf.vy);
         self.sync_window(Self::window_key(kf.x, kf.y));
@@ -300,14 +311,21 @@ impl Sim {
     }
 
     pub fn keyframe(&self, tick: u32, glow: f32) -> Keyframe {
-        let (x, y, angle) = self.ship_pose();
+        let b = &self.bodies[self.ship];
+        let rot = *b.rotation();
         let (vx, vy) = self.ship_vel();
         Keyframe {
-            tick, x, y, angle, vx, vy,
+            tick,
+            x: b.translation().x,
+            y: b.translation().y,
+            rot_re: rot.re, // exact unit-complex heading, not an angle —
+            rot_im: rot.im, // see the Keyframe doc comment in replay.rs
+            vx, vy,
             angvel: self.ship_angvel(),
             fuel: self.fuel,
             hull: self.hull,
             glow,
+            land_timer: self.land_timer,
         }
     }
 
@@ -403,7 +421,7 @@ impl Sim {
             &(),
         );
 
-        let (x, y, angle) = self.ship_pose();
+        let (x, y, _) = self.ship_pose();
         let (vx, vy) = self.ship_vel();
 
         if !self.crashed {
@@ -420,8 +438,10 @@ impl Sim {
                 let damage = (dv - CRASH_DV_SOFT) / (CRASH_DV_HARD - CRASH_DV_SOFT) * HULL_MAX;
                 self.hull -= damage;
                 let destroyed = dv > CRASH_DV_HARD || self.hull <= 0.0;
+                let rot = *self.bodies[self.ship].rotation();
                 report.impact = Some(Impact {
-                    dv, damage, destroyed, x, y, vx, vy, angle,
+                    dv, damage, destroyed, x, y, vx, vy,
+                    rot_re: rot.re, rot_im: rot.im,
                     angvel: self.ship_angvel(),
                 });
                 if destroyed {
@@ -651,10 +671,11 @@ pub fn resim(rec: &Recording) -> Vec<Keyframe> {
         if let Some(imp) = rep.impact.filter(|i| i.destroyed) {
             out.push(Keyframe {
                 tick: done,
-                x: imp.x, y: imp.y, angle: imp.angle,
+                x: imp.x, y: imp.y, rot_re: imp.rot_re, rot_im: imp.rot_im,
                 vx: imp.vx, vy: imp.vy, angvel: imp.angvel,
                 fuel: sim.fuel, hull: sim.hull,
                 glow: input.throttle_f32(),
+                land_timer: 0.0, // a destroying tick always zeroes it
             });
             break;
         }
@@ -696,10 +717,11 @@ mod tests {
             if let Some(imp) = rep.impact.filter(|i| i.destroyed) {
                 rec.finalize(Keyframe {
                     tick: rec.ticks(),
-                    x: imp.x, y: imp.y, angle: imp.angle,
+                    x: imp.x, y: imp.y, rot_re: imp.rot_re, rot_im: imp.rot_im,
                     vx: imp.vx, vy: imp.vy, angvel: imp.angvel,
                     fuel: sim.fuel, hull: sim.hull,
                     glow: input.throttle_f32(),
+                    land_timer: 0.0,
                 });
                 break;
             }
@@ -716,12 +738,17 @@ mod tests {
         assert_eq!(a.tick, b.tick);
         assert_eq!(a.x.to_bits(), b.x.to_bits(), "x differs at tick {}", a.tick);
         assert_eq!(a.y.to_bits(), b.y.to_bits(), "y differs at tick {}", a.tick);
-        assert_eq!(a.angle.to_bits(), b.angle.to_bits(), "angle differs at tick {}", a.tick);
+        assert_eq!(a.rot_re.to_bits(), b.rot_re.to_bits(), "rot_re differs at tick {}", a.tick);
+        assert_eq!(a.rot_im.to_bits(), b.rot_im.to_bits(), "rot_im differs at tick {}", a.tick);
         assert_eq!(a.vx.to_bits(), b.vx.to_bits(), "vx differs at tick {}", a.tick);
         assert_eq!(a.vy.to_bits(), b.vy.to_bits(), "vy differs at tick {}", a.tick);
         assert_eq!(a.angvel.to_bits(), b.angvel.to_bits(), "angvel differs at tick {}", a.tick);
         assert_eq!(a.fuel.to_bits(), b.fuel.to_bits(), "fuel differs at tick {}", a.tick);
         assert_eq!(a.hull.to_bits(), b.hull.to_bits(), "hull differs at tick {}", a.tick);
+        assert_eq!(
+            a.land_timer.to_bits(), b.land_timer.to_bits(),
+            "land_timer differs at tick {}", a.tick
+        );
     }
 
     // Regression test for the replay-drift bug (2026-07). Rapier's contact
@@ -757,9 +784,11 @@ mod tests {
             let due = rec.record_tick(input);
             if let Some(imp) = rep.impact.filter(|i| i.destroyed) {
                 rec.finalize(Keyframe {
-                    tick: rec.ticks(), x: imp.x, y: imp.y, angle: imp.angle,
+                    tick: rec.ticks(), x: imp.x, y: imp.y,
+                    rot_re: imp.rot_re, rot_im: imp.rot_im,
                     vx: imp.vx, vy: imp.vy, angvel: imp.angvel,
                     fuel: sim.fuel, hull: sim.hull, glow: input.throttle_f32(),
+                    land_timer: 0.0,
                 });
                 break;
             }

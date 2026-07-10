@@ -21,7 +21,13 @@
 // One keyframe per second of sim time (physics runs at 120 Hz).
 pub const KEYFRAME_EVERY: u32 = 120;
 pub const REPLAY_MAGIC: [u8; 4] = *b"PGRP";
-pub const REPLAY_FORMAT_VERSION: u16 = 2; // v2: LevelParams added to the header
+// v3: keyframes carry the EXACT rotation (unit-complex re/im, not an angle —
+// the atan2→Rotation::new round-trip cost sub-mm drift on keyframe restore)
+// plus land_timer (pad-settle progress, it gates refuel/repair timing).
+// No backward compatibility while the game is iterating: deserialize rejects
+// other versions, so pre-v3 stored blobs simply stop decoding (decode returns
+// None — high-score watch/ghost buttons no-op, nothing crashes).
+pub const REPLAY_FORMAT_VERSION: u16 = 3;
 
 // Resolved control values in effect for a physics step, quantized for
 // storage. "Resolved" = after the input-combining logic (stick ramp gates,
@@ -73,18 +79,25 @@ pub struct InputEvent {
 }
 
 // Full simulation state at a tick — enough to resume/verify a re-sim.
+// The heading is stored as the body's exact unit-complex rotation (re, im),
+// NOT an angle: restoring `Rotation::new(atan2(im, re))` doesn't reproduce
+// the original bits, and that sub-mm seed compounds through the integrator
+// (measured ~6e-4 m over 3 s of steered flight). With the raw components a
+// keyframe restore is bit-exact.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Keyframe {
     pub tick: u32,
     pub x: f32,
     pub y: f32,
-    pub angle: f32,
+    pub rot_re: f32,
+    pub rot_im: f32,
     pub vx: f32,
     pub vy: f32,
     pub angvel: f32,
     pub fuel: f32,
     pub hull: f32,
     pub glow: f32,
+    pub land_timer: f32, // pad-settle progress — it gates refuel/repair timing
 }
 
 // Every constant that shapes the simulation, so a replay re-runs under the
@@ -230,10 +243,10 @@ impl Recording {
     //         level: scoring(1) shafts(1) obstacles(1) pad_spacing(4) seed(4)
     //         ticks(4) n_events(4) n_keyframes(4)                 = 93 B
     // Event:  tick(4) throttle(1) rot(1) steer_x(1) steer_y(1) held(1) = 9 B
-    // Keyframe: tick(4) + 9×f32                                       = 40 B
+    // Keyframe: tick(4) + 11×f32                                      = 48 B
 
     pub fn serialize(&self, build_id: u32) -> Vec<u8> {
-        let mut out = Vec::with_capacity(93 + self.events.len() * 9 + self.keyframes.len() * 40);
+        let mut out = Vec::with_capacity(93 + self.events.len() * 9 + self.keyframes.len() * 48);
         out.extend_from_slice(&REPLAY_MAGIC);
         out.extend_from_slice(&REPLAY_FORMAT_VERSION.to_le_bytes());
         out.extend_from_slice(&build_id.to_le_bytes());
@@ -258,7 +271,8 @@ impl Recording {
         }
         for k in &self.keyframes {
             out.extend_from_slice(&k.tick.to_le_bytes());
-            for f in [k.x, k.y, k.angle, k.vx, k.vy, k.angvel, k.fuel, k.hull, k.glow] {
+            for f in [k.x, k.y, k.rot_re, k.rot_im, k.vx, k.vy, k.angvel,
+                      k.fuel, k.hull, k.glow, k.land_timer] {
                 out.extend_from_slice(&f.to_le_bytes());
             }
         }
@@ -305,14 +319,14 @@ impl Recording {
         let mut keyframes = Vec::with_capacity(n_keyframes);
         for _ in 0..n_keyframes {
             let tick = r.u32()?;
-            let mut f = [0f32; 9];
+            let mut f = [0f32; 11];
             for v in &mut f {
                 *v = r.f32()?;
             }
             keyframes.push(Keyframe {
                 tick,
-                x: f[0], y: f[1], angle: f[2], vx: f[3], vy: f[4],
-                angvel: f[5], fuel: f[6], hull: f[7], glow: f[8],
+                x: f[0], y: f[1], rot_re: f[2], rot_im: f[3], vx: f[4], vy: f[5],
+                angvel: f[6], fuel: f[7], hull: f[8], glow: f[9], land_timer: f[10],
             });
         }
         let last_input = events.last().map(|e| e.input);
@@ -381,8 +395,9 @@ mod tests {
     fn kf(tick: u32) -> Keyframe {
         Keyframe {
             tick,
-            x: tick as f32 * 0.1, y: 5.0, angle: 0.3, vx: 1.0, vy: -0.5,
-            angvel: 0.0, fuel: 90.0, hull: 100.0, glow: 0.7,
+            x: tick as f32 * 0.1, y: 5.0, rot_re: 0.955, rot_im: 0.296,
+            vx: 1.0, vy: -0.5, angvel: 0.0, fuel: 90.0, hull: 100.0,
+            glow: 0.7, land_timer: 0.25,
         }
     }
 
@@ -472,7 +487,7 @@ mod tests {
             }
         }
         let blob = rec.serialize(0xdeadbeef);
-        assert_eq!(blob.len(), 93 + rec.events.len() * 9 + rec.keyframes.len() * 40);
+        assert_eq!(blob.len(), 93 + rec.events.len() * 9 + rec.keyframes.len() * 48);
         let (back, build_id) = Recording::deserialize(&blob).expect("deserialize");
         assert_eq!(build_id, 0xdeadbeef);
         assert_eq!(back.params, rec.params);

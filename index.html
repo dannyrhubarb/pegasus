@@ -78,6 +78,170 @@
       filter: drop-shadow(0 0 5px var(--cyan));
     }
 
+    /* --- Replay transport bar ----------------------------------------------
+       Play/pause + keyframe seek bar, visible only while a replay plays
+       (ui_state 3). Amber to match the in-canvas REPLAY identity. Swallows
+       mousedown/touchstart like the menu — a canvas tap skips the replay,
+       so bar interactions must never reach it. */
+    #replay-bar {
+      position: fixed;
+      left: 50%;
+      transform: translateX(-50%);
+      bottom: calc(env(safe-area-inset-bottom) + 16px);
+      display: none;
+      flex-direction: column; /* buttons row on top, seek row beneath */
+      align-items: stretch;
+      gap: 8px;
+      padding: 10px 14px;
+      width: min(520px, calc(100vw - 24px));
+      border-radius: 16px;
+      background: rgba(8, 16, 34, 0.7);
+      border: 2px solid var(--amber);
+      color: var(--amber);
+      font-family: var(--mono);
+      box-shadow: 0 0 10px rgba(255, 194, 75, 0.4), inset 0 0 8px rgba(255, 194, 75, 0.12);
+      z-index: 10;
+    }
+    #replay-bar.on { display: flex; }
+    .rp-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      min-width: 0;
+    }
+    /* Top row: time left, ⏮⏯⏭ dead-centre, speed right. The side zones
+       share flex: 1 1 0 (equal width), which is what centres the cluster. */
+    .rp-side {
+      flex: 1 1 0;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+    }
+    .rp-side.right { justify-content: flex-end; }
+    .rp-transport {
+      flex: none;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    /* Amber variant of the corner-button look, shared by play/pause and the
+       two tick-step buttons. */
+    .rp-btn {
+      flex: none;
+      border-color: var(--amber);
+      color: var(--amber);
+      box-shadow: 0 0 8px rgba(255, 194, 75, 0.5), inset 0 0 8px rgba(255, 194, 75, 0.15);
+    }
+    .rp-btn:hover { background: rgba(255, 194, 75, 0.2); }
+    .rp-btn .icn { filter: drop-shadow(0 0 5px var(--amber)); }
+    /* Invisible hit-area extension: +6px all around brings adjacent zones
+       exactly edge-to-edge (buttons sit 12px apart), so touch targets grow
+       without moving anything and without overlapping each other. */
+    .rp-btn { position: relative; }
+    .rp-btn::after {
+      content: "";
+      position: absolute;
+      inset: -6px;
+      border-radius: 50%;
+    }
+    #rp-toggle { width: 44px; height: 44px; }
+    .rp-step { width: 38px; height: 38px; }
+    .rp-step .icn { width: 20px; height: 20px; }
+    /* Speed button is text (¼× … 4×), not an icon. */
+    #rp-speed {
+      font-size: 14px;
+      font-weight: bold;
+      letter-spacing: -0.5px;
+      text-shadow: 0 0 5px var(--amber);
+    }
+    /* The INPUT is the touch target, so it is tall (full bar height) and
+       transparent; the visible 6 px track is drawn by the track pseudo-
+       elements and the thumb is oversized for fat fingers. */
+    #rp-seek {
+      flex: 1;
+      min-width: 0;
+      -webkit-appearance: none;
+      appearance: none;
+      height: 56px; /* the whole input is the touch target; it has its own
+                       row, so the extra height can't collide with buttons */
+      background: transparent;
+      outline: none;
+      cursor: pointer;
+      touch-action: none; /* the drag is the gesture — never scroll/zoom */
+    }
+    #rp-seek::-webkit-slider-runnable-track {
+      height: 6px;
+      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.18);
+    }
+    #rp-seek::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 32px;
+      height: 32px;
+      margin-top: -13px; /* centre the 32px thumb on the 6px track */
+      border-radius: 50%;
+      border: none;
+      background: var(--amber);
+      box-shadow: 0 0 8px rgba(255, 194, 75, 0.8);
+      cursor: pointer;
+    }
+    #rp-seek::-moz-range-track {
+      height: 6px;
+      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.18);
+    }
+    #rp-seek::-moz-range-thumb {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      border: none;
+      background: var(--amber);
+      box-shadow: 0 0 8px rgba(255, 194, 75, 0.8);
+      cursor: pointer;
+    }
+    /* The slider row below carries ~12px of built-in headroom (56px input,
+       32px thumb), so pull the time row's gap back in. */
+    .rp-time-row { justify-content: flex-start; margin-bottom: -12px; }
+    #rp-time {
+      font-size: 12px;
+      color: var(--dim);
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+    /* Speed picker: pops up above the bar, anchored over the speed button
+       (the bar is position: fixed, so it contains the absolute panel). */
+    #rp-speed-menu {
+      position: absolute;
+      right: 10px;
+      bottom: calc(100% + 8px);
+      display: none;
+      flex-direction: column;
+      gap: 2px;
+      padding: 6px;
+      border-radius: 12px;
+      background: rgba(8, 16, 34, 0.92);
+      border: 2px solid var(--amber);
+      box-shadow: 0 0 10px rgba(255, 194, 75, 0.4);
+    }
+    #rp-speed-menu.open { display: flex; }
+    .rp-speed-opt {
+      padding: 8px 22px;
+      border-radius: 8px;
+      color: var(--amber);
+      font: bold 14px var(--mono);
+      text-align: center;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+    }
+    .rp-speed-opt:hover { background: rgba(255, 194, 75, 0.15); }
+    .rp-speed-opt.sel {
+      background: rgba(255, 194, 75, 0.25);
+      box-shadow: inset 0 0 6px rgba(255, 194, 75, 0.35);
+    }
+
     /* --- Game menu --------------------------------------------------------
        One fullscreen overlay, one visible .screen at a time. Neon-arcade
        styling: dark space base + a faint perspective grid, CRT scanlines
@@ -428,8 +592,15 @@
   <div id="safe-area-probe" style="position:fixed;top:0;left:0;height:env(safe-area-inset-top);width:env(safe-area-inset-left);pointer-events:none;"></div>
   <div id="safe-area-probe-br" style="position:fixed;bottom:0;right:0;height:env(safe-area-inset-bottom);width:env(safe-area-inset-right);pointer-events:none;"></div>
 
-  <!-- In-game corner buttons: pause + restart (visible only during play) -->
+  <!-- In-game corner buttons: pause + restart during play; during a replay
+       they swap for a single ✕ (exit replay → ui_command 3). -->
   <div id="hud-btns">
+    <div id="exit-replay-btn" class="cbtn rp-btn" role="button" aria-label="Exit replay" title="Exit replay" style="display:none">
+      <svg class="icn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true">
+        <line x1="6.5" y1="6.5" x2="17.5" y2="17.5"></line>
+        <line x1="17.5" y1="6.5" x2="6.5" y2="17.5"></line>
+      </svg>
+    </div>
     <div id="restart-btn" class="cbtn" role="button" aria-label="Restart" title="Restart">
       <svg class="icn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <polyline points="21 5 21 10.5 15.5 10.5"></polyline>
@@ -441,6 +612,53 @@
         <rect x="7.2" y="5.5" width="3.4" height="13" rx="1.4"></rect>
         <rect x="13.4" y="5.5" width="3.4" height="13" rx="1.4"></rect>
       </svg>
+    </div>
+  </div>
+
+  <!-- Replay transport bar: keyframe step back / play-pause / step forward
+       + seek slider (visible while a replay plays) -->
+  <div id="replay-bar">
+    <div class="rp-row">
+      <div class="rp-side"></div>
+      <div class="rp-transport">
+        <div id="rp-back" class="cbtn rp-btn rp-step" role="button" aria-label="Step 0.1 s back" title="Step 0.1 s back (hold to repeat)">
+          <svg class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <rect x="5" y="5.5" width="2.6" height="13" rx="1.2"></rect>
+            <polygon points="19 5.2 9.5 12 19 18.8"></polygon>
+          </svg>
+        </div>
+        <div id="rp-toggle" class="cbtn rp-btn" role="button" aria-label="Pause replay" title="Play / pause">
+          <svg id="rp-pause-icn" class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <rect x="7.2" y="5.5" width="3.4" height="13" rx="1.4"></rect>
+            <rect x="13.4" y="5.5" width="3.4" height="13" rx="1.4"></rect>
+          </svg>
+          <svg id="rp-play-icn" class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="display:none">
+            <polygon points="8 5.2 19 12 8 18.8"></polygon>
+          </svg>
+        </div>
+        <div id="rp-fwd" class="cbtn rp-btn rp-step" role="button" aria-label="Step 0.1 s forward" title="Step 0.1 s forward (hold to repeat)">
+          <svg class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <polygon points="5 5.2 14.5 12 5 18.8"></polygon>
+            <rect x="16.4" y="5.5" width="2.6" height="13" rx="1.2"></rect>
+          </svg>
+        </div>
+      </div>
+      <div class="rp-side right">
+        <div id="rp-speed" class="cbtn rp-btn rp-step" role="button" aria-haspopup="true" aria-label="Playback speed" title="Playback speed">1×</div>
+      </div>
+    </div>
+    <div class="rp-row rp-time-row">
+      <div id="rp-time">0:00.0 / 0:00.0</div>
+    </div>
+    <div class="rp-row">
+      <input id="rp-seek" type="range" min="0" max="1000" step="1" value="0" aria-label="Replay position">
+    </div>
+    <div id="rp-speed-menu" role="menu" aria-label="Playback speed">
+      <div class="rp-speed-opt" role="menuitem" data-speed="0.25">¼×</div>
+      <div class="rp-speed-opt" role="menuitem" data-speed="0.5">½×</div>
+      <div class="rp-speed-opt" role="menuitem" data-speed="1">1×</div>
+      <div class="rp-speed-opt" role="menuitem" data-speed="2">2×</div>
+      <div class="rp-speed-opt" role="menuitem" data-speed="4">4×</div>
     </div>
   </div>
 
@@ -920,8 +1138,10 @@
         fn();
       }, { passive: false });
     }
+    const exitReplayBtn = document.getElementById("exit-replay-btn");
     onTap(pauseBtn, () => showScreen("scr-pause"));
     onTap(restartBtn, () => call("ui_command", 1));
+    onTap(exitReplayBtn, () => call("ui_command", 3));
 
     // Esc toggles the pause view (desktop nicety).
     window.addEventListener("keydown", e => {
@@ -952,6 +1172,115 @@
       }
       prevState = st;
     }, 200);
+
+    // --- Replay transport bar (play/pause + keyframe seek) -----------------
+    // Shown while a replay plays (state 3, no menu screen up). Drives the
+    // wasm through set_replay_paused / replay_seek and mirrors position and
+    // pause state back via replay_pos / replay_len / replay_paused (the
+    // space-bar toggle lives in-canvas, so the icon must follow the game,
+    // not local JS state). Seeks snap to the recording's 1 Hz keyframes
+    // game-side; dedupe on the snapped second so a drag doesn't rebuild the
+    // scratch sim for sub-keyframe knob moves.
+    const rpBar = document.getElementById("replay-bar");
+    const rpToggle = document.getElementById("rp-toggle");
+    const rpSeek = document.getElementById("rp-seek");
+    const rpTime = document.getElementById("rp-time");
+    const rpPlayIcn = document.getElementById("rp-play-icn");
+    const rpPauseIcn = document.getElementById("rp-pause-icn");
+    ["mousedown", "touchstart"].forEach(ev => rpBar.addEventListener(ev, swallow));
+    let rpDragging = false;
+    let rpLastSent = -1;
+    rpSeek.addEventListener("input", () => {
+      rpDragging = true;
+      if (typeof wasm_exports === "undefined" || !wasm_exports.replay_seek) return;
+      // Seeks are tick-resolution game-side; the slider's 1000 positions
+      // are the quantisation, so dedupe per position.
+      if (rpSeek.value !== rpLastSent) {
+        rpLastSent = rpSeek.value;
+        wasm_exports.replay_seek(rpSeek.value / 1000);
+      }
+    });
+    ["change", "pointerup", "touchend"].forEach(ev =>
+      rpSeek.addEventListener(ev, () => { rpDragging = false; rpLastSent = -1; }));
+    onTap(rpToggle, () => {
+      if (typeof wasm_exports === "undefined" || !wasm_exports.replay_paused) return;
+      call("set_replay_paused", wasm_exports.replay_paused() ? 0 : 1);
+    });
+    // Transport steps: 0.1 s of sim per tap — 12 ticks at the 120 Hz
+    // physics rate (same as the arrow keys; the game auto-pauses on a
+    // step). Holding repeats at ~10/s, a realtime shuttle either way.
+    const RP_STEP_TICKS = 12;
+    function stepHold(el, dir) {
+      let delay = null, rep = null;
+      const fire = () => call("replay_step", dir * RP_STEP_TICKS);
+      const stop = () => {
+        clearTimeout(delay);
+        clearInterval(rep);
+        delay = rep = null;
+      };
+      el.addEventListener("pointerdown", e => {
+        e.preventDefault();
+        e.stopPropagation();
+        fire();
+        delay = setTimeout(() => { rep = setInterval(fire, 100); }, 350);
+      });
+      ["pointerup", "pointerleave", "pointercancel"].forEach(ev =>
+        el.addEventListener(ev, stop));
+    }
+    stepHold(document.getElementById("rp-back"), -1);
+    stepHold(document.getElementById("rp-fwd"), 1);
+    // Playback speed: the button opens a picker panel above the bar (the
+    // in-canvas S key still cycles; the label and the panel highlight
+    // follow the game via the poll below, so all three stay in sync).
+    const rpSpeedBtn = document.getElementById("rp-speed");
+    const rpSpeedMenu = document.getElementById("rp-speed-menu");
+    const rpSpeedLabel = s => (s === 0.25 ? "¼×" : s === 0.5 ? "½×" : s + "×");
+    onTap(rpSpeedBtn, () => rpSpeedMenu.classList.toggle("open"));
+    rpSpeedMenu.querySelectorAll(".rp-speed-opt").forEach(opt =>
+      onTap(opt, () => {
+        call("set_replay_speed", parseFloat(opt.dataset.speed));
+        rpSpeedMenu.classList.remove("open");
+      }));
+    // A tap anywhere else on the bar dismisses the picker.
+    ["mousedown", "touchstart"].forEach(ev =>
+      rpBar.addEventListener(ev, e => {
+        if (!rpSpeedMenu.contains(e.target) && !rpSpeedBtn.contains(e.target)) {
+          rpSpeedMenu.classList.remove("open");
+        }
+      }));
+    const fmtT = s => {
+      // m:ss.t — tenths make frame-stepping visibly move the clock.
+      s = Math.max(0, s);
+      const m = Math.floor(s / 60);
+      const r = Math.min(59.9, s - m * 60);
+      return m + ":" + (r < 10 ? "0" : "") + r.toFixed(1);
+    };
+    setInterval(() => {
+      if (typeof wasm_exports === "undefined" || !wasm_exports.replay_pos) return;
+      const inReplay = wasm_exports.ui_state() === 3;
+      // During a replay the pause/restart corner buttons swap for ✕.
+      pauseBtn.style.display = inReplay ? "none" : "";
+      restartBtn.style.display = inReplay ? "none" : "";
+      exitReplayBtn.style.display = inReplay ? "" : "none";
+      const on = inReplay && overlay === null;
+      rpBar.classList.toggle("on", on);
+      if (!on) {
+        rpSpeedMenu.classList.remove("open");
+        return;
+      }
+      const len = wasm_exports.replay_len();
+      const pos = wasm_exports.replay_pos();
+      if (!rpDragging) rpSeek.value = Math.round(pos * 1000);
+      rpTime.textContent = fmtT(pos * len) + " / " + fmtT(len);
+      const paused = wasm_exports.replay_paused() !== 0;
+      rpPauseIcn.style.display = paused ? "none" : "block";
+      rpPlayIcn.style.display = paused ? "block" : "none";
+      rpToggle.setAttribute("aria-label", paused ? "Play replay" : "Pause replay");
+      const spd = wasm_exports.replay_speed();
+      rpSpeedBtn.textContent = rpSpeedLabel(spd);
+      rpSpeedMenu.querySelectorAll(".rp-speed-opt").forEach(opt =>
+        opt.classList.toggle("sel", Math.abs(parseFloat(opt.dataset.speed) - spd) < 0.01));
+    }, 100);
 
     // If the deploy-time placeholders weren't substituted (e.g. opened locally),
     // show a friendly fallback instead of the raw token.

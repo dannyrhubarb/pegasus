@@ -104,7 +104,8 @@ Four input paths feed the same physics, combined in the main loop:
     and swallow their own taps, so they never reach the canvas). The old
     lower-`STICK_ZONE` restriction was a leftover from the in-canvas
     crash-dialog buttons (now HTML) and is gone. During the dialog/replay
-    `stick_active` is false, so fresh touches become `ui_tap`s (replay skip).
+    `stick_active` is false and fresh touches are ignored (the out-of-flight
+    UI is HTML; the old in-canvas `ui_tap` machinery is gone).
     Release parks the stick bottom-right as a translucent ghost. Positions
     are physical px (`touches()` and `screen_*()` share that space; a mouse
     press maps in via `× dpi`).
@@ -163,7 +164,9 @@ while the wasm loads):
   distance + best, Fly again / Watch replay / Main menu.
 
 During flight the only HTML is two corner buttons (`#hud-btns`, top-right):
-**⏸ pause** (opens scr-pause) and **⟳ restart** (same path as the R key).
+**⏸ pause** (opens scr-pause) and **⟳ restart** (same path as the R key);
+during a replay they swap for a single amber **✕ exit-replay** button
+(`ui_command(3)`, toggled by the 100 ms replay poll).
 The menu container and the corner buttons swallow `mousedown`/`touchstart`
 (`stopPropagation`, no `preventDefault` — that would kill label clicks) so
 taps never reach the canvas and fire the thruster. Esc toggles the pause
@@ -176,12 +179,42 @@ screen on desktop.
   gated** — a stored replay watched from the menu plays uncovered.
 - `ui_command(i32)` → `UI_CMD` (swap-to-consume): 1 = reset/fly-again (joins
   the R-key reset path via `ui_do_reset`), 2 = watch the last crashed run's
-  replay (only honoured in `CrashDialog`).
+  replay (only honoured in `CrashDialog`), 3 = exit the replay (only in
+  `Replay`; playback freezes on its final frame and never exits by itself).
 - `ui_state() -> i32` / `cur_dist() -> f32`: per-frame mirrors (`UI_STATE`,
   `CUR_DIST` — exports can't read loop locals) of the mode (0 flying /
   1 wreck / 2 crash dialog / 3 replay) and `sim.max_dist`. JS polls at 200 ms:
   state 2 with no screen open ⇒ show scr-gameover; a menu-launched replay
   (state 3) returns to scr-scores when it ends without a wreck waiting.
+- **Replay transport**: `set_replay_paused(i32)` / `replay_paused() -> i32`
+  (shared pause state — the HTML button and the in-canvas space-bar toggle
+  both drive it, so the button icon polls the game), `replay_seek(f32)`
+  (bar fraction 0..1 → the exact tick, so the slider's 1000 positions are
+  the only quantisation; swap-to-consume `REPLAY_SEEK` atomic with a
+  NaN-bits `SEEK_NONE` sentinel), `replay_step(i32)` (steps in raw
+  physics ticks — the UI sends 0.1 s = 12 per tap — auto-pausing; fetch_add
+  so same-frame taps accumulate, consumed with the arrow-key steps),
+  `set_replay_speed(f32)` / `replay_speed() -> f32` (playback rate; the
+  button label polls the game so the in-canvas S-key cycle stays in sync),
+  `replay_pos() -> f32` / `replay_len() -> f32` (per-frame mirrors:
+  progress fraction + recording length in seconds). The `#replay-bar` HTML
+  overlay is THREE ROWS (`.rp-row`): on top the amber ⏮ / play-pause / ⏭
+  cluster dead-centre (the flanking `.rp-side` zones share `flex: 1 1 0`,
+  which is what centres it — the left one is an empty spacer; every
+  `.rp-btn` carries an invisible `::after` hit-area extension of +6px,
+  exactly half the 12px button gap, so touch targets meet edge-to-edge
+  without moving or overlapping anything) and the
+  speed button right — it opens the `#rp-speed-menu` picker panel
+  (absolute, anchored above the bar) rather than cycling; the `m:ss.t`
+  time label on its own LEFT-ALIGNED middle row (tenths, so steps visibly
+  move the clock); the full-width range slider at the bottom (the input is its
+  row's full 56 px height with an oversized 32 px thumb so it's grabbable
+  on touch — safe because the slider has the row to itself — and the
+  visible 6 px track is drawn by the track pseudo-elements). Shows
+  while `ui_state() == 3` with no menu screen open, polls at 100 ms,
+  swallows mousedown/touchstart (a canvas tap skips the replay), and
+  dedupes drag seeks per slider position (at most one seek per rendered
+  frame reaches the sim — the atomic keeps only the latest).
 - **Exit to menu** ends the run via `ui_command(1)` (a reset while alive
   banks it in the high scores — "longest flights"); the fresh ship waits,
   paused, behind the menu; Fly unpauses.
@@ -272,7 +305,7 @@ pushes the stored value back via `set_best_dist()` after every level load
 
 **Replays**: physics depends on the level, so the recording header carries
 `LevelParams` (scoring/shafts/obstacles/pad_spacing/seed — NOT the cosmetic
-name; `REPLAY_FORMAT_VERSION` bumped to 2) and `resim`/`ResimPlayer` rebuild
+name; added in format v2, current version is v3) and `resim`/`ResimPlayer` rebuild
 the level from the header (`Level::from_params`) — a replay re-runs in the
 world it was flown in, unit-tested bit-exact on a non-demo level too
 (`resim_reproduces_on_a_custom_level_bit_exactly`).
@@ -651,7 +684,7 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   keyboard hints — on web the **HTML game-over screen** covers it and drives
   the choices through the menu bridge (`ui_command`: 1 = fly again → the
   same reset block as the R key, 2 = watch replay), while R / Enter remain
-  as the native/dev fallback. `ui_tap` still exists for the replay skip.
+  as the native/dev fallback.
 - **Playback is RE-SIM DRIVEN** (`ResimPlayer` in main.rs): WATCH REPLAY
   re-runs the hybrid recording's input events through a **scratch `Sim`**
   paced by the render clock — the machinery a replay shared from another
@@ -667,13 +700,45 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   cursor passes: the overlay shows `re-simulated from inputs · drift N m`,
   and drift > `SNAP_DRIFT_M = 0.5` snaps to the keyframe (the graceful
   fallback for recordings from a different build/params — zero on the same
-  binary, unit-tested). The **stick is drawn at its normal parked home**
-  (`stick_park`, bottom-right) animated by the input driving the re-sim —
+  binary, unit-tested). The **stick is drawn HALF SIZE, tucked into the bottom-right
+  corner with tighter margins than the full-size park spot and ~168 CSS px
+  up, clear of the three-row HTML replay bar** animated by the input driving the re-sim —
   knob at the recorded deflection, amber while held — so a replay shows the
   pilot's hand where the live stick sits. (A throttle meter for both live
   play and replay is a follow-up, see #67.) The destroying impact is
   re-simulated, ends the playback (boom +
-  dialog); a `ui_tap` skips back to the dialog, R skips straight to respawn.
+  dialog). **Reaching the end does NOT exit**: playback PAUSES on the
+  final frame, but the ending still ANIMATES — the destroying impact
+  bursts its debris (+ boom sound) and the plume fades during a ~1.2 s
+  `replay_boom_timer` grace in which particle time keeps running in
+  COSMETIC time (× playback speed — a ¼× ending plays out in slow
+  motion; the timer counts down in the same clock) while EMISSION stays
+  off (`emit_cosmetics` — a frozen ship must not keep spraying exhaust),
+  then the freeze is total on a clean frame; the ending re-fires if the
+  finale is replayed after a scrub back. The hull VANISHES in the
+  replayed explosion like live play (the scratch sim's `crashed` flag;
+  scrubbing back rebuilds a fresh sim, so it reappears), stepping ⏭ past
+  the final tick is a no-op (same-tick seeks return early — they used to
+  re-seek the last interval and resurrect the plume),
+  and **hitting play on the last frame restarts from the top** (the finish
+  auto-pauses, so finished-and-unpaused can only mean the user pressed
+  play — checked BEFORE the frame's transport commands, so a
+  scrub-to-the-end while playing pauses on the finale instead of instantly
+  looping). Leaving is always explicit: the **✕ corner button**
+  (`ui_command(3)` — during a replay the HTML pause/restart corner buttons
+  swap for it) or the R-key respawn. **Transport cosmetics**: every seek/step calls
+  `rebuild_replay_particles` — re-sim the trailing `PLUME_WINDOW_TICKS`
+  (60 = the 0.5 s exhaust lifetime) on a scratch player, emitting per-tick
+  cosmetics — so the frame you land on (in EITHER direction) carries
+  exactly the plume the ship should trail there. (Earlier iterations
+  cleared on backward jumps and fed forward steps as one coarse dt lump,
+  which read as a dotted clump.) Cost: a scratch seek + ≤60 ticks, a few
+  ms, at most once per rendered frame during a drag. `was_finished` is
+  captured BEFORE the transport commands so a seek landing exactly on the
+  final tick counts as the finish transition (pause + boom) too. The only in-canvas replay UI is
+  the recorded-input stick, HALF SIZE via `draw_stick`'s scale param — the
+  old banner / hint line / progress bar / drift readout are gone (the
+  drift check + snap still run, just undisplayed).
   WATCH REPLAY is a no-op if the recording has no ticks. **The same `Replay`
   mode also plays stored highscore replays** (see "High scores"): the ▶
   button sets `watch_rec` and playback sources from it instead of the live
@@ -681,6 +746,50 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   that ended by reset (no wreck) skips the terminal boom.
   `ResimPlayer::step_one` is the shared per-tick core: `advance()` drives it
   on the wall clock for WATCH REPLAY; the ghost calls it in lockstep.
+- **Transport controls (play/pause + frame-level scrubbing + speed)**:
+  playback can be paused (`advance(rec, 0.0)` re-simulates nothing and
+  returns the frozen interpolated frame), scrubbed/stepped to any exact
+  TICK, and rate-scaled (¼×/½×/1×/2×/4× — the multiplier scales the
+  wall-clock time fed to the re-sim, the tick sequence never changes, so
+  determinism/drift checks are untouched; the fractional-tick interpolation
+  keeps slow-mo smooth). Fast-forward note: the caller clamps the RAW frame
+  time to 0.05 s before multiplying, and `advance()`'s hitch cap sits at
+  0.25 s — above the 4× worst case (0.2 s = 24 ticks) — so 4× is genuinely
+  4× on a 60 Hz display (unit-tested; the old 0.05 cap clipped it to ~3×).
+  `ResimPlayer::seek_to_tick` reaches an arbitrary tick: physics can't run
+  backwards, so a backward (or cross-keyframe forward) target goes through
+  `seek_to_keyframe` — rebuild the scratch sim FRESH, restore the nearest
+  keyframe at or before the target (the same op sequence as playing a
+  trimmed recording from its first keyframe, input re-seeded from the event
+  stream exactly like `Recording::trim` does at a cut) — then re-sims the
+  remainder (< `KEYFRAME_EVERY` ticks, a few ms); a forward target inside
+  the current keyframe interval just steps the live scratch sim (that IS
+  ordinary playback). Tick-seeking lands on the exact state continuous
+  playback reaches (unit test
+  `tick_stepping_matches_continuous_playback_bit_exactly`). Transport
+  steps are 0.1 s of sim (12 ticks — the bar's ⏮/⏭, hold-to-repeat at
+  ~10/s ≈ a realtime shuttle; ←/→ in-canvas) and AUTO-PAUSE playback;
+  the underlying seek stays tick-exact. **Cosmetic clock**: particle
+  update dt runs in replay SIM time (× speed, 0 while paused, emission
+  gated on dt > 0) — particle velocities are world-space, so wall-clock
+  particles around a frozen/slowed ship inherit its world velocity and
+  the exhaust plume streams AHEAD of it (the "thrust goes forward on
+  pause" bug); the engine hum also mutes while paused. Since
+  format v3 a keyframe carries the body's EXACT unit-complex rotation
+  (restored via `Rotation::new_unchecked` — `Rotation::new(angle)` cost
+  sub-mm round-trip drift) plus `land_timer`, so restoring an airborne
+  keyframe resumes BIT-EXACTLY (unit test
+  `seeking_to_a_keyframe_resumes_bit_exactly`). A keyframe captured under
+  sustained contact can still diverge (Rapier warm-start caches / handle
+  numbering aren't in the keyframe) — absorbed by the per-keyframe drift
+  check + 0.5 m snap fallback. A seek past the end
+  clamps (keyframe restores skip the terminal crash keyframe — not a
+  playable start), so scrubbing to the bar's far right shows the finale. Controls: the HTML `#replay-bar` (see the bridge
+  section below) or, in-canvas (native/dev fallback), space = pause,
+  ←/→ = ±1 tick and S = cycle speed; the banner appends the speed
+  (`REPLAY · 2x`) and `· PAUSED`. Pause, pending seeks and the speed are
+  reset whenever a new replay starts (all three `Mode::Replay` entry
+  points).
 
 ### Hybrid recording (`src/replay.rs`) — the single replay format
 A `Recording` captures each spawn→crash run as **inputs + params +
@@ -692,16 +801,22 @@ for now:
   pushed only on change — the frame's quantized `input` is recorded by
   `record_tick` in the stepping loop.
 - **Keyframes** every `KEYFRAME_EVERY = 120` ticks (1 Hz): full sim state
-  (pose, velocities, fuel, hull, glow) for future drift detection / seeking /
-  fallback playback, plus a terminal keyframe at the impact (`finalize`).
+  (position, EXACT unit-complex rotation re/im — not an angle, see the
+  `Keyframe` doc comment — velocities, fuel, hull, glow, land_timer; 48 B)
+  for drift detection / transport seeking / fallback playback, plus a
+  terminal keyframe at the impact (`finalize`).
 - **Header**: `SimParams` — every physics constant, built by `sim_params()`
   from the (now module-level) consts `GRAVITY_Y`, `THRUST_FORCE`,
   `LINEAR_DAMPING`, `ANGULAR_DAMPING`, `RCS_FORCE`, PD gains, fuel/crash/hull
   numbers — plus `LevelParams` (the world half: scoring/shafts/obstacles/
-  pad_spacing/seed, format v2) so resim rebuilds the exact world — and a
+  pad_spacing/seed) so resim rebuilds the exact world — and a
   **build id**: index.html parses the first 8 hex chars of
   the deploy revision to a u32 and pushes it via the `set_build_id` export
-  (0 = local dev). Bump `REPLAY_FORMAT_VERSION` when the layout changes.
+  (0 = local dev). Bump `REPLAY_FORMAT_VERSION` when the layout changes
+  (v3: exact rotation + land_timer in keyframes). **No backward
+  compatibility while iterating** — `deserialize` rejects other versions,
+  so pre-v3 localStorage blobs stop decoding (watch/ghost buttons no-op
+  gracefully); add version-tolerant reads when the game is released.
 - Trimming keeps the retained window **starting at a keyframe** with the
   effective input re-seeded there, so it stays replayable after the cap.
   The window is `HYBRID_MAX_SECS = 60 min` (~1 MB/h worst case) — a memory
