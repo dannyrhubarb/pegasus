@@ -698,7 +698,7 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   and drift > `SNAP_DRIFT_M = 0.5` snaps to the keyframe (the graceful
   fallback for recordings from a different build/params — zero on the same
   binary, unit-tested). The **stick is drawn HALF SIZE, tucked into the bottom-right
-  corner with tighter margins than the full-size park spot and ~170 CSS px
+  corner with tighter margins than the full-size park spot and ~185 CSS px
   up, clear of the three-row HTML replay bar** animated by the input driving the re-sim —
   knob at the recorded deflection, amber while held — so a replay shows the
   pilot's hand where the live stick sits. (A throttle meter for both live
@@ -715,12 +715,16 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   scrub-to-the-end while playing pauses on the finale instead of instantly
   looping). Leaving is always explicit: the **✕ corner button**
   (`ui_command(3)` — during a replay the HTML pause/restart corner buttons
-  swap for it) or the R-key respawn. **Transport cosmetics**: a forward
-  step / short forward scrub feeds its stepped sim time to the particle
-  clock, so shuttling through a burn emits its plume frame by frame;
-  backward or long jumps clear the particle buffer instead (cosmetic time
-  can't run in reverse, and the camera teleport would strand
-  world-anchored exhaust at the old spot). The only in-canvas replay UI is
+  swap for it) or the R-key respawn. **Transport cosmetics**: every seek/step calls
+  `rebuild_replay_particles` — re-sim the trailing `PLUME_WINDOW_TICKS`
+  (60 = the 0.5 s exhaust lifetime) on a scratch player, emitting per-tick
+  cosmetics — so the frame you land on (in EITHER direction) carries
+  exactly the plume the ship should trail there. (Earlier iterations
+  cleared on backward jumps and fed forward steps as one coarse dt lump,
+  which read as a dotted clump.) Cost: a scratch seek + ≤60 ticks, a few
+  ms, at most once per rendered frame during a drag. `was_finished` is
+  captured BEFORE the transport commands so a seek landing exactly on the
+  final tick counts as the finish transition (pause + boom) too. The only in-canvas replay UI is
   the recorded-input stick, HALF SIZE via `draw_stick`'s scale param — the
   old banner / hint line / progress bar / drift readout are gone (the
   drift check + snap still run, just undisplayed).

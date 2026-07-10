@@ -264,6 +264,80 @@ impl ResimPlayer {
     }
 }
 
+// Re-derive the exhaust/RCS particle field for a replay tick: re-sim the
+// trailing plume window on a scratch player and emit per-tick cosmetics
+// along the way, so after a scrub or step (in EITHER direction) the plume is
+// exactly what the ship "should" trail at that instant — instead of an empty
+// frame (old backward behaviour) or a coarse-dt clump (old forward stepping
+// integrated particles in 0.1 s lumps). Cosmetic randomness (gen_range) is
+// fine here — nothing feeds back into the sim. Cost: one scratch seek plus
+// ≤ PLUME_WINDOW_TICKS re-simmed ticks, a few ms, at most once per rendered
+// frame during a drag.
+const PLUME_WINDOW_TICKS: u32 = 60; // exhaust lives 0.5 s — the longest window needed
+fn rebuild_replay_particles(rec: &Recording, target: u32, particles: &mut Vec<Particle>) {
+    particles.clear();
+    let Some(mut q) = ResimPlayer::new(rec) else { return };
+    if target <= q.first_tick {
+        return;
+    }
+    let start = target.saturating_sub(PLUME_WINDOW_TICKS).max(q.first_tick);
+    q.seek_to_tick(rec, start);
+    while q.tick < target && !q.finished {
+        q.step_one(rec);
+        // Integrate + decay what's already emitted by one tick (same rates
+        // as the frame loop's particle pass: 0.5 s main, 0.3 s RCS).
+        for pt in particles.iter_mut() {
+            pt.life -= match pt.kind {
+                0 => PHYSICS_DT / 0.5,
+                _ => PHYSICS_DT / 0.3,
+            };
+            pt.x += pt.vx * PHYSICS_DT;
+            pt.y += pt.vy * PHYSICS_DT;
+        }
+        let (x, y, a) = q.sim.ship_pose();
+        let (svx, svy) = q.sim.ship_vel();
+        let lp = |lx: f32, ly: f32| (x + lx * a.cos() - ly * a.sin(), y + lx * a.sin() + ly * a.cos());
+        let ld = |lx: f32, ly: f32| (lx * a.cos() - ly * a.sin(), lx * a.sin() + ly * a.cos());
+        let alive = q.sim.fuel > 0.0 && !q.sim.crashed;
+        // Commanded throttle stands in for the render-side glow smoothing.
+        let ex = if alive { q.input.throttle_f32() } else { 0.0 };
+        if ex > 0.05 {
+            // Live emission is ~8/frame at 60 fps → 4/tick at 120 Hz.
+            for _ in 0..(4.0 * ex).ceil() as i32 {
+                let spread = gen_range(-0.25f32, 0.25);
+                let (px, py) = lp(spread * 0.45, -0.72);
+                let speed = gen_range(4.0f32, 8.0) * (0.4 + 0.6 * ex);
+                let (dvx, dvy) = ld(spread * 1.5, -speed);
+                particles.push(Particle {
+                    x: px, y: py, vx: svx + dvx, vy: svy + dvy, life: 1.0, kind: 0,
+                });
+            }
+        }
+        // Same nozzle mapping as the frame loop: negative torque = left.
+        let rcs = if alive && (q.input.rot < 0 || q.last_torque < -0.4) {
+            -1
+        } else if alive && (q.input.rot > 0 || q.last_torque > 0.4) {
+            1
+        } else {
+            0
+        };
+        if rcs != 0 {
+            for _ in 0..2 {
+                // Live is 3/frame at 60 fps → ~2/tick.
+                let spread = gen_range(-0.15f32, 0.15);
+                let (px, py) = lp(0.30 * rcs as f32, -0.71);
+                let speed = gen_range(2.0f32, 4.0);
+                let (dvx, dvy) = ld(spread, -speed);
+                particles.push(Particle {
+                    x: px, y: py, vx: svx + dvx, vy: svy + dvy, life: 1.0,
+                    kind: if rcs < 0 { 1 } else { 2 },
+                });
+            }
+        }
+    }
+    particles.retain(|pt| pt.life > 0.0);
+}
+
 // The attitude stick is now read directly from macroquad's touch API inside
 // the game (see the TouchStick gatherer in the loop) — no touch atoms/exports.
 // Gamepad state lives on its own atomics so a connected-but-idle controller
@@ -1281,11 +1355,6 @@ async fn main() {
         // are genuinely recomputed, not played back. Ends by re-simulating
         // the destroying impact, then returns to the dialog.
         let mut replay_frame: Option<ReplayFrame> = None;
-        // Sim time covered by transport steps/short forward scrubs this
-        // frame — fed to the particle clock below so stepping through a burn
-        // emits its plume (backwards can't run cosmetic time in reverse, so
-        // those land on a cleared frame instead).
-        let mut replay_step_dt = 0.0f32;
         if mode == Mode::Replay {
             // Playback source: an externally-loaded highscore replay when
             // one is active, else the live recorder (crash-dialog replay).
@@ -1302,6 +1371,10 @@ async fn main() {
                     p.seek_to_tick(play_rec, p.first_tick);
                     particles.clear();
                 }
+                // Captured BEFORE the transport commands so a seek/step that
+                // lands exactly on the final tick counts as the transition
+                // into finished (pause + boom below), same as playing there.
+                let was_finished = p.finished;
                 // Transport controls: play/pause, keyframe scrubbing and
                 // playback speed, from the HTML replay bar (atomics) or the
                 // keyboard (space = pause, ←/→ = one keyframe, S = cycle
@@ -1333,30 +1406,18 @@ async fn main() {
                     let span = (p.end_tick - p.first_tick) as f32;
                     let target = p.first_tick
                         + (f32::from_bits(seek_bits).clamp(0.0, 1.0) * span).round() as u32;
-                    let before = p.tick;
                     p.seek_to_tick(play_rec, target);
-                    // A short FORWARD drag plays its cosmetics (plume puffs
-                    // along); any bigger teleport strands world-anchored
-                    // particles at the old spot, so start clean.
-                    let delta = p.tick as i64 - before as i64;
-                    if delta > 0 && delta <= 2 * step_unit {
-                        replay_step_dt = delta as f32 * PHYSICS_DT;
-                    } else {
-                        particles.clear();
-                    }
+                    // Rebuild the plume the ship "should" trail at the
+                    // landing tick (the camera teleports, so the old
+                    // particles are wrong in both position and time).
+                    rebuild_replay_particles(play_rec, p.tick, &mut particles);
                 } else if step_ticks != 0 {
                     // Steps (⏮/⏭ buttons, ←/→ keys) auto-pause: a 0.1 s
                     // step during playback would barely register.
                     REPLAY_PAUSED.store(1, Ordering::Relaxed);
-                    let before = p.tick;
                     let target = (p.tick as i64 + step_ticks).max(0) as u32;
                     p.seek_to_tick(play_rec, target);
-                    let delta = p.tick as i64 - before as i64;
-                    if delta > 0 {
-                        replay_step_dt = (delta as f32 * PHYSICS_DT).min(0.25);
-                    } else {
-                        particles.clear();
-                    }
+                    rebuild_replay_particles(play_rec, p.tick, &mut particles);
                 }
                 // Paused playback still renders: advance(0) re-simulates
                 // nothing and returns the frozen interpolated frame. The
@@ -1366,7 +1427,6 @@ async fn main() {
                 let paused = REPLAY_PAUSED.load(Ordering::Relaxed) != 0;
                 let speed = f32::from_bits(REPLAY_SPEED.load(Ordering::Relaxed));
                 let dt = if paused { 0.0 } else { get_frame_time().min(0.05) * speed };
-                let was_finished = p.finished;
                 let f = p.advance(play_rec, dt);
                 REPLAY_POS.store(p.progress().to_bits(), Ordering::Relaxed);
                 REPLAY_LEN.store(
@@ -2012,12 +2072,12 @@ async fn main() {
             let inp = replay_player.as_ref().map(|p| p.current_input()).unwrap_or_default();
             let (isx, isy) = inp.steer_f32();
             // Half size, tucked into the corner with tighter margins than
-            // the full-size park spot, and above the HTML replay bar
-            // (~170 CSS px incl. its bottom offset; logical px == CSS px).
+            // the full-size park spot, and clear of the HTML replay bar
+            // (~166 CSS px incl. its bottom offset; logical px == CSS px).
             let r = STICK_RADIUS * 0.5;
             let replay_stick_home = vec2(
                 sw - safe_right - r - 12.0,
-                sh - safe_bottom - r - 170.0,
+                sh - safe_bottom - r - 185.0,
             );
             draw_stick(replay_stick_home, vec2(isx, isy) * STICK_TRAVEL,
                 inp.stick_held != 0, 0.5);
@@ -2061,15 +2121,12 @@ async fn main() {
         // gated on dt > 0 so a paused frame doesn't pile particles at the
         // nozzle.
         let dt = if mode == Mode::Replay {
-            let live = if replay_paused_now {
+            if replay_paused_now {
                 0.0
             } else {
                 get_frame_time().min(0.05)
                     * f32::from_bits(REPLAY_SPEED.load(Ordering::Relaxed))
-            };
-            // Steps/short forward scrubs contribute their stepped sim time,
-            // so shuttling through a burn emits its plume frame by frame.
-            live + replay_step_dt
+            }
         } else {
             get_frame_time()
         };
