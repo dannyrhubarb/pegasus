@@ -104,7 +104,8 @@ Four input paths feed the same physics, combined in the main loop:
     and swallow their own taps, so they never reach the canvas). The old
     lower-`STICK_ZONE` restriction was a leftover from the in-canvas
     crash-dialog buttons (now HTML) and is gone. During the dialog/replay
-    `stick_active` is false, so fresh touches become `ui_tap`s (replay skip).
+    `stick_active` is false and fresh touches are ignored (the out-of-flight
+    UI is HTML; the old in-canvas `ui_tap` machinery is gone).
     Release parks the stick bottom-right as a translucent ghost. Positions
     are physical px (`touches()` and `screen_*()` share that space; a mouse
     press maps in via `× dpi`).
@@ -163,7 +164,9 @@ while the wasm loads):
   distance + best, Fly again / Watch replay / Main menu.
 
 During flight the only HTML is two corner buttons (`#hud-btns`, top-right):
-**⏸ pause** (opens scr-pause) and **⟳ restart** (same path as the R key).
+**⏸ pause** (opens scr-pause) and **⟳ restart** (same path as the R key);
+during a replay they swap for a single amber **✕ exit-replay** button
+(`ui_command(3)`, toggled by the 100 ms replay poll).
 The menu container and the corner buttons swallow `mousedown`/`touchstart`
 (`stopPropagation`, no `preventDefault` — that would kill label clicks) so
 taps never reach the canvas and fire the thruster. Esc toggles the pause
@@ -176,7 +179,8 @@ screen on desktop.
   gated** — a stored replay watched from the menu plays uncovered.
 - `ui_command(i32)` → `UI_CMD` (swap-to-consume): 1 = reset/fly-again (joins
   the R-key reset path via `ui_do_reset`), 2 = watch the last crashed run's
-  replay (only honoured in `CrashDialog`).
+  replay (only honoured in `CrashDialog`), 3 = exit the replay (only in
+  `Replay`; playback freezes on its final frame and never exits by itself).
 - `ui_state() -> i32` / `cur_dist() -> f32`: per-frame mirrors (`UI_STATE`,
   `CUR_DIST` — exports can't read loop locals) of the mode (0 flying /
   1 wreck / 2 crash dialog / 3 replay) and `sim.max_dist`. JS polls at 200 ms:
@@ -198,11 +202,11 @@ screen on desktop.
   cluster dead-centre (the flanking `.rp-side` zones share `flex: 1 1 0`,
   which is what centres it — the left one is an empty spacer) and the
   speed button right — it opens the `#rp-speed-menu` picker panel
-  (absolute, anchored above the bar) rather than cycling; the full-width
-  range slider in the middle (row-height input with an oversized 28 px
-  thumb so it's grabbable on touch, the visible 6 px track drawn by the
-  track pseudo-elements); the `m:ss.t` time label on its own bottom row
-  (tenths, so steps visibly move the clock). Shows
+  (absolute, anchored above the bar) rather than cycling; the `m:ss.t`
+  time label on its own LEFT-ALIGNED middle row (tenths, so steps visibly
+  move the clock); the full-width range slider at the bottom (row-height
+  input with an oversized 28 px thumb so it's grabbable on touch, the
+  visible 6 px track drawn by the track pseudo-elements). Shows
   while `ui_state() == 3` with no menu screen open, polls at 100 ms,
   swallows mousedown/touchstart (a canvas tap skips the replay), and
   dedupes drag seeks per slider position (at most one seek per rendered
@@ -676,7 +680,7 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   keyboard hints — on web the **HTML game-over screen** covers it and drives
   the choices through the menu bridge (`ui_command`: 1 = fly again → the
   same reset block as the R key, 2 = watch replay), while R / Enter remain
-  as the native/dev fallback. `ui_tap` still exists for the replay skip.
+  as the native/dev fallback.
 - **Playback is RE-SIM DRIVEN** (`ResimPlayer` in main.rs): WATCH REPLAY
   re-runs the hybrid recording's input events through a **scratch `Sim`**
   paced by the render clock — the machinery a replay shared from another
@@ -692,14 +696,25 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   cursor passes: the overlay shows `re-simulated from inputs · drift N m`,
   and drift > `SNAP_DRIFT_M = 0.5` snaps to the keyframe (the graceful
   fallback for recordings from a different build/params — zero on the same
-  binary, unit-tested). The **stick is drawn raised 150 px above its parked home**
-  (`stick_park`, bottom-right — the three-row HTML replay bar occupies the
-  parked spot) animated by the input driving the re-sim —
+  binary, unit-tested). The **stick is drawn HALF SIZE, raised 150 px above its parked
+  home** (`stick_park`, bottom-right — the three-row HTML replay bar
+  occupies the parked spot) animated by the input driving the re-sim —
   knob at the recorded deflection, amber while held — so a replay shows the
   pilot's hand where the live stick sits. (A throttle meter for both live
   play and replay is a follow-up, see #67.) The destroying impact is
   re-simulated, ends the playback (boom +
-  dialog); a `ui_tap` skips back to the dialog, R skips straight to respawn.
+  dialog). **Reaching the end does NOT exit**: playback freezes on the
+  final frame — the boom fires on the transition into `finished` (and again
+  if the finale is replayed after a scrub back), the ship hides once the
+  re-simmed run is crashed (like live play), and you can scrub back to keep
+  watching. Leaving is always explicit: the **✕ corner button**
+  (`ui_command(3)` — during a replay the HTML pause/restart corner buttons
+  swap for it) or the R-key respawn. Seeks/steps clear the particle buffer
+  (the camera teleports; world-anchored exhaust would be left hanging at
+  the old spot). The only in-canvas replay UI is the recorded-input stick,
+  HALF SIZE via `draw_stick`'s scale param — the old banner / hint line /
+  progress bar / drift readout are gone (the drift check + snap still run,
+  just undisplayed).
   WATCH REPLAY is a no-op if the recording has no ticks. **The same `Replay`
   mode also plays stored highscore replays** (see "High scores"): the ▶
   button sets `watch_rec` and playback sources from it instead of the live

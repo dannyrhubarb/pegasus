@@ -443,7 +443,9 @@ pub extern "C" fn set_ui_pause(on: i32) {
 }
 
 /// One-shot commands from the HTML UI (swap-to-consume, like PAD_RESET):
-/// 1 = reset / fly again, 2 = watch the last crashed run's replay.
+/// 1 = reset / fly again, 2 = watch the last crashed run's replay,
+/// 3 = exit the replay (playback freezes on its final frame and never
+/// exits by itself — the ✕ button sends this).
 #[unsafe(no_mangle)]
 pub extern "C" fn ui_command(cmd: i32) {
     UI_CMD.store(cmd as u32, Ordering::Relaxed);
@@ -712,29 +714,34 @@ impl TouchStick {
 // big soft knob. Parked (not held) the whole thing is dimmed to ~0.45; held
 // it goes full-opacity with amber ring + knob (engine lit). All alphas mirror
 // the old CSS (`background .08`, `border .35→.7`, `knob .45→.85`).
-fn draw_stick(center: Vec2, knob: Vec2, held: bool) {
+// `scale` shrinks the whole widget (the replay's recorded-input display
+// draws at 0.5); the knob offset is scaled here too, so callers always pass
+// full-size deflections.
+fn draw_stick(center: Vec2, knob: Vec2, held: bool, scale: f32) {
     let (mul, accent) = if held { (1.0, (255u8, 200u8, 0u8)) } else { (0.45, (255, 255, 255)) };
     let a = |alpha: f32| (alpha * mul * 255.0) as u8;
+    let radius = STICK_RADIUS * scale;
+    let knob = knob * scale;
     // draw_circle/_lines default to 20 sides, which reads polygonal at this
     // radius (~255 physical px), so the ring/base/knob use draw_poly with a
     // high side count for a smooth curve.
     const SIDES: u8 = 64;
     // Soft filled base — this disc is what makes it read round, not hollow.
-    draw_poly(center.x, center.y, SIDES, STICK_RADIUS, 0.0, Color::from_rgba(255, 255, 255, a(0.08)));
+    draw_poly(center.x, center.y, SIDES, radius, 0.0, Color::from_rgba(255, 255, 255, a(0.08)));
     // Directional hint arrows (static, faint), 12 px in from the rim.
     let hint = Color::from_rgba(255, 255, 255, a(0.30));
-    let s = 9.0; // arrow half-size
-    let r = STICK_RADIUS - 14.0;
+    let s = 9.0 * scale; // arrow half-size
+    let r = radius - 14.0 * scale;
     let tri = |tip: Vec2, base_a: Vec2, base_b: Vec2| draw_triangle(tip, base_a, base_b, hint);
     tri(vec2(center.x, center.y - r), vec2(center.x - s, center.y - r + s), vec2(center.x + s, center.y - r + s)); // up
     tri(vec2(center.x, center.y + r), vec2(center.x - s, center.y + r - s), vec2(center.x + s, center.y + r - s)); // down
     tri(vec2(center.x - r, center.y), vec2(center.x - r + s, center.y - s), vec2(center.x - r + s, center.y + s)); // left
     tri(vec2(center.x + r, center.y), vec2(center.x + r - s, center.y - s), vec2(center.x + r - s, center.y + s)); // right
     // Ring border.
-    draw_poly_lines(center.x, center.y, SIDES, STICK_RADIUS, 0.0, 2.5,
+    draw_poly_lines(center.x, center.y, SIDES, radius, 0.0, 2.5 * scale,
         Color::from_rgba(accent.0, accent.1, accent.2, a(if held { 0.7 } else { 0.35 })));
     // Big soft knob.
-    draw_poly(center.x + knob.x, center.y + knob.y, SIDES, STICK_KNOB_R, 0.0,
+    draw_poly(center.x + knob.x, center.y + knob.y, SIDES, STICK_KNOB_R * scale, 0.0,
         Color::from_rgba(accent.0, accent.1, accent.2, a(if held { 0.85 } else { 0.45 })));
 }
 
@@ -750,9 +757,7 @@ async fn main() {
 
     // Touch is a first-class input now (the attitude stick lives in-canvas),
     // so stop miniquad synthesizing mouse events from touches — otherwise a
-    // canvas tap would fire mouse-down = full thrust. In-canvas UI taps
-    // (crash dialog, replay skip) are hit-tested via a pointer abstraction
-    // that unifies real mouse clicks with fresh touches (see the loop).
+    // canvas tap would fire mouse-down = full thrust.
     simulate_mouse_with_touch(false);
 
     // The deterministic simulation core: Rapier world, ship, sliding collider
@@ -951,6 +956,14 @@ async fn main() {
                     REPLAY_SPEED.store(1.0f32.to_bits(), Ordering::Relaxed);
                 }
             }
+            3 if mode == Mode::Replay => {
+                // The ✕ button: playback freezes on its final frame instead
+                // of exiting, so leaving the replay is always this explicit
+                // command (or the R-key respawn).
+                replay_player = None;
+                particles.clear();
+                mode = if watch_rec.take().is_some() { watch_return } else { Mode::CrashDialog };
+            }
             _ => {}
         }
         // HTML overlay up (menu / pause view): freeze the live sim. Replay
@@ -966,16 +979,16 @@ async fn main() {
         //
         // The floating stick claims the first fresh touch anywhere on screen
         // while flying (the whole canvas is the flight-control surface — the
-        // pause/restart buttons are HTML and swallow their own taps); during
-        // the dialog/replay `stick_active` is false, so every fresh touch
-        // becomes a `ui_tap` (replay skip). `touches()` reports RAW physical
-        // px, so divide by dpi to reach the LOGICAL space that `screen_*()`,
-        // `mouse_position()` and all drawing use; a mouse press is already there.
+        // pause/restart buttons and the replay bar are HTML and swallow
+        // their own taps); during the dialog/replay `stick_active` is false
+        // and fresh touches are ignored (the out-of-flight UI is HTML).
+        // `touches()` reports RAW physical px, so divide by dpi to reach the
+        // LOGICAL space that `screen_*()`, `mouse_position()` and all
+        // drawing use.
         let touch_dpi = screen_dpi_scale();
         let tpos = |t: &Touch| t.position / touch_dpi;
         let invert = INVERT_STICK.load(Ordering::Relaxed) != 0;
         let stick_active = matches!(mode, Mode::Flying) && crash_timer <= 0.0 && !ui_paused;
-        let mut ui_tap: Option<Vec2> = None;
         // Keep following / release the claimed stick touch.
         if let Some(id) = stick.id {
             match touches().iter().find(|t| t.id == id) {
@@ -992,20 +1005,13 @@ async fn main() {
             if t.phase != TouchPhase::Started {
                 continue;
             }
-            let p = tpos(&t);
             if stick_active && stick.id.is_none() {
+                let p = tpos(&t);
                 stick.id = Some(t.id);
                 stick.center = p;
                 stick.held = true;
                 stick.apply(p, invert);
-            } else if Some(t.id) != stick.id {
-                ui_tap = Some(p); // tap for the crash dialog / replay skip
             }
-        }
-        // Desktop mouse press is also a UI tap (already logical px).
-        if is_mouse_button_pressed(MouseButton::Left) {
-            let (mx, my) = mouse_position();
-            ui_tap = Some(vec2(mx, my));
         }
 
         let stick_held = stick.held;
@@ -1312,12 +1318,16 @@ async fn main() {
                     let target = p.first_tick
                         + (f32::from_bits(seek_bits).clamp(0.0, 1.0) * span).round() as u32;
                     p.seek_to_tick(play_rec, target);
+                    // The camera teleports with the seek; world-anchored
+                    // particles would be left hanging at the old spot.
+                    particles.clear();
                 } else if step_ticks != 0 {
                     // Steps (⏮/⏭ buttons, ←/→ keys) auto-pause: a 0.1 s
                     // step during playback would barely register.
                     REPLAY_PAUSED.store(1, Ordering::Relaxed);
                     let target = (p.tick as i64 + step_ticks).max(0) as u32;
                     p.seek_to_tick(play_rec, target);
+                    particles.clear();
                 }
                 // Paused playback still renders: advance(0) re-simulates
                 // nothing and returns the frozen interpolated frame. The
@@ -1327,27 +1337,29 @@ async fn main() {
                 let paused = REPLAY_PAUSED.load(Ordering::Relaxed) != 0;
                 let speed = f32::from_bits(REPLAY_SPEED.load(Ordering::Relaxed));
                 let dt = if paused { 0.0 } else { get_frame_time().min(0.05) * speed };
+                let was_finished = p.finished;
                 let f = p.advance(play_rec, dt);
                 REPLAY_POS.store(p.progress().to_bits(), Ordering::Relaxed);
                 REPLAY_LEN.store(
                     (((p.end_tick - p.first_tick) as f32) * PHYSICS_DT).to_bits(),
                     Ordering::Relaxed,
                 );
-                if p.finished {
-                    // The boom marks a re-simulated destruction; runs that
-                    // ended by manual reset just stop.
-                    if p.sim.crashed {
-                        boom_burst(f.x, f.y, &mut particles);
-                        if SOUND_ON.load(Ordering::Relaxed) != 0 && let Some(s) = &boom_snd {
-                            play_sound(s, PlaySoundParams { looped: false, volume: 0.9 });
-                        }
+                // Reaching the end does NOT exit: playback freezes on the
+                // final frame (scrub back to keep watching; the ✕ button /
+                // ui_command(3) or the R key leave). The boom fires on the
+                // TRANSITION into finished — a re-simulated destruction —
+                // and again if the finale is replayed after a scrub back;
+                // runs that ended by manual reset just stop.
+                if p.finished && !was_finished && p.sim.crashed {
+                    boom_burst(f.x, f.y, &mut particles);
+                    if SOUND_ON.load(Ordering::Relaxed) != 0 && let Some(s) = &boom_snd {
+                        play_sound(s, PlaySoundParams { looped: false, volume: 0.9 });
                     }
-                } else {
-                    replay_frame = Some(f);
                 }
-            }
-            if replay_player.as_ref().is_none_or(|p| p.finished) {
-                replay_player = None;
+                replay_frame = Some(f);
+            } else {
+                // No player (every entry point builds one, so this is just a
+                // safety net): fall back out of the mode.
                 mode = if watch_rec.take().is_some() { watch_return } else { Mode::CrashDialog };
             }
         }
@@ -1786,7 +1798,9 @@ async fn main() {
         // dialog shows no ship — it was just destroyed.
         let ship_visible = match mode {
             Mode::Flying => !crashed,
-            Mode::Replay => true,
+            // A finished replay freezes on its final frame; if that frame is
+            // a re-simulated destruction the hull is gone, like live play.
+            Mode::Replay => !replay_player.as_ref().is_some_and(|p| p.sim.crashed),
             Mode::CrashDialog => false,
         };
 
@@ -1914,9 +1928,9 @@ async fn main() {
         );
         if matches!(mode, Mode::Flying) && !crashed && !ui_paused {
             if stick.id.is_some() {
-                draw_stick(stick.center, stick.knob, stick.held);
+                draw_stick(stick.center, stick.knob, stick.held, 1.0);
             } else {
-                draw_stick(stick_park, Vec2::ZERO, false);
+                draw_stick(stick_park, Vec2::ZERO, false, 1.0);
             }
         }
 
@@ -1950,63 +1964,19 @@ async fn main() {
                 }
             }
         } else if mode == Mode::Replay {
-            // Pulsing banner + progress bar; any click/tap (above the stick
-            // zone) skips back to the dialog, R skips straight to a respawn.
-            let pulse = 180.0 + (get_time() * 4.0).sin() as f32 * 60.0;
-            let paused = REPLAY_PAUSED.load(Ordering::Relaxed) != 0;
-            let speed = f32::from_bits(REPLAY_SPEED.load(Ordering::Relaxed));
-            let mut msg = String::from("REPLAY");
-            if (speed - 1.0).abs() > 0.01 {
-                msg += &format!(" · {speed}x");
-            }
-            if paused {
-                msg += " · PAUSED";
-            }
-            let fs = 48.0 * ui;
-            let dims = measure_text(&msg, None, fs as u16, 1.0);
-            let msg_y = sh * 0.16;
-            draw_text(&msg, (sw - dims.width) / 2.0, msg_y, fs,
-                Color::from_rgba(255, 220, 120, if paused { 220 } else { pulse as u8 }));
-            let hint = "tap to skip · [space] pause · [< >] step · [s] speed";
-            let hfs = 24.0 * ui;
-            let hd = measure_text(hint, None, hfs as u16, 1.0);
-            draw_text(hint, (sw - hd.width) / 2.0, msg_y + 34.0 * ui, hfs,
-                Color::from_rgba(200, 205, 220, 160));
-            let pw = sw * 0.30;
-            let (frac, drift, snapped) = replay_player
-                .as_ref()
-                .map_or((0.0, 0.0, false), |p| (p.progress(), p.drift, p.snapped));
-            let px = (sw - pw) / 2.0;
-            let py = msg_y + 48.0 * ui;
-            draw_rectangle(px, py, pw, 4.0 * ui, Color::from_rgba(255, 255, 255, 60));
-            draw_rectangle(px, py, pw * frac, 4.0 * ui, Color::from_rgba(255, 220, 120, 200));
-            // The receipt: this is a live re-simulation of the recorded
-            // inputs, checked against the recording's keyframes.
-            let vfs = 18.0 * ui;
-            let vt = if snapped {
-                format!("re-simulated from inputs · drift {drift:.3} m · snapped to keyframe")
-            } else {
-                format!("re-simulated from inputs · drift {drift:.3} m")
-            };
-            let vd = measure_text(&vt, None, vfs as u16, 1.0);
-            draw_text(&vt, (sw - vd.width) / 2.0, py + 24.0 * ui, vfs,
-                Color::from_rgba(170, 180, 200, 170));
-            // Recorded-input display: the stick at its normal parked home,
-            // animated by the input driving the re-sim (knob at the recorded
-            // deflection, amber while held) — so a replay shows the pilot's
-            // hand exactly where the live stick sits. (Throttle meter: TODO,
-            // next commit — for both live play and replay, see #67.)
+            // The transport UI is the HTML replay bar (index.html); the only
+            // in-canvas element is the recorded-input stick — HALF SIZE,
+            // raised above the bar — animated by the input driving the
+            // re-sim (knob at the recorded deflection, amber while held), so
+            // a replay shows the pilot's hand. Keys remain as the native/dev
+            // fallback: space pause, ←/→ step, S speed, R respawn. (The
+            // per-keyframe drift check + snap still run; they're just no
+            // longer displayed. Throttle meter: see #67.)
             let inp = replay_player.as_ref().map(|p| p.current_input()).unwrap_or_default();
             let (isx, isy) = inp.steer_f32();
-            // Raised above the parked home so the HTML replay bar (three
-            // rows, ~155 CSS px incl. its bottom offset — logical px ==
-            // CSS px) never covers the recorded-input stick.
             let replay_stick_home = stick_park - vec2(0.0, 150.0);
-            draw_stick(replay_stick_home, vec2(isx, isy) * STICK_TRAVEL, inp.stick_held != 0);
-            if ui_tap.is_some() {
-                replay_player = None;
-                mode = if watch_rec.take().is_some() { watch_return } else { Mode::CrashDialog };
-            }
+            draw_stick(replay_stick_home, vec2(isx, isy) * STICK_TRAVEL,
+                inp.stick_held != 0, 0.5);
         } else if crashed {
             let msg = "CRASHED";
             let fs = 96.0 * ui;
