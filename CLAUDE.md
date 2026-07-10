@@ -185,22 +185,24 @@ screen on desktop.
 - **Replay transport**: `set_replay_paused(i32)` / `replay_paused() -> i32`
   (shared pause state — the HTML button and the in-canvas space-bar toggle
   both drive it, so the button icon polls the game), `replay_seek(f32)`
-  (bar fraction 0..1; swap-to-consume `REPLAY_SEEK` atomic with a NaN-bits
-  `SEEK_NONE` sentinel), `replay_step(i32)` (±1-keyframe steps; fetch_add
-  so same-frame taps accumulate, consumed with the arrow-key steps),
+  (bar fraction 0..1 → the exact tick, so the slider's 1000 positions are
+  the only quantisation; swap-to-consume `REPLAY_SEEK` atomic with a
+  NaN-bits `SEEK_NONE` sentinel), `replay_step(i32)` (±1 physics-tick
+  steps, auto-pausing; fetch_add so same-frame taps accumulate, consumed
+  with the arrow-key steps),
   `set_replay_speed(f32)` / `replay_speed() -> f32` (playback rate; the
   button label polls the game so the in-canvas S-key cycle stays in sync),
   `replay_pos() -> f32` / `replay_len() -> f32` (per-frame mirrors:
   progress fraction + recording length in seconds). The `#replay-bar` HTML
-  overlay (amber ⏮ / play-pause / ⏭ / speed buttons + range slider + time
-  label —
-  the slider input is bar-height with an oversized 28 px thumb so it's
-  grabbable on touch, the visible 6 px track is drawn by the track
-  pseudo-elements, and the time label hides under 480 px) shows while
-  `ui_state() == 3` with no menu screen open, polls at 100 ms, swallows
-  mousedown/touchstart (a canvas tap skips the replay), and dedupes drag
-  seeks on the snapped keyframe second so a drag doesn't rebuild the
-  scratch sim for sub-keyframe knob moves.
+  overlay is TWO ROWS (`.rp-row`): amber ⏮ / play-pause / ⏭ / speed
+  buttons on top, the range slider + `m:ss.t` time label (tenths, so frame
+  steps visibly move the clock; hidden under 480 px) beneath — the slider
+  input is row-height with an oversized 28 px thumb so it's grabbable on
+  touch, the visible 6 px track drawn by the track pseudo-elements. Shows
+  while `ui_state() == 3` with no menu screen open, polls at 100 ms,
+  swallows mousedown/touchstart (a canvas tap skips the replay), and
+  dedupes drag seeks per slider position (at most one seek per rendered
+  frame reaches the sim — the atomic keeps only the latest).
 - **Exit to menu** ends the run via `ui_command(1)` (a reset while alive
   banks it in the high scores — "longest flights"); the fresh ship waits,
   paused, behind the menu; Fly unpauses.
@@ -686,8 +688,9 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   cursor passes: the overlay shows `re-simulated from inputs · drift N m`,
   and drift > `SNAP_DRIFT_M = 0.5` snaps to the keyframe (the graceful
   fallback for recordings from a different build/params — zero on the same
-  binary, unit-tested). The **stick is drawn at its normal parked home**
-  (`stick_park`, bottom-right) animated by the input driving the re-sim —
+  binary, unit-tested). The **stick is drawn raised 130 px above its parked home**
+  (`stick_park`, bottom-right — the two-row HTML replay bar occupies the
+  parked spot) animated by the input driving the re-sim —
   knob at the recorded deflection, amber while held — so a replay shows the
   pilot's hand where the live stick sits. (A throttle meter for both live
   play and replay is a follow-up, see #67.) The destroying impact is
@@ -700,20 +703,30 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   that ended by reset (no wreck) skips the terminal boom.
   `ResimPlayer::step_one` is the shared per-tick core: `advance()` drives it
   on the wall clock for WATCH REPLAY; the ghost calls it in lockstep.
-- **Transport controls (play/pause + keyframe scrubbing + speed)**: playback
-  can be paused (`advance(rec, 0.0)` re-simulates nothing and returns the
-  frozen interpolated frame), scrubbed to any of the recording's 1 Hz
-  keyframes, and rate-scaled (¼×/½×/1×/2×/4× — the multiplier scales the
+- **Transport controls (play/pause + frame-level scrubbing + speed)**:
+  playback can be paused (`advance(rec, 0.0)` re-simulates nothing and
+  returns the frozen interpolated frame), scrubbed/stepped to any exact
+  TICK, and rate-scaled (¼×/½×/1×/2×/4× — the multiplier scales the
   wall-clock time fed to the re-sim, the tick sequence never changes, so
   determinism/drift checks are untouched; the fractional-tick interpolation
   keeps slow-mo smooth). Fast-forward note: the caller clamps the RAW frame
   time to 0.05 s before multiplying, and `advance()`'s hitch cap sits at
   0.25 s — above the 4× worst case (0.2 s = 24 ticks) — so 4× is genuinely
   4× on a 60 Hz display (unit-tested; the old 0.05 cap clipped it to ~3×).
-  `ResimPlayer::seek_to_keyframe` rebuilds the scratch sim FRESH and
-  restores the target keyframe — the same op sequence as playing a trimmed
-  recording from its first keyframe — and re-seeds the effective input from
-  the event stream exactly like `Recording::trim` does at a cut. Since
+  `ResimPlayer::seek_to_tick` reaches an arbitrary tick: physics can't run
+  backwards, so a backward (or cross-keyframe forward) target goes through
+  `seek_to_keyframe` — rebuild the scratch sim FRESH, restore the nearest
+  keyframe at or before the target (the same op sequence as playing a
+  trimmed recording from its first keyframe, input re-seeded from the event
+  stream exactly like `Recording::trim` does at a cut) — then re-sims the
+  remainder (< `KEYFRAME_EVERY` ticks, a few ms); a forward target inside
+  the current keyframe interval just steps the live scratch sim (that IS
+  ordinary playback). Tick-seeking lands on the exact state continuous
+  playback reaches (unit test
+  `tick_stepping_matches_continuous_playback_bit_exactly`). Single-tick
+  steps (the bar's ⏮/⏭, hold-to-repeat at ~15 ticks/s ≈ a 1/8-speed
+  shuttle; ←/→ in-canvas) AUTO-PAUSE playback — a 1/120 s step during
+  playback would be invisible. Since
   format v3 a keyframe carries the body's EXACT unit-complex rotation
   (restored via `Rotation::new_unchecked` — `Rotation::new(angle)` cost
   sub-mm round-trip drift) plus `land_timer`, so restoring an airborne
@@ -722,11 +735,10 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   sustained contact can still diverge (Rapier warm-start caches / handle
   numbering aren't in the keyframe) — absorbed by the per-keyframe drift
   check + 0.5 m snap fallback. A seek past the end
-  clamps to the last keyframe with ticks left to play (the terminal crash
-  keyframe is not a playable start), so scrubbing to the bar's far right
-  shows the finale. Controls: the HTML `#replay-bar` (see the bridge
+  clamps (keyframe restores skip the terminal crash keyframe — not a
+  playable start), so scrubbing to the bar's far right shows the finale. Controls: the HTML `#replay-bar` (see the bridge
   section below) or, in-canvas (native/dev fallback), space = pause,
-  ←/→ = ±1 keyframe and S = cycle speed; the banner appends the speed
+  ←/→ = ±1 tick and S = cycle speed; the banner appends the speed
   (`REPLAY · 2x`) and `· PAUSED`. Pause, pending seeks and the speed are
   reset whenever a new replay starts (all three `Mode::Replay` entry
   points).

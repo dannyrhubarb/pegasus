@@ -89,8 +89,9 @@
       transform: translateX(-50%);
       bottom: calc(env(safe-area-inset-bottom) + 16px);
       display: none;
-      align-items: center;
-      gap: 12px;
+      flex-direction: column; /* buttons row on top, seek row beneath */
+      align-items: stretch;
+      gap: 8px;
       padding: 10px 14px;
       width: min(520px, calc(100vw - 24px));
       border-radius: 16px;
@@ -102,8 +103,15 @@
       z-index: 10;
     }
     #replay-bar.on { display: flex; }
+    .rp-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      min-width: 0;
+    }
     /* Amber variant of the corner-button look, shared by play/pause and the
-       two keyframe-step buttons. */
+       two tick-step buttons. */
     .rp-btn {
       flex: none;
       border-color: var(--amber);
@@ -170,7 +178,7 @@
       flex: none;
       font-size: 12px;
       color: var(--dim);
-      min-width: 86px;
+      min-width: 118px; /* fits m:ss.t / m:ss.t */
       text-align: right;
       font-variant-numeric: tabular-nums;
     }
@@ -548,30 +556,34 @@
   <!-- Replay transport bar: keyframe step back / play-pause / step forward
        + seek slider (visible while a replay plays) -->
   <div id="replay-bar">
-    <div id="rp-back" class="cbtn rp-btn rp-step" role="button" aria-label="Previous keyframe" title="Previous keyframe">
-      <svg class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-        <rect x="5" y="5.5" width="2.6" height="13" rx="1.2"></rect>
-        <polygon points="19 5.2 9.5 12 19 18.8"></polygon>
-      </svg>
+    <div class="rp-row">
+      <div id="rp-back" class="cbtn rp-btn rp-step" role="button" aria-label="Step one frame back" title="Step one frame back (hold to repeat)">
+        <svg class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <rect x="5" y="5.5" width="2.6" height="13" rx="1.2"></rect>
+          <polygon points="19 5.2 9.5 12 19 18.8"></polygon>
+        </svg>
+      </div>
+      <div id="rp-toggle" class="cbtn rp-btn" role="button" aria-label="Pause replay" title="Play / pause">
+        <svg id="rp-pause-icn" class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <rect x="7.2" y="5.5" width="3.4" height="13" rx="1.4"></rect>
+          <rect x="13.4" y="5.5" width="3.4" height="13" rx="1.4"></rect>
+        </svg>
+        <svg id="rp-play-icn" class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="display:none">
+          <polygon points="8 5.2 19 12 8 18.8"></polygon>
+        </svg>
+      </div>
+      <div id="rp-fwd" class="cbtn rp-btn rp-step" role="button" aria-label="Step one frame forward" title="Step one frame forward (hold to repeat)">
+        <svg class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <polygon points="5 5.2 14.5 12 5 18.8"></polygon>
+          <rect x="16.4" y="5.5" width="2.6" height="13" rx="1.2"></rect>
+        </svg>
+      </div>
+      <div id="rp-speed" class="cbtn rp-btn rp-step" role="button" aria-label="Playback speed" title="Playback speed">1×</div>
     </div>
-    <div id="rp-toggle" class="cbtn rp-btn" role="button" aria-label="Pause replay" title="Play / pause">
-      <svg id="rp-pause-icn" class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-        <rect x="7.2" y="5.5" width="3.4" height="13" rx="1.4"></rect>
-        <rect x="13.4" y="5.5" width="3.4" height="13" rx="1.4"></rect>
-      </svg>
-      <svg id="rp-play-icn" class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="display:none">
-        <polygon points="8 5.2 19 12 8 18.8"></polygon>
-      </svg>
+    <div class="rp-row">
+      <input id="rp-seek" type="range" min="0" max="1000" step="1" value="0" aria-label="Replay position">
+      <div id="rp-time">0:00.0 / 0:00.0</div>
     </div>
-    <div id="rp-fwd" class="cbtn rp-btn rp-step" role="button" aria-label="Next keyframe" title="Next keyframe">
-      <svg class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-        <polygon points="5 5.2 14.5 12 5 18.8"></polygon>
-        <rect x="16.4" y="5.5" width="2.6" height="13" rx="1.2"></rect>
-      </svg>
-    </div>
-    <div id="rp-speed" class="cbtn rp-btn rp-step" role="button" aria-label="Playback speed" title="Playback speed">1×</div>
-    <input id="rp-seek" type="range" min="0" max="1000" step="1" value="0" aria-label="Replay position">
-    <div id="rp-time">0:00 / 0:00</div>
   </div>
 
   <!-- Game menu: open at boot (markup, not JS, so it shows while wasm loads) -->
@@ -1103,9 +1115,10 @@
     rpSeek.addEventListener("input", () => {
       rpDragging = true;
       if (typeof wasm_exports === "undefined" || !wasm_exports.replay_seek) return;
-      const sec = Math.floor((rpSeek.value / 1000) * wasm_exports.replay_len());
-      if (sec !== rpLastSent) {
-        rpLastSent = sec;
+      // Seeks are tick-resolution game-side; the slider's 1000 positions
+      // are the quantisation, so dedupe per position.
+      if (rpSeek.value !== rpLastSent) {
+        rpLastSent = rpSeek.value;
         wasm_exports.replay_seek(rpSeek.value / 1000);
       }
     });
@@ -1115,9 +1128,28 @@
       if (typeof wasm_exports === "undefined" || !wasm_exports.replay_paused) return;
       call("set_replay_paused", wasm_exports.replay_paused() ? 0 : 1);
     });
-    // Keyframe steps: the same ±1-keyframe seek the arrow keys perform.
-    onTap(document.getElementById("rp-back"), () => call("replay_step", -1));
-    onTap(document.getElementById("rp-fwd"), () => call("replay_step", 1));
+    // Frame steps: ±1 physics tick per tap (same as the arrow keys; the
+    // game auto-pauses on a step). Holding repeats at ~15 ticks/s — a
+    // 1/8-speed shuttle in either direction.
+    function stepHold(el, dir) {
+      let delay = null, rep = null;
+      const fire = () => call("replay_step", dir);
+      const stop = () => {
+        clearTimeout(delay);
+        clearInterval(rep);
+        delay = rep = null;
+      };
+      el.addEventListener("pointerdown", e => {
+        e.preventDefault();
+        e.stopPropagation();
+        fire();
+        delay = setTimeout(() => { rep = setInterval(fire, 66); }, 350);
+      });
+      ["pointerup", "pointerleave", "pointercancel"].forEach(ev =>
+        el.addEventListener(ev, stop));
+    }
+    stepHold(document.getElementById("rp-back"), -1);
+    stepHold(document.getElementById("rp-fwd"), 1);
     // Playback speed: cycle ¼× → ½× → 1× → 2× → 4× (same ring as the S key;
     // the label follows the game via the poll below, so both stay in sync).
     const rpSpeedBtn = document.getElementById("rp-speed");
@@ -1131,8 +1163,11 @@
       call("set_replay_speed", RP_SPEEDS[(i + 1) % RP_SPEEDS.length]);
     });
     const fmtT = s => {
-      s = Math.max(0, Math.round(s));
-      return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+      // m:ss.t — tenths make frame-stepping visibly move the clock.
+      s = Math.max(0, s);
+      const m = Math.floor(s / 60);
+      const r = Math.min(59.9, s - m * 60);
+      return m + ":" + (r < 10 ? "0" : "") + r.toFixed(1);
     };
     setInterval(() => {
       if (typeof wasm_exports === "undefined" || !wasm_exports.replay_pos) return;

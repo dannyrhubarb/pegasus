@@ -229,6 +229,31 @@ impl ResimPlayer {
         self.finished = false;
     }
 
+    // Scrub to an EXACT tick (frame-level transport). Physics can't run
+    // backwards, so a backward (or cross-keyframe forward) target restores
+    // the nearest keyframe at or before it and re-sims the remainder —
+    // bounded by the keyframe spacing (< KEYFRAME_EVERY ticks ≈ a few ms).
+    // A forward target within the current keyframe interval just steps from
+    // where we are: that IS ordinary playback, no rebuild. Stepping onto
+    // end_tick re-simulates the finale (finished = replay ends normally).
+    fn seek_to_tick(&mut self, rec: &Recording, target: u32) {
+        let target = target.clamp(self.first_tick, self.end_tick);
+        if target == self.tick && !self.finished {
+            return;
+        }
+        let kf_idx = rec
+            .keyframes
+            .partition_point(|k| k.tick <= target)
+            .saturating_sub(1);
+        if self.finished || target < self.tick || self.tick < rec.keyframes[kf_idx].tick {
+            self.seek_to_keyframe(rec, kf_idx);
+        }
+        while self.tick < target && !self.finished {
+            self.step_one(rec);
+        }
+        self.accum = 0.0;
+    }
+
     fn progress(&self) -> f32 {
         (self.tick - self.first_tick) as f32 / (self.end_tick - self.first_tick).max(1) as f32
     }
@@ -472,8 +497,10 @@ pub extern "C" fn replay_seek(frac: f32) {
     REPLAY_SEEK.store(frac.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
 }
 
-/// Step the replay by whole keyframes (±1 from the bar's ⏮/⏭ buttons —
-/// the same seek the in-canvas arrow keys perform).
+/// Step the replay by single physics ticks (±1 per tap of the bar's ⏮/⏭
+/// buttons, which hold-to-repeat JS-side — same as the in-canvas arrow
+/// keys). Stepping auto-pauses playback; fetch_add so a burst of taps
+/// within one frame accumulates.
 #[unsafe(no_mangle)]
 pub extern "C" fn replay_step(delta: i32) {
     REPLAY_STEP.fetch_add(delta, Ordering::Relaxed);
@@ -1270,25 +1297,22 @@ async fn main() {
                     REPLAY_SPEED.store(next.to_bits(), Ordering::Relaxed);
                 }
                 let seek_bits = REPLAY_SEEK.swap(SEEK_NONE, Ordering::Relaxed);
-                let kf_step = is_key_pressed(KeyCode::Right) as i64
+                let step_ticks = is_key_pressed(KeyCode::Right) as i64
                     - is_key_pressed(KeyCode::Left) as i64
                     + REPLAY_STEP.swap(0, Ordering::Relaxed) as i64;
                 if seek_bits != SEEK_NONE {
-                    // Bar position → tick → the keyframe at or before it.
+                    // Bar position → exact tick (frame-level scrubbing; the
+                    // slider's 1000 positions are the only quantisation).
                     let span = (p.end_tick - p.first_tick) as f32;
                     let target = p.first_tick
-                        + (f32::from_bits(seek_bits).clamp(0.0, 1.0) * span) as u32;
-                    let idx = play_rec
-                        .keyframes
-                        .partition_point(|k| k.tick <= target)
-                        .saturating_sub(1);
-                    p.seek_to_keyframe(play_rec, idx);
-                } else if kf_step != 0 {
-                    let cur = play_rec
-                        .keyframes
-                        .partition_point(|k| k.tick <= p.tick)
-                        .saturating_sub(1) as i64;
-                    p.seek_to_keyframe(play_rec, (cur + kf_step).max(0) as usize);
+                        + (f32::from_bits(seek_bits).clamp(0.0, 1.0) * span).round() as u32;
+                    p.seek_to_tick(play_rec, target);
+                } else if step_ticks != 0 {
+                    // Single-tick steps (⏮/⏭ buttons, ←/→ keys) auto-pause:
+                    // a 1/120 s step during playback would be invisible.
+                    REPLAY_PAUSED.store(1, Ordering::Relaxed);
+                    let target = (p.tick as i64 + step_ticks).max(0) as u32;
+                    p.seek_to_tick(play_rec, target);
                 }
                 // Paused playback still renders: advance(0) re-simulates
                 // nothing and returns the frozen interpolated frame. The
@@ -1930,7 +1954,7 @@ async fn main() {
             let msg_y = sh * 0.16;
             draw_text(&msg, (sw - dims.width) / 2.0, msg_y, fs,
                 Color::from_rgba(255, 220, 120, if paused { 220 } else { pulse as u8 }));
-            let hint = "tap to skip · [space] pause · [< >] scrub · [s] speed";
+            let hint = "tap to skip · [space] pause · [< >] step · [s] speed";
             let hfs = 24.0 * ui;
             let hd = measure_text(hint, None, hfs as u16, 1.0);
             draw_text(hint, (sw - hd.width) / 2.0, msg_y + 34.0 * ui, hfs,
@@ -1961,7 +1985,11 @@ async fn main() {
             // next commit — for both live play and replay, see #67.)
             let inp = replay_player.as_ref().map(|p| p.current_input()).unwrap_or_default();
             let (isx, isy) = inp.steer_f32();
-            draw_stick(stick_park, vec2(isx, isy) * STICK_TRAVEL, inp.stick_held != 0);
+            // Raised above the parked home so the HTML replay bar (two rows,
+            // ~132 CSS px incl. its bottom offset — logical px == CSS px)
+            // never covers the recorded-input stick.
+            let replay_stick_home = stick_park - vec2(0.0, 130.0);
+            draw_stick(replay_stick_home, vec2(isx, isy) * STICK_TRAVEL, inp.stick_held != 0);
             if ui_tap.is_some() {
                 replay_player = None;
                 mode = if watch_rec.take().is_some() { watch_return } else { Mode::CrashDialog };
@@ -2697,18 +2725,13 @@ mod tests {
         assert!(p.tick >= 23, "fast-forward clipped: {} ticks", p.tick);
     }
 
-    #[test]
-    fn seeking_to_a_keyframe_resumes_bit_exactly() {
-        // Record a CONTACT-FREE flight (climb off the pad, then hover with a
-        // gentle steer wobble — the full-hull assert below guards that it
-        // never even scrapes), then scrub: a fresh player seeks FORWARD to
-        // keyframe 3, and a second plays partway and seeks BACK to keyframe
-        // 1. v3 keyframes carry the exact rotation + land timer, so both
-        // must re-sim the airborne remainder with ZERO keyframe drift and
-        // never engage the snap fallback. (A flight that touches rock is NOT
-        // zero-drift after a seek: contact solving depends on Rapier
-        // warm-start caches and handle numbering, which a keyframe can't
-        // carry — that case is what the 0.5 m snap fallback absorbs.)
+    // A recorded CONTACT-FREE flight (climb off the pad, then hover with a
+    // gentle steer wobble; the guards prove it never even scrapes): the
+    // shared fixture for the transport-seek tests, where zero drift is only
+    // provable without contact — contact solving depends on Rapier
+    // warm-start caches and handle numbering, which a keyframe can't carry
+    // (that case is what the 0.5 m snap fallback absorbs).
+    fn contact_free_recording() -> Recording {
         let script = |tick: u32| -> InputState {
             if tick < 60 {
                 return InputState::from_controls(0.6, 0, 0.0, 0.0, false); // lift off
@@ -2733,6 +2756,84 @@ mod tests {
         }
         assert_eq!(sim.hull, HULL_MAX, "test flight scraped — not contact-free");
         assert!(rec.keyframes.len() >= 5, "flight too short: {} keyframes", rec.keyframes.len());
+        rec
+    }
+
+    // Bit-compare every physics field of two sim states (via keyframes;
+    // glow is render-side and passed as 0 for both).
+    fn assert_state_bits_eq(a: &Keyframe, b: &Keyframe, what: &str) {
+        for (fa, fb, name) in [
+            (a.x, b.x, "x"), (a.y, b.y, "y"),
+            (a.rot_re, b.rot_re, "rot_re"), (a.rot_im, b.rot_im, "rot_im"),
+            (a.vx, b.vx, "vx"), (a.vy, b.vy, "vy"),
+            (a.angvel, b.angvel, "angvel"), (a.fuel, b.fuel, "fuel"),
+            (a.hull, b.hull, "hull"), (a.land_timer, b.land_timer, "land_timer"),
+        ] {
+            assert_eq!(fa.to_bits(), fb.to_bits(), "{name} differs after {what}");
+        }
+    }
+
+    #[test]
+    fn tick_stepping_matches_continuous_playback_bit_exactly() {
+        // Frame-level transport: seeking to an arbitrary TICK must land on
+        // exactly the state continuous playback reaches there. Forward it
+        // restores the keyframe before the target and re-sims the remainder
+        // (or just steps when already inside the interval); one tick BACK
+        // does the rebuild + re-sim dance. All bit-exact on an airborne
+        // flight.
+        let rec = contact_free_recording();
+        let t_mid = KEYFRAME_EVERY + 45; // mid-interval, not on a keyframe
+
+        // Continuous reference: a player stepped straight to t_mid.
+        let mut reference = ResimPlayer::new(&rec).expect("player");
+        while reference.tick < t_mid {
+            reference.step_one(&rec);
+        }
+
+        // Forward tick-seek from a fresh player.
+        let mut p = ResimPlayer::new(&rec).expect("player");
+        p.seek_to_tick(&rec, t_mid);
+        assert_eq!(p.tick, t_mid);
+        assert_state_bits_eq(
+            &p.sim.keyframe(0, 0.0),
+            &reference.sim.keyframe(0, 0.0),
+            "a forward tick-seek",
+        );
+
+        // One tick back from t_mid, vs a reference stepped to t_mid - 1.
+        let mut back_ref = ResimPlayer::new(&rec).expect("player");
+        while back_ref.tick < t_mid - 1 {
+            back_ref.step_one(&rec);
+        }
+        p.seek_to_tick(&rec, t_mid - 1);
+        assert_eq!(p.tick, t_mid - 1);
+        assert_state_bits_eq(
+            &p.sim.keyframe(0, 0.0),
+            &back_ref.sim.keyframe(0, 0.0),
+            "a single-tick back-step",
+        );
+
+        // Stepping forward from mid-interval continues the SAME sim (no
+        // rebuild): still identical to the continuous reference.
+        p.seek_to_tick(&rec, t_mid + 7);
+        while reference.tick < t_mid + 7 {
+            reference.step_one(&rec);
+        }
+        assert_state_bits_eq(
+            &p.sim.keyframe(0, 0.0),
+            &reference.sim.keyframe(0, 0.0),
+            "an in-interval forward step",
+        );
+    }
+
+    #[test]
+    fn seeking_to_a_keyframe_resumes_bit_exactly() {
+        // Scrub: a fresh player seeks FORWARD to keyframe 3, and a second
+        // plays partway and seeks BACK to keyframe 1. v3 keyframes carry the
+        // exact rotation + land timer, so both must re-sim the airborne
+        // remainder with ZERO keyframe drift and never engage the snap
+        // fallback.
+        let rec = contact_free_recording();
 
         // Forward scrub from a fresh player.
         let mut p = ResimPlayer::new(&rec).expect("player");
