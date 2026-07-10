@@ -110,6 +110,21 @@
       gap: 12px;
       min-width: 0;
     }
+    /* Top row: time left, ⏮⏯⏭ dead-centre, speed right. The side zones
+       share flex: 1 1 0 (equal width), which is what centres the cluster. */
+    .rp-side {
+      flex: 1 1 0;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+    }
+    .rp-side.right { justify-content: flex-end; }
+    .rp-transport {
+      flex: none;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
     /* Amber variant of the corner-button look, shared by play/pause and the
        two tick-step buttons. */
     .rp-btn {
@@ -175,16 +190,42 @@
       cursor: pointer;
     }
     #rp-time {
-      flex: none;
-      font-size: 12px;
+      font-size: 11px; /* m:ss.t / m:ss.t fits the portrait side zone */
       color: var(--dim);
-      min-width: 118px; /* fits m:ss.t / m:ss.t */
-      text-align: right;
+      white-space: nowrap;
       font-variant-numeric: tabular-nums;
     }
-    /* Narrow phones: the slider needs the width more than the time label. */
-    @media (max-width: 480px) {
-      #rp-time { display: none; }
+    /* Speed picker: pops up above the bar, anchored over the speed button
+       (the bar is position: fixed, so it contains the absolute panel). */
+    #rp-speed-menu {
+      position: absolute;
+      right: 10px;
+      bottom: calc(100% + 8px);
+      display: none;
+      flex-direction: column;
+      gap: 2px;
+      padding: 6px;
+      border-radius: 12px;
+      background: rgba(8, 16, 34, 0.92);
+      border: 2px solid var(--amber);
+      box-shadow: 0 0 10px rgba(255, 194, 75, 0.4);
+    }
+    #rp-speed-menu.open { display: flex; }
+    .rp-speed-opt {
+      padding: 8px 22px;
+      border-radius: 8px;
+      color: var(--amber);
+      font: bold 14px var(--mono);
+      text-align: center;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+    }
+    .rp-speed-opt:hover { background: rgba(255, 194, 75, 0.15); }
+    .rp-speed-opt.sel {
+      background: rgba(255, 194, 75, 0.25);
+      box-shadow: inset 0 0 6px rgba(255, 194, 75, 0.35);
     }
 
     /* --- Game menu --------------------------------------------------------
@@ -557,32 +598,43 @@
        + seek slider (visible while a replay plays) -->
   <div id="replay-bar">
     <div class="rp-row">
-      <div id="rp-back" class="cbtn rp-btn rp-step" role="button" aria-label="Step one frame back" title="Step one frame back (hold to repeat)">
-        <svg class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <rect x="5" y="5.5" width="2.6" height="13" rx="1.2"></rect>
-          <polygon points="19 5.2 9.5 12 19 18.8"></polygon>
-        </svg>
+      <div class="rp-side"><div id="rp-time">0:00.0 / 0:00.0</div></div>
+      <div class="rp-transport">
+        <div id="rp-back" class="cbtn rp-btn rp-step" role="button" aria-label="Step 0.1 s back" title="Step 0.1 s back (hold to repeat)">
+          <svg class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <rect x="5" y="5.5" width="2.6" height="13" rx="1.2"></rect>
+            <polygon points="19 5.2 9.5 12 19 18.8"></polygon>
+          </svg>
+        </div>
+        <div id="rp-toggle" class="cbtn rp-btn" role="button" aria-label="Pause replay" title="Play / pause">
+          <svg id="rp-pause-icn" class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <rect x="7.2" y="5.5" width="3.4" height="13" rx="1.4"></rect>
+            <rect x="13.4" y="5.5" width="3.4" height="13" rx="1.4"></rect>
+          </svg>
+          <svg id="rp-play-icn" class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="display:none">
+            <polygon points="8 5.2 19 12 8 18.8"></polygon>
+          </svg>
+        </div>
+        <div id="rp-fwd" class="cbtn rp-btn rp-step" role="button" aria-label="Step 0.1 s forward" title="Step 0.1 s forward (hold to repeat)">
+          <svg class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <polygon points="5 5.2 14.5 12 5 18.8"></polygon>
+            <rect x="16.4" y="5.5" width="2.6" height="13" rx="1.2"></rect>
+          </svg>
+        </div>
       </div>
-      <div id="rp-toggle" class="cbtn rp-btn" role="button" aria-label="Pause replay" title="Play / pause">
-        <svg id="rp-pause-icn" class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <rect x="7.2" y="5.5" width="3.4" height="13" rx="1.4"></rect>
-          <rect x="13.4" y="5.5" width="3.4" height="13" rx="1.4"></rect>
-        </svg>
-        <svg id="rp-play-icn" class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="display:none">
-          <polygon points="8 5.2 19 12 8 18.8"></polygon>
-        </svg>
+      <div class="rp-side right">
+        <div id="rp-speed" class="cbtn rp-btn rp-step" role="button" aria-haspopup="true" aria-label="Playback speed" title="Playback speed">1×</div>
       </div>
-      <div id="rp-fwd" class="cbtn rp-btn rp-step" role="button" aria-label="Step one frame forward" title="Step one frame forward (hold to repeat)">
-        <svg class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <polygon points="5 5.2 14.5 12 5 18.8"></polygon>
-          <rect x="16.4" y="5.5" width="2.6" height="13" rx="1.2"></rect>
-        </svg>
-      </div>
-      <div id="rp-speed" class="cbtn rp-btn rp-step" role="button" aria-label="Playback speed" title="Playback speed">1×</div>
     </div>
     <div class="rp-row">
       <input id="rp-seek" type="range" min="0" max="1000" step="1" value="0" aria-label="Replay position">
-      <div id="rp-time">0:00.0 / 0:00.0</div>
+    </div>
+    <div id="rp-speed-menu" role="menu" aria-label="Playback speed">
+      <div class="rp-speed-opt" role="menuitem" data-speed="0.25">¼×</div>
+      <div class="rp-speed-opt" role="menuitem" data-speed="0.5">½×</div>
+      <div class="rp-speed-opt" role="menuitem" data-speed="1">1×</div>
+      <div class="rp-speed-opt" role="menuitem" data-speed="2">2×</div>
+      <div class="rp-speed-opt" role="menuitem" data-speed="4">4×</div>
     </div>
   </div>
 
@@ -752,11 +804,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">423bd83-pr-81</div>
+        <div class="info-value" id="git-rev">d8d7fee-pr-81</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-10 20:54 UTC</div>
+        <div class="info-value" id="build-time">2026-07-10 21:10 UTC</div>
       </div>
       <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
       <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
@@ -1128,12 +1180,13 @@
       if (typeof wasm_exports === "undefined" || !wasm_exports.replay_paused) return;
       call("set_replay_paused", wasm_exports.replay_paused() ? 0 : 1);
     });
-    // Frame steps: ±1 physics tick per tap (same as the arrow keys; the
-    // game auto-pauses on a step). Holding repeats at ~15 ticks/s — a
-    // 1/8-speed shuttle in either direction.
+    // Transport steps: 0.1 s of sim per tap — 12 ticks at the 120 Hz
+    // physics rate (same as the arrow keys; the game auto-pauses on a
+    // step). Holding repeats at ~10/s, a realtime shuttle either way.
+    const RP_STEP_TICKS = 12;
     function stepHold(el, dir) {
       let delay = null, rep = null;
-      const fire = () => call("replay_step", dir);
+      const fire = () => call("replay_step", dir * RP_STEP_TICKS);
       const stop = () => {
         clearTimeout(delay);
         clearInterval(rep);
@@ -1143,25 +1196,32 @@
         e.preventDefault();
         e.stopPropagation();
         fire();
-        delay = setTimeout(() => { rep = setInterval(fire, 66); }, 350);
+        delay = setTimeout(() => { rep = setInterval(fire, 100); }, 350);
       });
       ["pointerup", "pointerleave", "pointercancel"].forEach(ev =>
         el.addEventListener(ev, stop));
     }
     stepHold(document.getElementById("rp-back"), -1);
     stepHold(document.getElementById("rp-fwd"), 1);
-    // Playback speed: cycle ¼× → ½× → 1× → 2× → 4× (same ring as the S key;
-    // the label follows the game via the poll below, so both stay in sync).
+    // Playback speed: the button opens a picker panel above the bar (the
+    // in-canvas S key still cycles; the label and the panel highlight
+    // follow the game via the poll below, so all three stay in sync).
     const rpSpeedBtn = document.getElementById("rp-speed");
-    const RP_SPEEDS = [0.25, 0.5, 1, 2, 4];
+    const rpSpeedMenu = document.getElementById("rp-speed-menu");
     const rpSpeedLabel = s => (s === 0.25 ? "¼×" : s === 0.5 ? "½×" : s + "×");
-    onTap(rpSpeedBtn, () => {
-      if (typeof wasm_exports === "undefined" || !wasm_exports.replay_speed) return;
-      const cur = wasm_exports.replay_speed();
-      let i = RP_SPEEDS.findIndex(s => Math.abs(s - cur) < 0.01);
-      if (i < 0) i = 2;
-      call("set_replay_speed", RP_SPEEDS[(i + 1) % RP_SPEEDS.length]);
-    });
+    onTap(rpSpeedBtn, () => rpSpeedMenu.classList.toggle("open"));
+    rpSpeedMenu.querySelectorAll(".rp-speed-opt").forEach(opt =>
+      onTap(opt, () => {
+        call("set_replay_speed", parseFloat(opt.dataset.speed));
+        rpSpeedMenu.classList.remove("open");
+      }));
+    // A tap anywhere else on the bar dismisses the picker.
+    ["mousedown", "touchstart"].forEach(ev =>
+      rpBar.addEventListener(ev, e => {
+        if (!rpSpeedMenu.contains(e.target) && !rpSpeedBtn.contains(e.target)) {
+          rpSpeedMenu.classList.remove("open");
+        }
+      }));
     const fmtT = s => {
       // m:ss.t — tenths make frame-stepping visibly move the clock.
       s = Math.max(0, s);
@@ -1173,7 +1233,10 @@
       if (typeof wasm_exports === "undefined" || !wasm_exports.replay_pos) return;
       const on = wasm_exports.ui_state() === 3 && overlay === null;
       rpBar.classList.toggle("on", on);
-      if (!on) return;
+      if (!on) {
+        rpSpeedMenu.classList.remove("open");
+        return;
+      }
       const len = wasm_exports.replay_len();
       const pos = wasm_exports.replay_pos();
       if (!rpDragging) rpSeek.value = Math.round(pos * 1000);
@@ -1182,7 +1245,10 @@
       rpPauseIcn.style.display = paused ? "none" : "block";
       rpPlayIcn.style.display = paused ? "block" : "none";
       rpToggle.setAttribute("aria-label", paused ? "Play replay" : "Pause replay");
-      rpSpeedBtn.textContent = rpSpeedLabel(wasm_exports.replay_speed());
+      const spd = wasm_exports.replay_speed();
+      rpSpeedBtn.textContent = rpSpeedLabel(spd);
+      rpSpeedMenu.querySelectorAll(".rp-speed-opt").forEach(opt =>
+        opt.classList.toggle("sel", Math.abs(parseFloat(opt.dataset.speed) - spd) < 0.01));
     }, 100);
 
     // If the deploy-time placeholders weren't substituted (e.g. opened locally),
@@ -1201,7 +1267,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "423bd83-pr-81";
+    const wasmRev = "d8d7fee-pr-81";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
