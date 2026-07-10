@@ -1,7 +1,7 @@
 use macroquad::audio::{load_sound_from_bytes, play_sound, set_sound_volume, PlaySoundParams};
 use macroquad::prelude::*;
 use macroquad::rand::gen_range;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 
 mod audio;
 mod render;
@@ -154,9 +154,12 @@ impl ResimPlayer {
     }
 
     // Advance by real time `dt`, re-simulating whole ticks and returning the
-    // interpolated visual frame (the final pose once finished).
+    // interpolated visual frame (the final pose once finished). The cap
+    // bounds catch-up after a hitch; it sits ABOVE the biggest deliberate
+    // fast-forward step (raw frame time is pre-clamped to 0.05 s by the
+    // caller before the speed multiplier, so 4× peaks at 0.2 s = 24 ticks).
     fn advance(&mut self, rec: &Recording, dt: f32) -> ReplayFrame {
-        self.accum = (self.accum + dt).min(0.05);
+        self.accum = (self.accum + dt).min(0.25);
         while self.accum >= PHYSICS_DT && !self.finished {
             self.step_one(rec);
             self.accum -= PHYSICS_DT;
@@ -186,6 +189,71 @@ impl ResimPlayer {
         }
     }
 
+    // Scrub the playback to keyframe `kf_idx` (clamped to the last one with
+    // ticks still left to play — the terminal crash keyframe itself is not a
+    // playable start). The scratch sim is rebuilt FRESH and restored from the
+    // keyframe — the same operation sequence as playing a trimmed recording
+    // from its first keyframe. The effective input at the keyframe is
+    // re-seeded from the event stream, exactly like Recording::trim does at
+    // a cut. Since format v3, keyframes carry the body's exact unit-complex
+    // rotation and the land timer, so restoring an airborne keyframe resumes
+    // BIT-EXACTLY (unit-tested). A keyframe captured under sustained contact
+    // can still diverge (Rapier's warm-start caches and handle numbering
+    // aren't in the keyframe — see the determinism rules); that's what the
+    // per-keyframe drift check + 0.5 m snap fallback absorbs.
+    fn seek_to_keyframe(&mut self, rec: &Recording, kf_idx: usize) {
+        let mut idx = kf_idx.min(rec.keyframes.len().saturating_sub(1));
+        while idx > 0 && rec.keyframes[idx].tick >= self.end_tick {
+            idx -= 1;
+        }
+        let Some(&kf) = rec.keyframes.get(idx) else { return };
+        if kf.tick >= self.end_tick {
+            return; // nothing playable at or after this keyframe
+        }
+        let mut s = sim::Sim::new(world::Level::from_params(&rec.level));
+        s.restore(&kf);
+        self.prev_pose = s.ship_pose();
+        self.sim = s;
+        self.tick = kf.tick;
+        self.event_idx = rec.events.partition_point(|e| e.tick <= kf.tick);
+        self.input = self
+            .event_idx
+            .checked_sub(1)
+            .map_or(InputState::default(), |i| rec.events[i].input);
+        self.kf_idx = idx + 1;
+        self.accum = 0.0;
+        self.glow = kf.glow;
+        self.last_torque = 0.0;
+        self.drift = 0.0;
+        self.snapped = false;
+        self.finished = false;
+    }
+
+    // Scrub to an EXACT tick (frame-level transport). Physics can't run
+    // backwards, so a backward (or cross-keyframe forward) target restores
+    // the nearest keyframe at or before it and re-sims the remainder —
+    // bounded by the keyframe spacing (< KEYFRAME_EVERY ticks ≈ a few ms).
+    // A forward target within the current keyframe interval just steps from
+    // where we are: that IS ordinary playback, no rebuild. Stepping onto
+    // end_tick re-simulates the finale (finished = replay ends normally).
+    fn seek_to_tick(&mut self, rec: &Recording, target: u32) {
+        let target = target.clamp(self.first_tick, self.end_tick);
+        if target == self.tick {
+            return; // includes stepping "past" the final tick: a no-op
+        }
+        let kf_idx = rec
+            .keyframes
+            .partition_point(|k| k.tick <= target)
+            .saturating_sub(1);
+        if self.finished || target < self.tick || self.tick < rec.keyframes[kf_idx].tick {
+            self.seek_to_keyframe(rec, kf_idx);
+        }
+        while self.tick < target && !self.finished {
+            self.step_one(rec);
+        }
+        self.accum = 0.0;
+    }
+
     fn progress(&self) -> f32 {
         (self.tick - self.first_tick) as f32 / (self.end_tick - self.first_tick).max(1) as f32
     }
@@ -194,6 +262,80 @@ impl ResimPlayer {
     fn current_input(&self) -> InputState {
         self.input
     }
+}
+
+// Re-derive the exhaust/RCS particle field for a replay tick: re-sim the
+// trailing plume window on a scratch player and emit per-tick cosmetics
+// along the way, so after a scrub or step (in EITHER direction) the plume is
+// exactly what the ship "should" trail at that instant — instead of an empty
+// frame (old backward behaviour) or a coarse-dt clump (old forward stepping
+// integrated particles in 0.1 s lumps). Cosmetic randomness (gen_range) is
+// fine here — nothing feeds back into the sim. Cost: one scratch seek plus
+// ≤ PLUME_WINDOW_TICKS re-simmed ticks, a few ms, at most once per rendered
+// frame during a drag.
+const PLUME_WINDOW_TICKS: u32 = 60; // exhaust lives 0.5 s — the longest window needed
+fn rebuild_replay_particles(rec: &Recording, target: u32, particles: &mut Vec<Particle>) {
+    particles.clear();
+    let Some(mut q) = ResimPlayer::new(rec) else { return };
+    if target <= q.first_tick {
+        return;
+    }
+    let start = target.saturating_sub(PLUME_WINDOW_TICKS).max(q.first_tick);
+    q.seek_to_tick(rec, start);
+    while q.tick < target && !q.finished {
+        q.step_one(rec);
+        // Integrate + decay what's already emitted by one tick (same rates
+        // as the frame loop's particle pass: 0.5 s main, 0.3 s RCS).
+        for pt in particles.iter_mut() {
+            pt.life -= match pt.kind {
+                0 => PHYSICS_DT / 0.5,
+                _ => PHYSICS_DT / 0.3,
+            };
+            pt.x += pt.vx * PHYSICS_DT;
+            pt.y += pt.vy * PHYSICS_DT;
+        }
+        let (x, y, a) = q.sim.ship_pose();
+        let (svx, svy) = q.sim.ship_vel();
+        let lp = |lx: f32, ly: f32| (x + lx * a.cos() - ly * a.sin(), y + lx * a.sin() + ly * a.cos());
+        let ld = |lx: f32, ly: f32| (lx * a.cos() - ly * a.sin(), lx * a.sin() + ly * a.cos());
+        let alive = q.sim.fuel > 0.0 && !q.sim.crashed;
+        // Commanded throttle stands in for the render-side glow smoothing.
+        let ex = if alive { q.input.throttle_f32() } else { 0.0 };
+        if ex > 0.05 {
+            // Live emission is ~8/frame at 60 fps → 4/tick at 120 Hz.
+            for _ in 0..(4.0 * ex).ceil() as i32 {
+                let spread = gen_range(-0.25f32, 0.25);
+                let (px, py) = lp(spread * 0.45, -0.72);
+                let speed = gen_range(4.0f32, 8.0) * (0.4 + 0.6 * ex);
+                let (dvx, dvy) = ld(spread * 1.5, -speed);
+                particles.push(Particle {
+                    x: px, y: py, vx: svx + dvx, vy: svy + dvy, life: 1.0, kind: 0,
+                });
+            }
+        }
+        // Same nozzle mapping as the frame loop: negative torque = left.
+        let rcs = if alive && (q.input.rot < 0 || q.last_torque < -0.4) {
+            -1
+        } else if alive && (q.input.rot > 0 || q.last_torque > 0.4) {
+            1
+        } else {
+            0
+        };
+        if rcs != 0 {
+            for _ in 0..2 {
+                // Live is 3/frame at 60 fps → ~2/tick.
+                let spread = gen_range(-0.15f32, 0.15);
+                let (px, py) = lp(0.30 * rcs as f32, -0.71);
+                let speed = gen_range(2.0f32, 4.0);
+                let (dvx, dvy) = ld(spread, -speed);
+                particles.push(Particle {
+                    x: px, y: py, vx: svx + dvx, vy: svy + dvy, life: 1.0,
+                    kind: if rcs < 0 { 1 } else { 2 },
+                });
+            }
+        }
+    }
+    particles.retain(|pt| pt.life > 0.0);
 }
 
 // The attitude stick is now read directly from macroquad's touch API inside
@@ -375,7 +517,9 @@ pub extern "C" fn set_ui_pause(on: i32) {
 }
 
 /// One-shot commands from the HTML UI (swap-to-consume, like PAD_RESET):
-/// 1 = reset / fly again, 2 = watch the last crashed run's replay.
+/// 1 = reset / fly again, 2 = watch the last crashed run's replay,
+/// 3 = exit the replay (playback freezes on its final frame and never
+/// exits by itself — the ✕ button sends this).
 #[unsafe(no_mangle)]
 pub extern "C" fn ui_command(cmd: i32) {
     UI_CMD.store(cmd as u32, Ordering::Relaxed);
@@ -386,6 +530,82 @@ pub extern "C" fn ui_command(cmd: i32) {
 #[unsafe(no_mangle)]
 pub extern "C" fn ui_state() -> i32 {
     UI_STATE.load(Ordering::Relaxed) as i32
+}
+
+// --- Replay transport (the HTML replay bar + in-canvas keys) ---
+// Pause and keyframe-scrub controls for Replay mode. REPLAY_SEEK carries the
+// requested bar position as f32 fraction bits (swap-to-consume; SEEK_NONE
+// sentinel = no request — it's a NaN bit pattern no real fraction produces).
+// REPLAY_POS/REPLAY_LEN are per-frame mirrors for the JS bar, like UI_STATE.
+const SEEK_NONE: u32 = u32::MAX;
+static REPLAY_PAUSED: AtomicU32 = AtomicU32::new(0);
+static REPLAY_SEEK: AtomicU32 = AtomicU32::new(SEEK_NONE);
+// Relative keyframe steps (the bar's ⏮/⏭ buttons). fetch_add so taps landing
+// within one frame accumulate; the loop consumes with swap(0).
+static REPLAY_STEP: AtomicI32 = AtomicI32::new(0);
+// Playback speed multiplier (f32 bits, 1.0 = realtime). The bar's speed
+// button cycles ¼×..4×; slow-mo and fast-forward just scale the wall-clock
+// time fed to the re-sim — the tick sequence itself never changes.
+static REPLAY_SPEED: AtomicU32 = AtomicU32::new(1.0f32.to_bits());
+static REPLAY_POS: AtomicU32 = AtomicU32::new(0);
+static REPLAY_LEN: AtomicU32 = AtomicU32::new(0);
+
+const REPLAY_SPEEDS: [f32; 5] = [0.25, 0.5, 1.0, 2.0, 4.0];
+
+/// Pause / resume replay playback (the bar's play/pause button). Cleared by
+/// the game whenever a new replay starts.
+#[unsafe(no_mangle)]
+pub extern "C" fn set_replay_paused(on: i32) {
+    REPLAY_PAUSED.store(on as u32, Ordering::Relaxed);
+}
+
+/// Current pause state, so the JS button tracks the in-canvas space-bar
+/// toggle too.
+#[unsafe(no_mangle)]
+pub extern "C" fn replay_paused() -> i32 {
+    REPLAY_PAUSED.load(Ordering::Relaxed) as i32
+}
+
+/// Scrub the replay to `frac` (0..1 of the recording); the game snaps it to
+/// the nearest keyframe at or before that point and re-sims from there.
+#[unsafe(no_mangle)]
+pub extern "C" fn replay_seek(frac: f32) {
+    REPLAY_SEEK.store(frac.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+}
+
+/// Step the replay by physics ticks (the bar's ⏮/⏭ buttons send 0.1 s
+/// worth — 12 ticks — per tap and hold-to-repeat JS-side; the in-canvas
+/// arrow keys step the same 0.1 s). Stepping auto-pauses playback;
+/// fetch_add so a burst of taps within one frame accumulates.
+#[unsafe(no_mangle)]
+pub extern "C" fn replay_step(delta: i32) {
+    REPLAY_STEP.fetch_add(delta, Ordering::Relaxed);
+}
+
+/// Playback speed (the bar's speed button / the in-canvas S key). Clamped to
+/// what the advance() catch-up cap can actually sustain (see the cap note in
+/// ResimPlayer::advance); reset to 1× whenever a new replay starts.
+#[unsafe(no_mangle)]
+pub extern "C" fn set_replay_speed(speed: f32) {
+    REPLAY_SPEED.store(speed.clamp(0.05, 5.0).to_bits(), Ordering::Relaxed);
+}
+
+/// Current speed, so the JS button label tracks the in-canvas S-key cycle.
+#[unsafe(no_mangle)]
+pub extern "C" fn replay_speed() -> f32 {
+    f32::from_bits(REPLAY_SPEED.load(Ordering::Relaxed))
+}
+
+/// Playback position as a fraction 0..1 (bar knob) and total length in
+/// seconds (time label). Valid while ui_state() == 3.
+#[unsafe(no_mangle)]
+pub extern "C" fn replay_pos() -> f32 {
+    f32::from_bits(REPLAY_POS.load(Ordering::Relaxed))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn replay_len() -> f32 {
+    f32::from_bits(REPLAY_LEN.load(Ordering::Relaxed))
 }
 
 /// The current run's distance (farthest |x| reached), for the game-over
@@ -568,29 +788,34 @@ impl TouchStick {
 // big soft knob. Parked (not held) the whole thing is dimmed to ~0.45; held
 // it goes full-opacity with amber ring + knob (engine lit). All alphas mirror
 // the old CSS (`background .08`, `border .35→.7`, `knob .45→.85`).
-fn draw_stick(center: Vec2, knob: Vec2, held: bool) {
+// `scale` shrinks the whole widget (the replay's recorded-input display
+// draws at 0.5); the knob offset is scaled here too, so callers always pass
+// full-size deflections.
+fn draw_stick(center: Vec2, knob: Vec2, held: bool, scale: f32) {
     let (mul, accent) = if held { (1.0, (255u8, 200u8, 0u8)) } else { (0.45, (255, 255, 255)) };
     let a = |alpha: f32| (alpha * mul * 255.0) as u8;
+    let radius = STICK_RADIUS * scale;
+    let knob = knob * scale;
     // draw_circle/_lines default to 20 sides, which reads polygonal at this
     // radius (~255 physical px), so the ring/base/knob use draw_poly with a
     // high side count for a smooth curve.
     const SIDES: u8 = 64;
     // Soft filled base — this disc is what makes it read round, not hollow.
-    draw_poly(center.x, center.y, SIDES, STICK_RADIUS, 0.0, Color::from_rgba(255, 255, 255, a(0.08)));
+    draw_poly(center.x, center.y, SIDES, radius, 0.0, Color::from_rgba(255, 255, 255, a(0.08)));
     // Directional hint arrows (static, faint), 12 px in from the rim.
     let hint = Color::from_rgba(255, 255, 255, a(0.30));
-    let s = 9.0; // arrow half-size
-    let r = STICK_RADIUS - 14.0;
+    let s = 9.0 * scale; // arrow half-size
+    let r = radius - 14.0 * scale;
     let tri = |tip: Vec2, base_a: Vec2, base_b: Vec2| draw_triangle(tip, base_a, base_b, hint);
     tri(vec2(center.x, center.y - r), vec2(center.x - s, center.y - r + s), vec2(center.x + s, center.y - r + s)); // up
     tri(vec2(center.x, center.y + r), vec2(center.x - s, center.y + r - s), vec2(center.x + s, center.y + r - s)); // down
     tri(vec2(center.x - r, center.y), vec2(center.x - r + s, center.y - s), vec2(center.x - r + s, center.y + s)); // left
     tri(vec2(center.x + r, center.y), vec2(center.x + r - s, center.y - s), vec2(center.x + r - s, center.y + s)); // right
     // Ring border.
-    draw_poly_lines(center.x, center.y, SIDES, STICK_RADIUS, 0.0, 2.5,
+    draw_poly_lines(center.x, center.y, SIDES, radius, 0.0, 2.5 * scale,
         Color::from_rgba(accent.0, accent.1, accent.2, a(if held { 0.7 } else { 0.35 })));
     // Big soft knob.
-    draw_poly(center.x + knob.x, center.y + knob.y, SIDES, STICK_KNOB_R, 0.0,
+    draw_poly(center.x + knob.x, center.y + knob.y, SIDES, STICK_KNOB_R * scale, 0.0,
         Color::from_rgba(accent.0, accent.1, accent.2, a(if held { 0.85 } else { 0.45 })));
 }
 
@@ -606,9 +831,7 @@ async fn main() {
 
     // Touch is a first-class input now (the attitude stick lives in-canvas),
     // so stop miniquad synthesizing mouse events from touches — otherwise a
-    // canvas tap would fire mouse-down = full thrust. In-canvas UI taps
-    // (crash dialog, replay skip) are hit-tested via a pointer abstraction
-    // that unifies real mouse clicks with fresh touches (see the loop).
+    // canvas tap would fire mouse-down = full thrust.
     simulate_mouse_with_touch(false);
 
     // The deterministic simulation core: Rapier world, ship, sliding collider
@@ -729,6 +952,11 @@ async fn main() {
         }
     };
     let mut shake = 0.0f32; // impact screen-shake intensity, 0..1, decays fast
+    // Replay-ending grace: after playback pauses on the final frame, particle
+    // time keeps running this long so the crash debris bursts and the plume
+    // fades out — THEN the freeze is total. Emission stays off throughout
+    // (paused), so nothing new streams from the frozen ship.
+    let mut replay_boom_timer = 0.0f32;
     let mut stick_thrust_t = 0.0f32; // seconds the stick-hold engine has been eligible
     let mut flip_settling = false;   // big flip commanded: engine cold until nose settles
     let mut pad_msg_timer = 0.0f32; // "+100" flash after a first landing
@@ -785,6 +1013,10 @@ async fn main() {
             watch_rec = Some(rec);
             replay_player = Some(p);
             mode = Mode::Replay;
+            REPLAY_PAUSED.store(0, Ordering::Relaxed);
+            REPLAY_STEP.store(0, Ordering::Relaxed);
+            REPLAY_SEEK.store(SEEK_NONE, Ordering::Relaxed);
+            REPLAY_SPEED.store(1.0f32.to_bits(), Ordering::Relaxed);
         }
 
         // One-shot HTML-UI commands (menu buttons). Reset flows through the
@@ -797,7 +1029,20 @@ async fn main() {
                 if let Some(p) = ResimPlayer::new(&recorder) {
                     replay_player = Some(p);
                     mode = Mode::Replay;
+                    REPLAY_PAUSED.store(0, Ordering::Relaxed);
+                    REPLAY_STEP.store(0, Ordering::Relaxed);
+                    REPLAY_SEEK.store(SEEK_NONE, Ordering::Relaxed);
+                    REPLAY_SPEED.store(1.0f32.to_bits(), Ordering::Relaxed);
                 }
+            }
+            3 if mode == Mode::Replay => {
+                // The ✕ button: playback freezes on its final frame instead
+                // of exiting, so leaving the replay is always this explicit
+                // command (or the R-key respawn).
+                replay_player = None;
+                particles.clear();
+                replay_boom_timer = 0.0;
+                mode = if watch_rec.take().is_some() { watch_return } else { Mode::CrashDialog };
             }
             _ => {}
         }
@@ -814,16 +1059,16 @@ async fn main() {
         //
         // The floating stick claims the first fresh touch anywhere on screen
         // while flying (the whole canvas is the flight-control surface — the
-        // pause/restart buttons are HTML and swallow their own taps); during
-        // the dialog/replay `stick_active` is false, so every fresh touch
-        // becomes a `ui_tap` (replay skip). `touches()` reports RAW physical
-        // px, so divide by dpi to reach the LOGICAL space that `screen_*()`,
-        // `mouse_position()` and all drawing use; a mouse press is already there.
+        // pause/restart buttons and the replay bar are HTML and swallow
+        // their own taps); during the dialog/replay `stick_active` is false
+        // and fresh touches are ignored (the out-of-flight UI is HTML).
+        // `touches()` reports RAW physical px, so divide by dpi to reach the
+        // LOGICAL space that `screen_*()`, `mouse_position()` and all
+        // drawing use.
         let touch_dpi = screen_dpi_scale();
         let tpos = |t: &Touch| t.position / touch_dpi;
         let invert = INVERT_STICK.load(Ordering::Relaxed) != 0;
         let stick_active = matches!(mode, Mode::Flying) && crash_timer <= 0.0 && !ui_paused;
-        let mut ui_tap: Option<Vec2> = None;
         // Keep following / release the claimed stick touch.
         if let Some(id) = stick.id {
             match touches().iter().find(|t| t.id == id) {
@@ -840,20 +1085,13 @@ async fn main() {
             if t.phase != TouchPhase::Started {
                 continue;
             }
-            let p = tpos(&t);
             if stick_active && stick.id.is_none() {
+                let p = tpos(&t);
                 stick.id = Some(t.id);
                 stick.center = p;
                 stick.held = true;
                 stick.apply(p, invert);
-            } else if Some(t.id) != stick.id {
-                ui_tap = Some(p); // tap for the crash dialog / replay skip
             }
-        }
-        // Desktop mouse press is also a UI tap (already logical px).
-        if is_mouse_button_pressed(MouseButton::Left) {
-            let (mx, my) = mouse_position();
-            ui_tap = Some(vec2(mx, my));
         }
 
         let stick_held = stick.held;
@@ -987,9 +1225,10 @@ async fn main() {
                 // is already parked and zeroed).
                 recorder.finalize(Keyframe {
                     tick: recorder.ticks(),
-                    x: imp.x, y: imp.y, angle: imp.angle,
+                    x: imp.x, y: imp.y, rot_re: imp.rot_re, rot_im: imp.rot_im,
                     vx: imp.vx, vy: imp.vy, angvel: imp.angvel,
                     fuel: sim.fuel, hull: sim.hull, glow,
+                    land_timer: 0.0, // a destroying tick always zeroes it
                 });
                 // Publish for the JS highscore store (top 5 per level).
                 report_run_end(&recorder, sim.max_dist);
@@ -1127,22 +1366,111 @@ async fn main() {
             // one is active, else the live recorder (crash-dialog replay).
             let play_rec = watch_rec.as_ref().unwrap_or(&recorder);
             if let Some(p) = replay_player.as_mut() {
-                let f = p.advance(play_rec, get_frame_time());
-                if p.finished {
-                    // The boom marks a re-simulated destruction; runs that
-                    // ended by manual reset just stop.
+                // Hitting play on the last frame restarts from the top. The
+                // finish auto-pauses (below), so entering a frame finished
+                // AND unpaused can only mean the user pressed play/space on
+                // the final frame. Checked BEFORE this frame's transport
+                // commands so a scrub-to-the-end while playing pauses on the
+                // finale (via the transition below) instead of instantly
+                // looping.
+                if p.finished && REPLAY_PAUSED.load(Ordering::Relaxed) == 0 {
+                    p.seek_to_tick(play_rec, p.first_tick);
+                    particles.clear();
+                    replay_boom_timer = 0.0;
+                }
+                // Captured BEFORE the transport commands so a seek/step that
+                // lands exactly on the final tick counts as the transition
+                // into finished (pause + boom below), same as playing there.
+                let was_finished = p.finished;
+                // Transport controls: play/pause, keyframe scrubbing and
+                // playback speed, from the HTML replay bar (atomics) or the
+                // keyboard (space = pause, ←/→ = one keyframe, S = cycle
+                // speed — the native/dev fallback).
+                if is_key_pressed(KeyCode::Space) {
+                    REPLAY_PAUSED.fetch_xor(1, Ordering::Relaxed);
+                }
+                if is_key_pressed(KeyCode::S) {
+                    let cur = f32::from_bits(REPLAY_SPEED.load(Ordering::Relaxed));
+                    let i = REPLAY_SPEEDS
+                        .iter()
+                        .position(|s| (s - cur).abs() < 0.01)
+                        .unwrap_or(2);
+                    let next = REPLAY_SPEEDS[(i + 1) % REPLAY_SPEEDS.len()];
+                    REPLAY_SPEED.store(next.to_bits(), Ordering::Relaxed);
+                }
+                let seek_bits = REPLAY_SEEK.swap(SEEK_NONE, Ordering::Relaxed);
+                // Transport steps are 0.1 s of sim time (12 ticks); the
+                // seek engine underneath stays tick-exact. REPLAY_STEP
+                // arrives from JS already in ticks (the bar sends 0.1 s
+                // worth per tap).
+                let step_unit = (0.1 / PHYSICS_DT).round() as i64;
+                let step_ticks = (is_key_pressed(KeyCode::Right) as i64
+                    - is_key_pressed(KeyCode::Left) as i64) * step_unit
+                    + REPLAY_STEP.swap(0, Ordering::Relaxed) as i64;
+                if seek_bits != SEEK_NONE {
+                    // Bar position → exact tick (frame-level scrubbing; the
+                    // slider's 1000 positions are the only quantisation).
+                    let span = (p.end_tick - p.first_tick) as f32;
+                    let target = p.first_tick
+                        + (f32::from_bits(seek_bits).clamp(0.0, 1.0) * span).round() as u32;
+                    let before = p.tick;
+                    p.seek_to_tick(play_rec, target);
+                    // Rebuild the plume the ship "should" trail at the
+                    // landing tick (the camera teleports, so the old
+                    // particles are wrong in both position and time).
+                    if p.tick != before {
+                        rebuild_replay_particles(play_rec, p.tick, &mut particles);
+                        replay_boom_timer = 0.0;
+                    }
+                } else if step_ticks != 0 {
+                    // Steps (⏮/⏭ buttons, ←/→ keys) auto-pause: a 0.1 s
+                    // step during playback would barely register.
+                    REPLAY_PAUSED.store(1, Ordering::Relaxed);
+                    let before = p.tick;
+                    let target = (p.tick as i64 + step_ticks).max(0) as u32;
+                    p.seek_to_tick(play_rec, target);
+                    if p.tick != before {
+                        rebuild_replay_particles(play_rec, p.tick, &mut particles);
+                        replay_boom_timer = 0.0;
+                    }
+                }
+                // Paused playback still renders: advance(0) re-simulates
+                // nothing and returns the frozen interpolated frame. The
+                // speed multiplier scales the wall-clock time fed to the
+                // re-sim (raw frame time clamped first, so a browser hitch
+                // at 4× can't burst past advance()'s catch-up cap).
+                let paused = REPLAY_PAUSED.load(Ordering::Relaxed) != 0;
+                let speed = f32::from_bits(REPLAY_SPEED.load(Ordering::Relaxed));
+                let dt = if paused { 0.0 } else { get_frame_time().min(0.05) * speed };
+                let f = p.advance(play_rec, dt);
+                REPLAY_POS.store(p.progress().to_bits(), Ordering::Relaxed);
+                REPLAY_LEN.store(
+                    (((p.end_tick - p.first_tick) as f32) * PHYSICS_DT).to_bits(),
+                    Ordering::Relaxed,
+                );
+                // Reaching the end does NOT exit: playback PAUSES on the
+                // final frame — play restarts from the top, scrubbing keeps
+                // working, the ✕ button / ui_command(3) / R key leave. The
+                // ending still ANIMATES: the crash debris bursts and the
+                // plume fades during the replay_boom_timer grace (particle
+                // time keeps running while emission stays off), then the
+                // freeze is total on a clean frame. Re-fires if the finale
+                // is replayed after a scrub back; runs that ended by manual
+                // reset just fade their plume silently.
+                if p.finished && !was_finished {
+                    REPLAY_PAUSED.store(1, Ordering::Relaxed);
+                    replay_boom_timer = 1.2;
                     if p.sim.crashed {
                         boom_burst(f.x, f.y, &mut particles);
                         if SOUND_ON.load(Ordering::Relaxed) != 0 && let Some(s) = &boom_snd {
                             play_sound(s, PlaySoundParams { looped: false, volume: 0.9 });
                         }
                     }
-                } else {
-                    replay_frame = Some(f);
                 }
-            }
-            if replay_player.as_ref().is_none_or(|p| p.finished) {
-                replay_player = None;
+                replay_frame = Some(f);
+            } else {
+                // No player (every entry point builds one, so this is just a
+                // safety net): fall back out of the mode.
                 mode = if watch_rec.take().is_some() { watch_return } else { Mode::CrashDialog };
             }
         }
@@ -1189,8 +1517,16 @@ async fn main() {
         if let Some(f) = replay_frame {
             glow = f.glow;
         }
+        // A paused replay freezes cosmetic time too (see the particle clock
+        // below); the engine hum mutes with it.
+        let replay_paused_now =
+            mode == Mode::Replay && REPLAY_PAUSED.load(Ordering::Relaxed) != 0;
         if let Some(s) = &thruster_snd {
-            let vol = if SOUND_ON.load(Ordering::Relaxed) != 0 { glow * 0.6 } else { 0.0 };
+            let vol = if SOUND_ON.load(Ordering::Relaxed) != 0 && !replay_paused_now {
+                glow * 0.6
+            } else {
+                0.0
+            };
             set_sound_volume(s, vol);
         }
 
@@ -1573,7 +1909,11 @@ async fn main() {
         // dialog shows no ship — it was just destroyed.
         let ship_visible = match mode {
             Mode::Flying => !crashed,
-            Mode::Replay => true,
+            // The hull vanishes in the replayed explosion, like live play
+            // (the scratch sim's crashed flag is set exactly at the
+            // destroying tick; scrubbing back rebuilds a fresh sim, so the
+            // ship reappears automatically).
+            Mode::Replay => !replay_player.as_ref().is_some_and(|p| p.sim.crashed),
             Mode::CrashDialog => false,
         };
 
@@ -1701,9 +2041,9 @@ async fn main() {
         );
         if matches!(mode, Mode::Flying) && !crashed && !ui_paused {
             if stick.id.is_some() {
-                draw_stick(stick.center, stick.knob, stick.held);
+                draw_stick(stick.center, stick.knob, stick.held, 1.0);
             } else {
-                draw_stick(stick_park, Vec2::ZERO, false);
+                draw_stick(stick_park, Vec2::ZERO, false, 1.0);
             }
         }
 
@@ -1730,54 +2070,33 @@ async fn main() {
                 if let Some(p) = ResimPlayer::new(&recorder) {
                     replay_player = Some(p);
                     mode = Mode::Replay;
+                    REPLAY_PAUSED.store(0, Ordering::Relaxed);
+                    REPLAY_STEP.store(0, Ordering::Relaxed);
+                    REPLAY_SEEK.store(SEEK_NONE, Ordering::Relaxed);
+                    REPLAY_SPEED.store(1.0f32.to_bits(), Ordering::Relaxed);
                 }
             }
         } else if mode == Mode::Replay {
-            // Pulsing banner + progress bar; any click/tap (above the stick
-            // zone) skips back to the dialog, R skips straight to a respawn.
-            let pulse = 180.0 + (get_time() * 4.0).sin() as f32 * 60.0;
-            let msg = "REPLAY";
-            let fs = 48.0 * ui;
-            let dims = measure_text(msg, None, fs as u16, 1.0);
-            let msg_y = sh * 0.16;
-            draw_text(msg, (sw - dims.width) / 2.0, msg_y, fs,
-                Color::from_rgba(255, 220, 120, pulse as u8));
-            let hint = "tap to skip";
-            let hfs = 24.0 * ui;
-            let hd = measure_text(hint, None, hfs as u16, 1.0);
-            draw_text(hint, (sw - hd.width) / 2.0, msg_y + 34.0 * ui, hfs,
-                Color::from_rgba(200, 205, 220, 160));
-            let pw = sw * 0.30;
-            let (frac, drift, snapped) = replay_player
-                .as_ref()
-                .map_or((0.0, 0.0, false), |p| (p.progress(), p.drift, p.snapped));
-            let px = (sw - pw) / 2.0;
-            let py = msg_y + 48.0 * ui;
-            draw_rectangle(px, py, pw, 4.0 * ui, Color::from_rgba(255, 255, 255, 60));
-            draw_rectangle(px, py, pw * frac, 4.0 * ui, Color::from_rgba(255, 220, 120, 200));
-            // The receipt: this is a live re-simulation of the recorded
-            // inputs, checked against the recording's keyframes.
-            let vfs = 18.0 * ui;
-            let vt = if snapped {
-                format!("re-simulated from inputs · drift {drift:.3} m · snapped to keyframe")
-            } else {
-                format!("re-simulated from inputs · drift {drift:.3} m")
-            };
-            let vd = measure_text(&vt, None, vfs as u16, 1.0);
-            draw_text(&vt, (sw - vd.width) / 2.0, py + 24.0 * ui, vfs,
-                Color::from_rgba(170, 180, 200, 170));
-            // Recorded-input display: the stick at its normal parked home,
-            // animated by the input driving the re-sim (knob at the recorded
-            // deflection, amber while held) — so a replay shows the pilot's
-            // hand exactly where the live stick sits. (Throttle meter: TODO,
-            // next commit — for both live play and replay, see #67.)
+            // The transport UI is the HTML replay bar (index.html); the only
+            // in-canvas element is the recorded-input stick — HALF SIZE,
+            // raised above the bar — animated by the input driving the
+            // re-sim (knob at the recorded deflection, amber while held), so
+            // a replay shows the pilot's hand. Keys remain as the native/dev
+            // fallback: space pause, ←/→ step, S speed, R respawn. (The
+            // per-keyframe drift check + snap still run; they're just no
+            // longer displayed. Throttle meter: see #67.)
             let inp = replay_player.as_ref().map(|p| p.current_input()).unwrap_or_default();
             let (isx, isy) = inp.steer_f32();
-            draw_stick(stick_park, vec2(isx, isy) * STICK_TRAVEL, inp.stick_held != 0);
-            if ui_tap.is_some() {
-                replay_player = None;
-                mode = if watch_rec.take().is_some() { watch_return } else { Mode::CrashDialog };
-            }
+            // Half size, tucked into the corner with tighter margins than
+            // the full-size park spot, and clear of the HTML replay bar
+            // (~154 CSS px incl. its bottom offset; logical px == CSS px).
+            let r = STICK_RADIUS * 0.5;
+            let replay_stick_home = vec2(
+                sw - safe_right - r - 12.0,
+                sh - safe_bottom - r - 168.0,
+            );
+            draw_stick(replay_stick_home, vec2(isx, isy) * STICK_TRAVEL,
+                inp.stick_held != 0, 0.5);
         } else if crashed {
             let msg = "CRASHED";
             let fs = 96.0 * ui;
@@ -1808,7 +2127,36 @@ async fn main() {
         // --- Particle emission ---
         // (Forces, fuel burn and the heading controller all run per tick in
         // the sim; this section is purely cosmetic.)
-        let dt = get_frame_time();
+        //
+        // Cosmetic clock: during replay playback particles advance in SIM
+        // time — scaled by the playback rate, frozen while paused — because
+        // particle velocities are world-space: with the camera pinned to a
+        // frozen/slowed ship, wall-clock particles inherit the ship's world
+        // velocity and the exhaust plume streams AHEAD of it (seen live as
+        // "thrust goes forward" when pausing mid-burn). Emission below is
+        // gated on dt > 0 so a paused frame doesn't pile particles at the
+        // nozzle.
+        let dt = if mode == Mode::Replay {
+            let cosmetic = get_frame_time().min(0.05)
+                * f32::from_bits(REPLAY_SPEED.load(Ordering::Relaxed));
+            if replay_paused_now {
+                // The ending grace: debris/plume keep animating briefly
+                // after the finish auto-pause (see the replay_boom_timer
+                // note above) — in COSMETIC time, so the explosion respects
+                // the playback speed — then time truly stops.
+                if replay_boom_timer > 0.0 { cosmetic } else { 0.0 }
+            } else {
+                cosmetic
+            }
+        } else {
+            get_frame_time()
+        };
+        // Counts down in the same clock the particles advance by, so a ¼×
+        // ending gets its full slow-motion play-out.
+        replay_boom_timer = (replay_boom_timer - dt).max(0.0);
+        // Emission needs cosmetic time AND live playback — during the ending
+        // grace the frozen ship must not keep spraying exhaust.
+        let emit_cosmetics = dt > 0.0 && !replay_paused_now;
 
         // Which RCS nozzle is puffing: live command + the sim's last applied
         // heading torque while flying, the recorded side during playback.
@@ -1829,7 +2177,7 @@ async fn main() {
             Some(_) => 0.0,
             None => throttle_fx,
         };
-        if exhaust > 0.0 {
+        if emit_cosmetics && exhaust > 0.0 {
             for _ in 0..(8.0 * exhaust).ceil() as i32 {
                 let spread = gen_range(-0.25f32, 0.25);
                 let (px, py) = lp(spread * 0.45, -0.72);
@@ -1850,7 +2198,7 @@ async fn main() {
         // torque, so negative heading torque puffs the LEFT nozzle and
         // positive the RIGHT (threshold keeps small trim corrections silent).
         // Coords are in scaled world units — lp() does NOT apply SHIP_SCALE.
-        if puff_left {
+        if emit_cosmetics && puff_left {
             for _ in 0..3 {
                 let spread = gen_range(-0.15f32, 0.15);
                 let (px, py) = lp(-0.30, -0.71);   // left leg nozzle (gold accent, scaled)
@@ -1863,7 +2211,7 @@ async fn main() {
                 });
             }
         }
-        if puff_right {
+        if emit_cosmetics && puff_right {
             for _ in 0..3 {
                 let spread = gen_range(-0.15f32, 0.15);
                 let (px, py) = lp(0.30, -0.71);    // right leg nozzle (gold accent, scaled)
@@ -2409,9 +2757,10 @@ mod tests {
             if let Some(imp) = rep.impact.filter(|i| i.destroyed) {
                 rec.finalize(Keyframe {
                     tick: rec.ticks(),
-                    x: imp.x, y: imp.y, angle: imp.angle,
+                    x: imp.x, y: imp.y, rot_re: imp.rot_re, rot_im: imp.rot_im,
                     vx: imp.vx, vy: imp.vy, angvel: imp.angvel,
                     fuel: s.fuel, hull: s.hull, glow: 0.0,
+                    land_timer: 0.0,
                 });
                 break;
             }
@@ -2483,6 +2832,176 @@ mod tests {
         assert!(p.finished, "player never finished (tick {} / {})", p.tick, rec.ticks());
         assert!(p.drift < 1e-3, "keyframe drift {} m", p.drift);
         assert!(!p.snapped, "SNAP engaged — recording diverges from replay");
+    }
+
+    #[test]
+    fn fast_forward_steps_many_ticks_per_frame() {
+        // 4× playback on a 60 Hz display feeds ~0.067 s per frame (0.2 s
+        // worst case after the caller's 0.05 s raw-frame clamp) — advance()'s
+        // hitch cap must pass deliberate fast-forward through, not clip it
+        // back to realtime.
+        let mut s = Sim::new(lvl());
+        let mut rec = Recording::new(sim_params(), lvl().to_params(), u32::MAX);
+        rec.push_keyframe(s.keyframe(0, 0.0));
+        let burn = InputState::from_controls(0.8, 0, 0.0, 0.0, false);
+        for _ in 0..KEYFRAME_EVERY {
+            s.tick(burn);
+            if rec.record_tick(burn) {
+                rec.push_keyframe(s.keyframe(rec.ticks(), 0.0));
+            }
+        }
+        let mut p = ResimPlayer::new(&rec).expect("player");
+        p.advance(&rec, 0.05 * 4.0); // one worst-case frame at 4×
+        // 0.2 s ≈ 24 ticks (float residue can leave the last one pending);
+        // the old 0.05 s cap would have clipped this to 6.
+        assert!(p.tick >= 23, "fast-forward clipped: {} ticks", p.tick);
+    }
+
+    // A recorded CONTACT-FREE flight (climb off the pad, then hover with a
+    // gentle steer wobble; the guards prove it never even scrapes): the
+    // shared fixture for the transport-seek tests, where zero drift is only
+    // provable without contact — contact solving depends on Rapier
+    // warm-start caches and handle numbering, which a keyframe can't carry
+    // (that case is what the 0.5 m snap fallback absorbs).
+    fn contact_free_recording() -> Recording {
+        let script = |tick: u32| -> InputState {
+            if tick < 60 {
+                return InputState::from_controls(0.6, 0, 0.0, 0.0, false); // lift off
+            }
+            // Hover (TWR ≈ 7.5 → hover throttle ≈ 0.13) with a small steer
+            // wobble so the PD heading controller stays busy.
+            let throttle = if (tick / 90).is_multiple_of(2) { 0.16 } else { 0.10 };
+            let f = tick as f32 * 0.01;
+            InputState::from_controls(throttle, 0, f.sin() * 0.15, -0.9, true)
+        };
+        let mut sim = Sim::new(lvl());
+        let mut rec = Recording::new(sim_params(), lvl().to_params(), u32::MAX);
+        rec.push_keyframe(sim.keyframe(0, 0.0));
+        for t in 0..6 * KEYFRAME_EVERY {
+            let input = script(t);
+            let rep = sim.tick(input);
+            let due = rec.record_tick(input);
+            assert!(rep.impact.is_none(), "test flight hit rock at tick {t}");
+            if due {
+                rec.push_keyframe(sim.keyframe(rec.ticks(), input.throttle_f32()));
+            }
+        }
+        assert_eq!(sim.hull, HULL_MAX, "test flight scraped — not contact-free");
+        assert!(rec.keyframes.len() >= 5, "flight too short: {} keyframes", rec.keyframes.len());
+        rec
+    }
+
+    // Bit-compare every physics field of two sim states (via keyframes;
+    // glow is render-side and passed as 0 for both).
+    fn assert_state_bits_eq(a: &Keyframe, b: &Keyframe, what: &str) {
+        for (fa, fb, name) in [
+            (a.x, b.x, "x"), (a.y, b.y, "y"),
+            (a.rot_re, b.rot_re, "rot_re"), (a.rot_im, b.rot_im, "rot_im"),
+            (a.vx, b.vx, "vx"), (a.vy, b.vy, "vy"),
+            (a.angvel, b.angvel, "angvel"), (a.fuel, b.fuel, "fuel"),
+            (a.hull, b.hull, "hull"), (a.land_timer, b.land_timer, "land_timer"),
+        ] {
+            assert_eq!(fa.to_bits(), fb.to_bits(), "{name} differs after {what}");
+        }
+    }
+
+    #[test]
+    fn tick_stepping_matches_continuous_playback_bit_exactly() {
+        // Frame-level transport: seeking to an arbitrary TICK must land on
+        // exactly the state continuous playback reaches there. Forward it
+        // restores the keyframe before the target and re-sims the remainder
+        // (or just steps when already inside the interval); one tick BACK
+        // does the rebuild + re-sim dance. All bit-exact on an airborne
+        // flight.
+        let rec = contact_free_recording();
+        let t_mid = KEYFRAME_EVERY + 45; // mid-interval, not on a keyframe
+
+        // Continuous reference: a player stepped straight to t_mid.
+        let mut reference = ResimPlayer::new(&rec).expect("player");
+        while reference.tick < t_mid {
+            reference.step_one(&rec);
+        }
+
+        // Forward tick-seek from a fresh player.
+        let mut p = ResimPlayer::new(&rec).expect("player");
+        p.seek_to_tick(&rec, t_mid);
+        assert_eq!(p.tick, t_mid);
+        assert_state_bits_eq(
+            &p.sim.keyframe(0, 0.0),
+            &reference.sim.keyframe(0, 0.0),
+            "a forward tick-seek",
+        );
+
+        // One tick back from t_mid, vs a reference stepped to t_mid - 1.
+        let mut back_ref = ResimPlayer::new(&rec).expect("player");
+        while back_ref.tick < t_mid - 1 {
+            back_ref.step_one(&rec);
+        }
+        p.seek_to_tick(&rec, t_mid - 1);
+        assert_eq!(p.tick, t_mid - 1);
+        assert_state_bits_eq(
+            &p.sim.keyframe(0, 0.0),
+            &back_ref.sim.keyframe(0, 0.0),
+            "a single-tick back-step",
+        );
+
+        // Stepping forward from mid-interval continues the SAME sim (no
+        // rebuild): still identical to the continuous reference.
+        p.seek_to_tick(&rec, t_mid + 7);
+        while reference.tick < t_mid + 7 {
+            reference.step_one(&rec);
+        }
+        assert_state_bits_eq(
+            &p.sim.keyframe(0, 0.0),
+            &reference.sim.keyframe(0, 0.0),
+            "an in-interval forward step",
+        );
+    }
+
+    #[test]
+    fn seeking_to_a_keyframe_resumes_bit_exactly() {
+        // Scrub: a fresh player seeks FORWARD to keyframe 3, and a second
+        // plays partway and seeks BACK to keyframe 1. v3 keyframes carry the
+        // exact rotation + land timer, so both must re-sim the airborne
+        // remainder with ZERO keyframe drift and never engage the snap
+        // fallback.
+        let rec = contact_free_recording();
+
+        // Forward scrub from a fresh player.
+        let mut p = ResimPlayer::new(&rec).expect("player");
+        p.seek_to_keyframe(&rec, 3);
+        assert_eq!(p.tick, rec.keyframes[3].tick);
+        while !p.finished {
+            p.step_one(&rec);
+        }
+        assert_eq!(p.tick, rec.ticks());
+        assert_eq!(p.drift, 0.0, "forward-seek drift");
+        assert!(!p.snapped, "fallback snap engaged after a forward seek");
+
+        // Backward scrub after playing partway past keyframe 2.
+        let mut p = ResimPlayer::new(&rec).expect("player");
+        for _ in 0..(2 * KEYFRAME_EVERY + 40) {
+            p.step_one(&rec);
+        }
+        p.seek_to_keyframe(&rec, 1);
+        assert_eq!(p.tick, rec.keyframes[1].tick);
+        while !p.finished {
+            p.step_one(&rec);
+        }
+        assert_eq!(p.drift, 0.0, "backward-seek drift");
+        assert!(!p.snapped, "fallback snap engaged after a backward seek");
+
+        // Seeking past the end clamps to the last keyframe that still has
+        // ticks to play — a scrub to the bar's far right shows the finale
+        // instead of doing nothing.
+        let mut p = ResimPlayer::new(&rec).expect("player");
+        p.seek_to_keyframe(&rec, rec.keyframes.len() + 5);
+        assert!(p.tick < rec.ticks());
+        assert!(!p.finished);
+        while !p.finished {
+            p.step_one(&rec);
+        }
+        assert_eq!(p.tick, rec.ticks());
     }
 
     #[test]
@@ -2686,9 +3205,11 @@ mod tests {
             let due = rec.record_tick(input);
             if let Some(imp) = rep.impact.filter(|i| i.destroyed) {
                 rec.finalize(Keyframe {
-                    tick: rec.ticks(), x: imp.x, y: imp.y, angle: imp.angle,
+                    tick: rec.ticks(), x: imp.x, y: imp.y,
+                    rot_re: imp.rot_re, rot_im: imp.rot_im,
                     vx: imp.vx, vy: imp.vy, angvel: imp.angvel,
                     fuel: sim.fuel, hull: sim.hull, glow: input.throttle_f32(),
+                    land_timer: 0.0,
                 });
                 break;
             }
