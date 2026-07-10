@@ -200,7 +200,10 @@ screen on desktop.
   progress fraction + recording length in seconds). The `#replay-bar` HTML
   overlay is THREE ROWS (`.rp-row`): on top the amber ⏮ / play-pause / ⏭
   cluster dead-centre (the flanking `.rp-side` zones share `flex: 1 1 0`,
-  which is what centres it — the left one is an empty spacer) and the
+  which is what centres it — the left one is an empty spacer; every
+  `.rp-btn` carries an invisible `::after` hit-area extension of +6px,
+  exactly half the 12px button gap, so touch targets meet edge-to-edge
+  without moving or overlapping anything) and the
   speed button right — it opens the `#rp-speed-menu` picker panel
   (absolute, anchored above the bar) rather than cycling; the `m:ss.t`
   time label on its own LEFT-ALIGNED middle row (tenths, so steps visibly
@@ -705,10 +708,15 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   play and replay is a follow-up, see #67.) The destroying impact is
   re-simulated, ends the playback (boom +
   dialog). **Reaching the end does NOT exit**: playback PAUSES on the
-  final frame — stale particles are dropped (a frozen mid-air plume reads
-  as a glitch, and burst debris would freeze into a clump, so the boom
-  SOUND alone marks a re-simulated destruction, re-firing if the finale is
-  replayed after a scrub back), the hull stays visible at the impact pose,
+  final frame, but the ending still ANIMATES — the destroying impact
+  bursts its debris (+ boom sound) and the plume fades during a ~1.2 s
+  `replay_boom_timer` grace in which particle time keeps running on the
+  wall clock while EMISSION stays off (`emit_cosmetics` — a frozen ship
+  must not keep spraying exhaust), then the freeze is total on a clean
+  frame; the ending re-fires if the finale is replayed after a scrub
+  back. The hull stays visible at the impact pose, stepping ⏭ past the
+  final tick is a no-op (same-tick seeks return early — they used to
+  re-seek the last interval and resurrect the plume),
   and **hitting play on the last frame restarts from the top** (the finish
   auto-pauses, so finished-and-unpaused can only mean the user pressed
   play — checked BEFORE the frame's transport commands, so a

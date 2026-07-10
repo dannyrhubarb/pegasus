@@ -135,6 +135,16 @@
     }
     .rp-btn:hover { background: rgba(255, 194, 75, 0.2); }
     .rp-btn .icn { filter: drop-shadow(0 0 5px var(--amber)); }
+    /* Invisible hit-area extension: +6px all around brings adjacent zones
+       exactly edge-to-edge (buttons sit 12px apart), so touch targets grow
+       without moving anything and without overlapping each other. */
+    .rp-btn { position: relative; }
+    .rp-btn::after {
+      content: "";
+      position: absolute;
+      inset: -6px;
+      border-radius: 50%;
+    }
     #rp-toggle { width: 44px; height: 44px; }
     .rp-step { width: 38px; height: 38px; }
     .rp-step .icn { width: 20px; height: 20px; }
@@ -190,7 +200,9 @@
       box-shadow: 0 0 8px rgba(255, 194, 75, 0.8);
       cursor: pointer;
     }
-    .rp-time-row { justify-content: flex-start; }
+    /* The slider row below carries ~12px of built-in headroom (56px input,
+       32px thumb), so pull the time row's gap back in. */
+    .rp-time-row { justify-content: flex-start; margin-bottom: -12px; }
     #rp-time {
       font-size: 12px;
       color: var(--dim);

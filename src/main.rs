@@ -238,8 +238,8 @@ impl ResimPlayer {
     // end_tick re-simulates the finale (finished = replay ends normally).
     fn seek_to_tick(&mut self, rec: &Recording, target: u32) {
         let target = target.clamp(self.first_tick, self.end_tick);
-        if target == self.tick && !self.finished {
-            return;
+        if target == self.tick {
+            return; // includes stepping "past" the final tick: a no-op
         }
         let kf_idx = rec
             .keyframes
@@ -952,6 +952,11 @@ async fn main() {
         }
     };
     let mut shake = 0.0f32; // impact screen-shake intensity, 0..1, decays fast
+    // Replay-ending grace: after playback pauses on the final frame, particle
+    // time keeps running this long so the crash debris bursts and the plume
+    // fades out — THEN the freeze is total. Emission stays off throughout
+    // (paused), so nothing new streams from the frozen ship.
+    let mut replay_boom_timer = 0.0f32;
     let mut stick_thrust_t = 0.0f32; // seconds the stick-hold engine has been eligible
     let mut flip_settling = false;   // big flip commanded: engine cold until nose settles
     let mut pad_msg_timer = 0.0f32; // "+100" flash after a first landing
@@ -1036,6 +1041,7 @@ async fn main() {
                 // command (or the R-key respawn).
                 replay_player = None;
                 particles.clear();
+                replay_boom_timer = 0.0;
                 mode = if watch_rec.take().is_some() { watch_return } else { Mode::CrashDialog };
             }
             _ => {}
@@ -1370,6 +1376,7 @@ async fn main() {
                 if p.finished && REPLAY_PAUSED.load(Ordering::Relaxed) == 0 {
                     p.seek_to_tick(play_rec, p.first_tick);
                     particles.clear();
+                    replay_boom_timer = 0.0;
                 }
                 // Captured BEFORE the transport commands so a seek/step that
                 // lands exactly on the final tick counts as the transition
@@ -1406,18 +1413,26 @@ async fn main() {
                     let span = (p.end_tick - p.first_tick) as f32;
                     let target = p.first_tick
                         + (f32::from_bits(seek_bits).clamp(0.0, 1.0) * span).round() as u32;
+                    let before = p.tick;
                     p.seek_to_tick(play_rec, target);
                     // Rebuild the plume the ship "should" trail at the
                     // landing tick (the camera teleports, so the old
                     // particles are wrong in both position and time).
-                    rebuild_replay_particles(play_rec, p.tick, &mut particles);
+                    if p.tick != before {
+                        rebuild_replay_particles(play_rec, p.tick, &mut particles);
+                        replay_boom_timer = 0.0;
+                    }
                 } else if step_ticks != 0 {
                     // Steps (⏮/⏭ buttons, ←/→ keys) auto-pause: a 0.1 s
                     // step during playback would barely register.
                     REPLAY_PAUSED.store(1, Ordering::Relaxed);
+                    let before = p.tick;
                     let target = (p.tick as i64 + step_ticks).max(0) as u32;
                     p.seek_to_tick(play_rec, target);
-                    rebuild_replay_particles(play_rec, p.tick, &mut particles);
+                    if p.tick != before {
+                        rebuild_replay_particles(play_rec, p.tick, &mut particles);
+                        replay_boom_timer = 0.0;
+                    }
                 }
                 // Paused playback still renders: advance(0) re-simulates
                 // nothing and returns the frozen interpolated frame. The
@@ -1436,20 +1451,20 @@ async fn main() {
                 // Reaching the end does NOT exit: playback PAUSES on the
                 // final frame — play restarts from the top, scrubbing keeps
                 // working, the ✕ button / ui_command(3) / R key leave. The
-                // pause freezes cosmetic time, so stale particles are
-                // dropped (a plume frozen mid-air reads as a glitch, and a
-                // debris burst would freeze into a static clump — the boom
-                // SOUND alone marks a re-simulated destruction, re-firing
-                // if the finale is replayed after a scrub back; runs that
-                // ended by manual reset just stop silently).
+                // ending still ANIMATES: the crash debris bursts and the
+                // plume fades during the replay_boom_timer grace (particle
+                // time keeps running while emission stays off), then the
+                // freeze is total on a clean frame. Re-fires if the finale
+                // is replayed after a scrub back; runs that ended by manual
+                // reset just fade their plume silently.
                 if p.finished && !was_finished {
                     REPLAY_PAUSED.store(1, Ordering::Relaxed);
-                    particles.clear();
-                    if p.sim.crashed
-                        && SOUND_ON.load(Ordering::Relaxed) != 0
-                        && let Some(s) = &boom_snd
-                    {
-                        play_sound(s, PlaySoundParams { looped: false, volume: 0.9 });
+                    replay_boom_timer = 1.2;
+                    if p.sim.crashed {
+                        boom_burst(f.x, f.y, &mut particles);
+                        if SOUND_ON.load(Ordering::Relaxed) != 0 && let Some(s) = &boom_snd {
+                            play_sound(s, PlaySoundParams { looped: false, volume: 0.9 });
+                        }
                     }
                 }
                 replay_frame = Some(f);
@@ -2122,7 +2137,10 @@ async fn main() {
         // nozzle.
         let dt = if mode == Mode::Replay {
             if replay_paused_now {
-                0.0
+                // The ending grace: debris/plume keep animating on the wall
+                // clock briefly after the finish auto-pause (see the
+                // replay_boom_timer note above), then time truly stops.
+                if replay_boom_timer > 0.0 { get_frame_time() } else { 0.0 }
             } else {
                 get_frame_time().min(0.05)
                     * f32::from_bits(REPLAY_SPEED.load(Ordering::Relaxed))
@@ -2130,6 +2148,10 @@ async fn main() {
         } else {
             get_frame_time()
         };
+        replay_boom_timer = (replay_boom_timer - get_frame_time()).max(0.0);
+        // Emission needs cosmetic time AND live playback — during the ending
+        // grace the frozen ship must not keep spraying exhaust.
+        let emit_cosmetics = dt > 0.0 && !replay_paused_now;
 
         // Which RCS nozzle is puffing: live command + the sim's last applied
         // heading torque while flying, the recorded side during playback.
@@ -2150,7 +2172,7 @@ async fn main() {
             Some(_) => 0.0,
             None => throttle_fx,
         };
-        if dt > 0.0 && exhaust > 0.0 {
+        if emit_cosmetics && exhaust > 0.0 {
             for _ in 0..(8.0 * exhaust).ceil() as i32 {
                 let spread = gen_range(-0.25f32, 0.25);
                 let (px, py) = lp(spread * 0.45, -0.72);
@@ -2171,7 +2193,7 @@ async fn main() {
         // torque, so negative heading torque puffs the LEFT nozzle and
         // positive the RIGHT (threshold keeps small trim corrections silent).
         // Coords are in scaled world units — lp() does NOT apply SHIP_SCALE.
-        if dt > 0.0 && puff_left {
+        if emit_cosmetics && puff_left {
             for _ in 0..3 {
                 let spread = gen_range(-0.15f32, 0.15);
                 let (px, py) = lp(-0.30, -0.71);   // left leg nozzle (gold accent, scaled)
@@ -2184,7 +2206,7 @@ async fn main() {
                 });
             }
         }
-        if dt > 0.0 && puff_right {
+        if emit_cosmetics && puff_right {
             for _ in 0..3 {
                 let spread = gen_range(-0.15f32, 0.15);
                 let (px, py) = lp(0.30, -0.71);    // right leg nozzle (gold accent, scaled)
