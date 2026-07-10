@@ -187,16 +187,19 @@ screen on desktop.
   both drive it, so the button icon polls the game), `replay_seek(f32)`
   (bar fraction 0..1 → the exact tick, so the slider's 1000 positions are
   the only quantisation; swap-to-consume `REPLAY_SEEK` atomic with a
-  NaN-bits `SEEK_NONE` sentinel), `replay_step(i32)` (±1 physics-tick
-  steps, auto-pausing; fetch_add so same-frame taps accumulate, consumed
-  with the arrow-key steps),
+  NaN-bits `SEEK_NONE` sentinel), `replay_step(i32)` (steps in raw
+  physics ticks — the UI sends 0.1 s = 12 per tap — auto-pausing; fetch_add
+  so same-frame taps accumulate, consumed with the arrow-key steps),
   `set_replay_speed(f32)` / `replay_speed() -> f32` (playback rate; the
   button label polls the game so the in-canvas S-key cycle stays in sync),
   `replay_pos() -> f32` / `replay_len() -> f32` (per-frame mirrors:
   progress fraction + recording length in seconds). The `#replay-bar` HTML
-  overlay is TWO ROWS (`.rp-row`): amber ⏮ / play-pause / ⏭ / speed
-  buttons on top, the range slider + `m:ss.t` time label (tenths, so frame
-  steps visibly move the clock; hidden under 480 px) beneath — the slider
+  overlay is TWO ROWS (`.rp-row`): on top the `m:ss.t` time label left
+  (tenths, so steps visibly move the clock), the amber ⏮ / play-pause / ⏭
+  cluster dead-centre (the flanking `.rp-side` zones share `flex: 1 1 0`,
+  which is what centres it) and the speed button right — it opens the
+  `#rp-speed-menu` picker panel (absolute, anchored above the bar) rather
+  than cycling; the full-width range slider sits beneath — the slider
   input is row-height with an oversized 28 px thumb so it's grabbable on
   touch, the visible 6 px track drawn by the track pseudo-elements. Shows
   while `ui_state() == 3` with no menu screen open, polls at 100 ms,
@@ -723,10 +726,10 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   the current keyframe interval just steps the live scratch sim (that IS
   ordinary playback). Tick-seeking lands on the exact state continuous
   playback reaches (unit test
-  `tick_stepping_matches_continuous_playback_bit_exactly`). Single-tick
-  steps (the bar's ⏮/⏭, hold-to-repeat at ~15 ticks/s ≈ a 1/8-speed
-  shuttle; ←/→ in-canvas) AUTO-PAUSE playback — a 1/120 s step during
-  playback would be invisible. Since
+  `tick_stepping_matches_continuous_playback_bit_exactly`). Transport
+  steps are 0.1 s of sim (12 ticks — the bar's ⏮/⏭, hold-to-repeat at
+  ~10/s ≈ a realtime shuttle; ←/→ in-canvas) and AUTO-PAUSE playback;
+  the underlying seek stays tick-exact. Since
   format v3 a keyframe carries the body's EXACT unit-complex rotation
   (restored via `Rotation::new_unchecked` — `Rotation::new(angle)` cost
   sub-mm round-trip drift) plus `land_timer`, so restoring an airborne

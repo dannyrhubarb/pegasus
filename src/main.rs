@@ -497,10 +497,10 @@ pub extern "C" fn replay_seek(frac: f32) {
     REPLAY_SEEK.store(frac.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
 }
 
-/// Step the replay by single physics ticks (±1 per tap of the bar's ⏮/⏭
-/// buttons, which hold-to-repeat JS-side — same as the in-canvas arrow
-/// keys). Stepping auto-pauses playback; fetch_add so a burst of taps
-/// within one frame accumulates.
+/// Step the replay by physics ticks (the bar's ⏮/⏭ buttons send 0.1 s
+/// worth — 12 ticks — per tap and hold-to-repeat JS-side; the in-canvas
+/// arrow keys step the same 0.1 s). Stepping auto-pauses playback;
+/// fetch_add so a burst of taps within one frame accumulates.
 #[unsafe(no_mangle)]
 pub extern "C" fn replay_step(delta: i32) {
     REPLAY_STEP.fetch_add(delta, Ordering::Relaxed);
@@ -1297,8 +1297,13 @@ async fn main() {
                     REPLAY_SPEED.store(next.to_bits(), Ordering::Relaxed);
                 }
                 let seek_bits = REPLAY_SEEK.swap(SEEK_NONE, Ordering::Relaxed);
-                let step_ticks = is_key_pressed(KeyCode::Right) as i64
-                    - is_key_pressed(KeyCode::Left) as i64
+                // Transport steps are 0.1 s of sim time (12 ticks); the
+                // seek engine underneath stays tick-exact. REPLAY_STEP
+                // arrives from JS already in ticks (the bar sends 0.1 s
+                // worth per tap).
+                let step_unit = (0.1 / PHYSICS_DT).round() as i64;
+                let step_ticks = (is_key_pressed(KeyCode::Right) as i64
+                    - is_key_pressed(KeyCode::Left) as i64) * step_unit
                     + REPLAY_STEP.swap(0, Ordering::Relaxed) as i64;
                 if seek_bits != SEEK_NONE {
                     // Bar position → exact tick (frame-level scrubbing; the
@@ -1308,8 +1313,8 @@ async fn main() {
                         + (f32::from_bits(seek_bits).clamp(0.0, 1.0) * span).round() as u32;
                     p.seek_to_tick(play_rec, target);
                 } else if step_ticks != 0 {
-                    // Single-tick steps (⏮/⏭ buttons, ←/→ keys) auto-pause:
-                    // a 1/120 s step during playback would be invisible.
+                    // Steps (⏮/⏭ buttons, ←/→ keys) auto-pause: a 0.1 s
+                    // step during playback would barely register.
                     REPLAY_PAUSED.store(1, Ordering::Relaxed);
                     let target = (p.tick as i64 + step_ticks).max(0) as u32;
                     p.seek_to_tick(play_rec, target);
