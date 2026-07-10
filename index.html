@@ -115,6 +115,13 @@
     #rp-toggle { width: 44px; height: 44px; }
     .rp-step { width: 38px; height: 38px; }
     .rp-step .icn { width: 20px; height: 20px; }
+    /* Speed button is text (¼× … 4×), not an icon. */
+    #rp-speed {
+      font-size: 14px;
+      font-weight: bold;
+      letter-spacing: -0.5px;
+      text-shadow: 0 0 5px var(--amber);
+    }
     /* The INPUT is the touch target, so it is tall (full bar height) and
        transparent; the visible 6 px track is drawn by the track pseudo-
        elements and the thumb is oversized for fat fingers. */
@@ -562,6 +569,7 @@
         <rect x="16.4" y="5.5" width="2.6" height="13" rx="1.2"></rect>
       </svg>
     </div>
+    <div id="rp-speed" class="cbtn rp-btn rp-step" role="button" aria-label="Playback speed" title="Playback speed">1×</div>
     <input id="rp-seek" type="range" min="0" max="1000" step="1" value="0" aria-label="Replay position">
     <div id="rp-time">0:00 / 0:00</div>
   </div>
@@ -1110,6 +1118,18 @@
     // Keyframe steps: the same ±1-keyframe seek the arrow keys perform.
     onTap(document.getElementById("rp-back"), () => call("replay_step", -1));
     onTap(document.getElementById("rp-fwd"), () => call("replay_step", 1));
+    // Playback speed: cycle ¼× → ½× → 1× → 2× → 4× (same ring as the S key;
+    // the label follows the game via the poll below, so both stay in sync).
+    const rpSpeedBtn = document.getElementById("rp-speed");
+    const RP_SPEEDS = [0.25, 0.5, 1, 2, 4];
+    const rpSpeedLabel = s => (s === 0.25 ? "¼×" : s === 0.5 ? "½×" : s + "×");
+    onTap(rpSpeedBtn, () => {
+      if (typeof wasm_exports === "undefined" || !wasm_exports.replay_speed) return;
+      const cur = wasm_exports.replay_speed();
+      let i = RP_SPEEDS.findIndex(s => Math.abs(s - cur) < 0.01);
+      if (i < 0) i = 2;
+      call("set_replay_speed", RP_SPEEDS[(i + 1) % RP_SPEEDS.length]);
+    });
     const fmtT = s => {
       s = Math.max(0, Math.round(s));
       return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
@@ -1127,6 +1147,7 @@
       rpPauseIcn.style.display = paused ? "none" : "block";
       rpPlayIcn.style.display = paused ? "block" : "none";
       rpToggle.setAttribute("aria-label", paused ? "Play replay" : "Pause replay");
+      rpSpeedBtn.textContent = rpSpeedLabel(wasm_exports.replay_speed());
     }, 100);
 
     // If the deploy-time placeholders weren't substituted (e.g. opened locally),

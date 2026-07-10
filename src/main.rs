@@ -154,9 +154,12 @@ impl ResimPlayer {
     }
 
     // Advance by real time `dt`, re-simulating whole ticks and returning the
-    // interpolated visual frame (the final pose once finished).
+    // interpolated visual frame (the final pose once finished). The cap
+    // bounds catch-up after a hitch; it sits ABOVE the biggest deliberate
+    // fast-forward step (raw frame time is pre-clamped to 0.05 s by the
+    // caller before the speed multiplier, so 4× peaks at 0.2 s = 24 ticks).
     fn advance(&mut self, rec: &Recording, dt: f32) -> ReplayFrame {
-        self.accum = (self.accum + dt).min(0.05);
+        self.accum = (self.accum + dt).min(0.25);
         while self.accum >= PHYSICS_DT && !self.finished {
             self.step_one(rec);
             self.accum -= PHYSICS_DT;
@@ -439,8 +442,14 @@ static REPLAY_SEEK: AtomicU32 = AtomicU32::new(SEEK_NONE);
 // Relative keyframe steps (the bar's ⏮/⏭ buttons). fetch_add so taps landing
 // within one frame accumulate; the loop consumes with swap(0).
 static REPLAY_STEP: AtomicI32 = AtomicI32::new(0);
+// Playback speed multiplier (f32 bits, 1.0 = realtime). The bar's speed
+// button cycles ¼×..4×; slow-mo and fast-forward just scale the wall-clock
+// time fed to the re-sim — the tick sequence itself never changes.
+static REPLAY_SPEED: AtomicU32 = AtomicU32::new(1.0f32.to_bits());
 static REPLAY_POS: AtomicU32 = AtomicU32::new(0);
 static REPLAY_LEN: AtomicU32 = AtomicU32::new(0);
+
+const REPLAY_SPEEDS: [f32; 5] = [0.25, 0.5, 1.0, 2.0, 4.0];
 
 /// Pause / resume replay playback (the bar's play/pause button). Cleared by
 /// the game whenever a new replay starts.
@@ -468,6 +477,20 @@ pub extern "C" fn replay_seek(frac: f32) {
 #[unsafe(no_mangle)]
 pub extern "C" fn replay_step(delta: i32) {
     REPLAY_STEP.fetch_add(delta, Ordering::Relaxed);
+}
+
+/// Playback speed (the bar's speed button / the in-canvas S key). Clamped to
+/// what the advance() catch-up cap can actually sustain (see the cap note in
+/// ResimPlayer::advance); reset to 1× whenever a new replay starts.
+#[unsafe(no_mangle)]
+pub extern "C" fn set_replay_speed(speed: f32) {
+    REPLAY_SPEED.store(speed.clamp(0.05, 5.0).to_bits(), Ordering::Relaxed);
+}
+
+/// Current speed, so the JS button label tracks the in-canvas S-key cycle.
+#[unsafe(no_mangle)]
+pub extern "C" fn replay_speed() -> f32 {
+    f32::from_bits(REPLAY_SPEED.load(Ordering::Relaxed))
 }
 
 /// Playback position as a fraction 0..1 (bar knob) and total length in
@@ -882,6 +905,7 @@ async fn main() {
             REPLAY_PAUSED.store(0, Ordering::Relaxed);
             REPLAY_STEP.store(0, Ordering::Relaxed);
             REPLAY_SEEK.store(SEEK_NONE, Ordering::Relaxed);
+            REPLAY_SPEED.store(1.0f32.to_bits(), Ordering::Relaxed);
         }
 
         // One-shot HTML-UI commands (menu buttons). Reset flows through the
@@ -897,6 +921,7 @@ async fn main() {
                     REPLAY_PAUSED.store(0, Ordering::Relaxed);
                     REPLAY_STEP.store(0, Ordering::Relaxed);
                     REPLAY_SEEK.store(SEEK_NONE, Ordering::Relaxed);
+                    REPLAY_SPEED.store(1.0f32.to_bits(), Ordering::Relaxed);
                 }
             }
             _ => {}
@@ -1228,11 +1253,21 @@ async fn main() {
             // one is active, else the live recorder (crash-dialog replay).
             let play_rec = watch_rec.as_ref().unwrap_or(&recorder);
             if let Some(p) = replay_player.as_mut() {
-                // Transport controls: play/pause + keyframe scrubbing, from
-                // the HTML replay bar (atomics) or the keyboard (space =
-                // pause, ←/→ = one keyframe — the native/dev fallback).
+                // Transport controls: play/pause, keyframe scrubbing and
+                // playback speed, from the HTML replay bar (atomics) or the
+                // keyboard (space = pause, ←/→ = one keyframe, S = cycle
+                // speed — the native/dev fallback).
                 if is_key_pressed(KeyCode::Space) {
                     REPLAY_PAUSED.fetch_xor(1, Ordering::Relaxed);
+                }
+                if is_key_pressed(KeyCode::S) {
+                    let cur = f32::from_bits(REPLAY_SPEED.load(Ordering::Relaxed));
+                    let i = REPLAY_SPEEDS
+                        .iter()
+                        .position(|s| (s - cur).abs() < 0.01)
+                        .unwrap_or(2);
+                    let next = REPLAY_SPEEDS[(i + 1) % REPLAY_SPEEDS.len()];
+                    REPLAY_SPEED.store(next.to_bits(), Ordering::Relaxed);
                 }
                 let seek_bits = REPLAY_SEEK.swap(SEEK_NONE, Ordering::Relaxed);
                 let kf_step = is_key_pressed(KeyCode::Right) as i64
@@ -1256,9 +1291,14 @@ async fn main() {
                     p.seek_to_keyframe(play_rec, (cur + kf_step).max(0) as usize);
                 }
                 // Paused playback still renders: advance(0) re-simulates
-                // nothing and returns the frozen interpolated frame.
+                // nothing and returns the frozen interpolated frame. The
+                // speed multiplier scales the wall-clock time fed to the
+                // re-sim (raw frame time clamped first, so a browser hitch
+                // at 4× can't burst past advance()'s catch-up cap).
                 let paused = REPLAY_PAUSED.load(Ordering::Relaxed) != 0;
-                let f = p.advance(play_rec, if paused { 0.0 } else { get_frame_time() });
+                let speed = f32::from_bits(REPLAY_SPEED.load(Ordering::Relaxed));
+                let dt = if paused { 0.0 } else { get_frame_time().min(0.05) * speed };
+                let f = p.advance(play_rec, dt);
                 REPLAY_POS.store(p.progress().to_bits(), Ordering::Relaxed);
                 REPLAY_LEN.store(
                     (((p.end_tick - p.first_tick) as f32) * PHYSICS_DT).to_bits(),
@@ -1869,6 +1909,7 @@ async fn main() {
                     REPLAY_PAUSED.store(0, Ordering::Relaxed);
                     REPLAY_STEP.store(0, Ordering::Relaxed);
                     REPLAY_SEEK.store(SEEK_NONE, Ordering::Relaxed);
+                    REPLAY_SPEED.store(1.0f32.to_bits(), Ordering::Relaxed);
                 }
             }
         } else if mode == Mode::Replay {
@@ -1876,13 +1917,20 @@ async fn main() {
             // zone) skips back to the dialog, R skips straight to a respawn.
             let pulse = 180.0 + (get_time() * 4.0).sin() as f32 * 60.0;
             let paused = REPLAY_PAUSED.load(Ordering::Relaxed) != 0;
-            let msg = if paused { "REPLAY · PAUSED" } else { "REPLAY" };
+            let speed = f32::from_bits(REPLAY_SPEED.load(Ordering::Relaxed));
+            let mut msg = String::from("REPLAY");
+            if (speed - 1.0).abs() > 0.01 {
+                msg += &format!(" · {speed}x");
+            }
+            if paused {
+                msg += " · PAUSED";
+            }
             let fs = 48.0 * ui;
-            let dims = measure_text(msg, None, fs as u16, 1.0);
+            let dims = measure_text(&msg, None, fs as u16, 1.0);
             let msg_y = sh * 0.16;
-            draw_text(msg, (sw - dims.width) / 2.0, msg_y, fs,
+            draw_text(&msg, (sw - dims.width) / 2.0, msg_y, fs,
                 Color::from_rgba(255, 220, 120, if paused { 220 } else { pulse as u8 }));
-            let hint = "tap to skip · [space] pause · [< >] scrub";
+            let hint = "tap to skip · [space] pause · [< >] scrub · [s] speed";
             let hfs = 24.0 * ui;
             let hd = measure_text(hint, None, hfs as u16, 1.0);
             draw_text(hint, (sw - hd.width) / 2.0, msg_y + 34.0 * ui, hfs,
@@ -2624,6 +2672,29 @@ mod tests {
         assert!(p.finished, "player never finished (tick {} / {})", p.tick, rec.ticks());
         assert!(p.drift < 1e-3, "keyframe drift {} m", p.drift);
         assert!(!p.snapped, "SNAP engaged — recording diverges from replay");
+    }
+
+    #[test]
+    fn fast_forward_steps_many_ticks_per_frame() {
+        // 4× playback on a 60 Hz display feeds ~0.067 s per frame (0.2 s
+        // worst case after the caller's 0.05 s raw-frame clamp) — advance()'s
+        // hitch cap must pass deliberate fast-forward through, not clip it
+        // back to realtime.
+        let mut s = Sim::new(lvl());
+        let mut rec = Recording::new(sim_params(), lvl().to_params(), u32::MAX);
+        rec.push_keyframe(s.keyframe(0, 0.0));
+        let burn = InputState::from_controls(0.8, 0, 0.0, 0.0, false);
+        for _ in 0..KEYFRAME_EVERY {
+            s.tick(burn);
+            if rec.record_tick(burn) {
+                rec.push_keyframe(s.keyframe(rec.ticks(), 0.0));
+            }
+        }
+        let mut p = ResimPlayer::new(&rec).expect("player");
+        p.advance(&rec, 0.05 * 4.0); // one worst-case frame at 4×
+        // 0.2 s ≈ 24 ticks (float residue can leave the last one pending);
+        // the old 0.05 s cap would have clipped this to 6.
+        assert!(p.tick >= 23, "fast-forward clipped: {} ticks", p.tick);
     }
 
     #[test]

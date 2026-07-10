@@ -188,9 +188,12 @@ screen on desktop.
   (bar fraction 0..1; swap-to-consume `REPLAY_SEEK` atomic with a NaN-bits
   `SEEK_NONE` sentinel), `replay_step(i32)` (±1-keyframe steps; fetch_add
   so same-frame taps accumulate, consumed with the arrow-key steps),
+  `set_replay_speed(f32)` / `replay_speed() -> f32` (playback rate; the
+  button label polls the game so the in-canvas S-key cycle stays in sync),
   `replay_pos() -> f32` / `replay_len() -> f32` (per-frame mirrors:
   progress fraction + recording length in seconds). The `#replay-bar` HTML
-  overlay (amber ⏮ / play-pause / ⏭ buttons + range slider + time label —
+  overlay (amber ⏮ / play-pause / ⏭ / speed buttons + range slider + time
+  label —
   the slider input is bar-height with an oversized 28 px thumb so it's
   grabbable on touch, the visible 6 px track is drawn by the track
   pseudo-elements, and the time label hides under 480 px) shows while
@@ -697,9 +700,16 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   that ended by reset (no wreck) skips the terminal boom.
   `ResimPlayer::step_one` is the shared per-tick core: `advance()` drives it
   on the wall clock for WATCH REPLAY; the ghost calls it in lockstep.
-- **Transport controls (play/pause + keyframe scrubbing)**: playback can be
-  paused (`advance(rec, 0.0)` re-simulates nothing and returns the frozen
-  interpolated frame) and scrubbed to any of the recording's 1 Hz keyframes.
+- **Transport controls (play/pause + keyframe scrubbing + speed)**: playback
+  can be paused (`advance(rec, 0.0)` re-simulates nothing and returns the
+  frozen interpolated frame), scrubbed to any of the recording's 1 Hz
+  keyframes, and rate-scaled (¼×/½×/1×/2×/4× — the multiplier scales the
+  wall-clock time fed to the re-sim, the tick sequence never changes, so
+  determinism/drift checks are untouched; the fractional-tick interpolation
+  keeps slow-mo smooth). Fast-forward note: the caller clamps the RAW frame
+  time to 0.05 s before multiplying, and `advance()`'s hitch cap sits at
+  0.25 s — above the 4× worst case (0.2 s = 24 ticks) — so 4× is genuinely
+  4× on a 60 Hz display (unit-tested; the old 0.05 cap clipped it to ~3×).
   `ResimPlayer::seek_to_keyframe` rebuilds the scratch sim FRESH and
   restores the target keyframe — the same op sequence as playing a trimmed
   recording from its first keyframe — and re-seeds the effective input from
@@ -715,10 +725,11 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   clamps to the last keyframe with ticks left to play (the terminal crash
   keyframe is not a playable start), so scrubbing to the bar's far right
   shows the finale. Controls: the HTML `#replay-bar` (see the bridge
-  section below) or, in-canvas (native/dev fallback), space = pause and
-  ←/→ = ±1 keyframe; the banner reads "REPLAY · PAUSED" while paused. Pause
-  and any pending seek are reset whenever a new replay starts (all three
-  `Mode::Replay` entry points).
+  section below) or, in-canvas (native/dev fallback), space = pause,
+  ←/→ = ±1 keyframe and S = cycle speed; the banner appends the speed
+  (`REPLAY · 2x`) and `· PAUSED`. Pause, pending seeks and the speed are
+  reset whenever a new replay starts (all three `Mode::Replay` entry
+  points).
 
 ### Hybrid recording (`src/replay.rs`) — the single replay format
 A `Recording` captures each spawn→crash run as **inputs + params +
