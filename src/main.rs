@@ -1281,11 +1281,27 @@ async fn main() {
         // are genuinely recomputed, not played back. Ends by re-simulating
         // the destroying impact, then returns to the dialog.
         let mut replay_frame: Option<ReplayFrame> = None;
+        // Sim time covered by transport steps/short forward scrubs this
+        // frame — fed to the particle clock below so stepping through a burn
+        // emits its plume (backwards can't run cosmetic time in reverse, so
+        // those land on a cleared frame instead).
+        let mut replay_step_dt = 0.0f32;
         if mode == Mode::Replay {
             // Playback source: an externally-loaded highscore replay when
             // one is active, else the live recorder (crash-dialog replay).
             let play_rec = watch_rec.as_ref().unwrap_or(&recorder);
             if let Some(p) = replay_player.as_mut() {
+                // Hitting play on the last frame restarts from the top. The
+                // finish auto-pauses (below), so entering a frame finished
+                // AND unpaused can only mean the user pressed play/space on
+                // the final frame. Checked BEFORE this frame's transport
+                // commands so a scrub-to-the-end while playing pauses on the
+                // finale (via the transition below) instead of instantly
+                // looping.
+                if p.finished && REPLAY_PAUSED.load(Ordering::Relaxed) == 0 {
+                    p.seek_to_tick(play_rec, p.first_tick);
+                    particles.clear();
+                }
                 // Transport controls: play/pause, keyframe scrubbing and
                 // playback speed, from the HTML replay bar (atomics) or the
                 // keyboard (space = pause, ←/→ = one keyframe, S = cycle
@@ -1317,17 +1333,30 @@ async fn main() {
                     let span = (p.end_tick - p.first_tick) as f32;
                     let target = p.first_tick
                         + (f32::from_bits(seek_bits).clamp(0.0, 1.0) * span).round() as u32;
+                    let before = p.tick;
                     p.seek_to_tick(play_rec, target);
-                    // The camera teleports with the seek; world-anchored
-                    // particles would be left hanging at the old spot.
-                    particles.clear();
+                    // A short FORWARD drag plays its cosmetics (plume puffs
+                    // along); any bigger teleport strands world-anchored
+                    // particles at the old spot, so start clean.
+                    let delta = p.tick as i64 - before as i64;
+                    if delta > 0 && delta <= 2 * step_unit {
+                        replay_step_dt = delta as f32 * PHYSICS_DT;
+                    } else {
+                        particles.clear();
+                    }
                 } else if step_ticks != 0 {
                     // Steps (⏮/⏭ buttons, ←/→ keys) auto-pause: a 0.1 s
                     // step during playback would barely register.
                     REPLAY_PAUSED.store(1, Ordering::Relaxed);
+                    let before = p.tick;
                     let target = (p.tick as i64 + step_ticks).max(0) as u32;
                     p.seek_to_tick(play_rec, target);
-                    particles.clear();
+                    let delta = p.tick as i64 - before as i64;
+                    if delta > 0 {
+                        replay_step_dt = (delta as f32 * PHYSICS_DT).min(0.25);
+                    } else {
+                        particles.clear();
+                    }
                 }
                 // Paused playback still renders: advance(0) re-simulates
                 // nothing and returns the frozen interpolated frame. The
@@ -1344,15 +1373,22 @@ async fn main() {
                     (((p.end_tick - p.first_tick) as f32) * PHYSICS_DT).to_bits(),
                     Ordering::Relaxed,
                 );
-                // Reaching the end does NOT exit: playback freezes on the
-                // final frame (scrub back to keep watching; the ✕ button /
-                // ui_command(3) or the R key leave). The boom fires on the
-                // TRANSITION into finished — a re-simulated destruction —
-                // and again if the finale is replayed after a scrub back;
-                // runs that ended by manual reset just stop.
-                if p.finished && !was_finished && p.sim.crashed {
-                    boom_burst(f.x, f.y, &mut particles);
-                    if SOUND_ON.load(Ordering::Relaxed) != 0 && let Some(s) = &boom_snd {
+                // Reaching the end does NOT exit: playback PAUSES on the
+                // final frame — play restarts from the top, scrubbing keeps
+                // working, the ✕ button / ui_command(3) / R key leave. The
+                // pause freezes cosmetic time, so stale particles are
+                // dropped (a plume frozen mid-air reads as a glitch, and a
+                // debris burst would freeze into a static clump — the boom
+                // SOUND alone marks a re-simulated destruction, re-firing
+                // if the finale is replayed after a scrub back; runs that
+                // ended by manual reset just stop silently).
+                if p.finished && !was_finished {
+                    REPLAY_PAUSED.store(1, Ordering::Relaxed);
+                    particles.clear();
+                    if p.sim.crashed
+                        && SOUND_ON.load(Ordering::Relaxed) != 0
+                        && let Some(s) = &boom_snd
+                    {
                         play_sound(s, PlaySoundParams { looped: false, volume: 0.9 });
                     }
                 }
@@ -1798,9 +1834,10 @@ async fn main() {
         // dialog shows no ship — it was just destroyed.
         let ship_visible = match mode {
             Mode::Flying => !crashed,
-            // A finished replay freezes on its final frame; if that frame is
-            // a re-simulated destruction the hull is gone, like live play.
-            Mode::Replay => !replay_player.as_ref().is_some_and(|p| p.sim.crashed),
+            // A finished replay pauses on its final frame — the hull stays
+            // visible at the impact pose (there's no debris burst to stand
+            // in for it; the boom sound marks the destruction).
+            Mode::Replay => true,
             Mode::CrashDialog => false,
         };
 
@@ -1974,7 +2011,14 @@ async fn main() {
             // longer displayed. Throttle meter: see #67.)
             let inp = replay_player.as_ref().map(|p| p.current_input()).unwrap_or_default();
             let (isx, isy) = inp.steer_f32();
-            let replay_stick_home = stick_park - vec2(0.0, 150.0);
+            // Half size, tucked into the corner with tighter margins than
+            // the full-size park spot, and above the HTML replay bar
+            // (~170 CSS px incl. its bottom offset; logical px == CSS px).
+            let r = STICK_RADIUS * 0.5;
+            let replay_stick_home = vec2(
+                sw - safe_right - r - 12.0,
+                sh - safe_bottom - r - 170.0,
+            );
             draw_stick(replay_stick_home, vec2(isx, isy) * STICK_TRAVEL,
                 inp.stick_held != 0, 0.5);
         } else if crashed {
@@ -2017,12 +2061,15 @@ async fn main() {
         // gated on dt > 0 so a paused frame doesn't pile particles at the
         // nozzle.
         let dt = if mode == Mode::Replay {
-            if replay_paused_now {
+            let live = if replay_paused_now {
                 0.0
             } else {
                 get_frame_time().min(0.05)
                     * f32::from_bits(REPLAY_SPEED.load(Ordering::Relaxed))
-            }
+            };
+            // Steps/short forward scrubs contribute their stepped sim time,
+            // so shuttling through a burn emits its plume frame by frame.
+            live + replay_step_dt
         } else {
             get_frame_time()
         };

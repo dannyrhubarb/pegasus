@@ -204,9 +204,10 @@ screen on desktop.
   speed button right — it opens the `#rp-speed-menu` picker panel
   (absolute, anchored above the bar) rather than cycling; the `m:ss.t`
   time label on its own LEFT-ALIGNED middle row (tenths, so steps visibly
-  move the clock); the full-width range slider at the bottom (row-height
-  input with an oversized 28 px thumb so it's grabbable on touch, the
-  visible 6 px track drawn by the track pseudo-elements). Shows
+  move the clock); the full-width range slider at the bottom (the input is its
+  row's full 56 px height with an oversized 32 px thumb so it's grabbable
+  on touch — safe because the slider has the row to itself — and the
+  visible 6 px track is drawn by the track pseudo-elements). Shows
   while `ui_state() == 3` with no menu screen open, polls at 100 ms,
   swallows mousedown/touchstart (a canvas tap skips the replay), and
   dedupes drag seeks per slider position (at most one seek per rendered
@@ -696,25 +697,33 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   cursor passes: the overlay shows `re-simulated from inputs · drift N m`,
   and drift > `SNAP_DRIFT_M = 0.5` snaps to the keyframe (the graceful
   fallback for recordings from a different build/params — zero on the same
-  binary, unit-tested). The **stick is drawn HALF SIZE, raised 150 px above its parked
-  home** (`stick_park`, bottom-right — the three-row HTML replay bar
-  occupies the parked spot) animated by the input driving the re-sim —
+  binary, unit-tested). The **stick is drawn HALF SIZE, tucked into the bottom-right
+  corner with tighter margins than the full-size park spot and ~170 CSS px
+  up, clear of the three-row HTML replay bar** animated by the input driving the re-sim —
   knob at the recorded deflection, amber while held — so a replay shows the
   pilot's hand where the live stick sits. (A throttle meter for both live
   play and replay is a follow-up, see #67.) The destroying impact is
   re-simulated, ends the playback (boom +
-  dialog). **Reaching the end does NOT exit**: playback freezes on the
-  final frame — the boom fires on the transition into `finished` (and again
-  if the finale is replayed after a scrub back), the ship hides once the
-  re-simmed run is crashed (like live play), and you can scrub back to keep
-  watching. Leaving is always explicit: the **✕ corner button**
+  dialog). **Reaching the end does NOT exit**: playback PAUSES on the
+  final frame — stale particles are dropped (a frozen mid-air plume reads
+  as a glitch, and burst debris would freeze into a clump, so the boom
+  SOUND alone marks a re-simulated destruction, re-firing if the finale is
+  replayed after a scrub back), the hull stays visible at the impact pose,
+  and **hitting play on the last frame restarts from the top** (the finish
+  auto-pauses, so finished-and-unpaused can only mean the user pressed
+  play — checked BEFORE the frame's transport commands, so a
+  scrub-to-the-end while playing pauses on the finale instead of instantly
+  looping). Leaving is always explicit: the **✕ corner button**
   (`ui_command(3)` — during a replay the HTML pause/restart corner buttons
-  swap for it) or the R-key respawn. Seeks/steps clear the particle buffer
-  (the camera teleports; world-anchored exhaust would be left hanging at
-  the old spot). The only in-canvas replay UI is the recorded-input stick,
-  HALF SIZE via `draw_stick`'s scale param — the old banner / hint line /
-  progress bar / drift readout are gone (the drift check + snap still run,
-  just undisplayed).
+  swap for it) or the R-key respawn. **Transport cosmetics**: a forward
+  step / short forward scrub feeds its stepped sim time to the particle
+  clock, so shuttling through a burn emits its plume frame by frame;
+  backward or long jumps clear the particle buffer instead (cosmetic time
+  can't run in reverse, and the camera teleport would strand
+  world-anchored exhaust at the old spot). The only in-canvas replay UI is
+  the recorded-input stick, HALF SIZE via `draw_stick`'s scale param — the
+  old banner / hint line / progress bar / drift readout are gone (the
+  drift check + snap still run, just undisplayed).
   WATCH REPLAY is a no-op if the recording has no ticks. **The same `Replay`
   mode also plays stored highscore replays** (see "High scores"): the ▶
   button sets `watch_rec` and playback sources from it instead of the live

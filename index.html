@@ -153,7 +153,8 @@
       min-width: 0;
       -webkit-appearance: none;
       appearance: none;
-      height: 44px;
+      height: 56px; /* the whole input is the touch target; it has its own
+                       row, so the extra height can't collide with buttons */
       background: transparent;
       outline: none;
       cursor: pointer;
@@ -166,9 +167,9 @@
     }
     #rp-seek::-webkit-slider-thumb {
       -webkit-appearance: none;
-      width: 28px;
-      height: 28px;
-      margin-top: -11px; /* centre the 28px thumb on the 6px track */
+      width: 32px;
+      height: 32px;
+      margin-top: -13px; /* centre the 32px thumb on the 6px track */
       border-radius: 50%;
       border: none;
       background: var(--amber);
@@ -181,8 +182,8 @@
       background: rgba(255, 255, 255, 0.18);
     }
     #rp-seek::-moz-range-thumb {
-      width: 28px;
-      height: 28px;
+      width: 32px;
+      height: 32px;
       border-radius: 50%;
       border: none;
       background: var(--amber);
