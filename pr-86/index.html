@@ -487,6 +487,16 @@
     #scores-list .rank { color: var(--amber); width: 1.6em; text-align: left; }
     #scores-list .dist { font-weight: 700; min-width: 4.5em; text-align: right; color: var(--text); }
     #scores-list .when { color: var(--faint); flex: 1; text-align: right; font-size: 0.78em; }
+    /* Two-line global entry: pilot name over the localised date+time */
+    #scores-list .pcol {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+      text-align: left;
+    }
     #scores-list .pdate { color: var(--faint); font-size: 0.72em; white-space: nowrap; }
     #scores-list .watch {
       font: 700 12px/1 var(--mono);
@@ -501,7 +511,7 @@
     }
     #scores-list .watch:hover { background: rgba(70, 255, 156, 0.28); }
     #scores-list .pname {
-      flex: 1;
+      max-width: 100%;
       text-align: left;
       font-weight: 700;
       letter-spacing: 0.06em;
@@ -908,11 +918,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">8f77179-pr-86</div>
+        <div class="info-value" id="git-rev">57477e9-pr-86</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-11 20:35 UTC</div>
+        <div class="info-value" id="build-time">2026-07-11 20:50 UTC</div>
       </div>
       <a class="mbtn" href="third-party-licenses.html" target="_blank" rel="noopener">Third-party licenses</a>
       <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
@@ -1285,11 +1295,10 @@
       if (st === 2 && overlay === null) {
         goDist.textContent = Math.round(wasm_exports.cur_dist()) + " m";
         goBest.textContent = "best " + Math.round(wasm_exports.get_best_dist()) + " m";
-        // First crash with online scores configured but no persisted name:
-        // the submit-score dialog takes the game-over screen's slot (and
-        // leads there on submit/skip). Once a name is stored, runs auto-post
-        // at bank time and this branch never triggers again.
-        if (pendingSubmit && !playerName()) openNameDialog("scr-gameover");
+        // Every crash-ended publishable run gets the submit/skip dialog in
+        // the game-over screen's slot (leading there on either choice); the
+        // callsign input arrives prefilled once a name is persisted.
+        if (pendingSubmit) openNameDialog("scr-gameover");
         else showScreen("scr-gameover");
       }
       if (watchFromMenu && prevState === 3 && st !== 3) {
@@ -1477,7 +1486,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "8f77179-pr-86";
+    const wasmRev = "57477e9-pr-86";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -1616,11 +1625,22 @@
       return parseFloat(localStorage.getItem("pegasus_best_" + file) || "0");
     }
 
+    const levelBestEls = {}; // file -> the row's .lbest span, for in-place updates
+    function levelBestText(file) {
+      const b = backendCfg ? globalBestFor(file) : bestFor(file);
+      return b > 0 ? "best " + Math.round(b) + " m" : "—";
+    }
     function renderLevels() {
       // A chooser, not a status view — no pre-selected highlight. The "best"
       // shown per row is the level's GLOBAL all-time record when online
       // (from the board cache, warmed by prefetchGlobalBests), falling back
       // to this device's local best offline.
+      //
+      // Async results must NOT call back into this function: rebuilding the
+      // rows under an in-flight tap made the tap land on whatever ended up
+      // at those coordinates — including the Back button right below the
+      // list (= surprise exit to the main menu, seen in the field). Late
+      // data updates go through levelBestEls in place instead.
       levelList.textContent = "";
       for (const file of levelFiles) {
         const row = document.createElement("div");
@@ -1630,8 +1650,8 @@
         name.textContent = levelNames[file];
         const best = document.createElement("span");
         best.className = "lbest";
-        const b = backendCfg ? globalBestFor(file) : bestFor(file);
-        best.textContent = b > 0 ? "best " + Math.round(b) + " m" : "—";
+        best.textContent = levelBestText(file);
+        levelBestEls[file] = best;
         row.append(name, best);
         row.addEventListener("click", () => {
           if (levelPickerMode === "scores") {
@@ -1893,11 +1913,11 @@
 
     function maybeSubmitOnline(file, entry) {
       if (!backendCfg || entry.d < 1) return;
-      if (playerName()) { submitScore(file, entry); return; }
-      // No name yet: hold the run for the dialog, but only when the crash
-      // flow is about to show the game-over screen (state 1 wreck / 2
-      // dialog). A reset-ended run mid-flight must not pop UI over the new
-      // flight — it just goes unsubmitted.
+      // Submission is always an EXPLICIT choice: every crash-ended run gets
+      // the submit/skip dialog (name prefilled once persisted). The gate on
+      // state 1 wreck / 2 dialog means reset-ended runs (restart / exit to
+      // menu mid-flight) never pop UI over the new flight — and therefore
+      // are not submitted at all.
       const st = wasm_exports.ui_state ? wasm_exports.ui_state() : 0;
       if (st === 1 || st === 2) pendingSubmit = { file, entry };
     }
@@ -1908,7 +1928,7 @@
     function openNameDialog(returnTo) {
       nameReturnTo = returnTo;
       nameDistEl.textContent = pendingSubmit
-        ? Math.round(pendingSubmit.entry.d) + " m — enter your callsign"
+        ? Math.round(pendingSubmit.entry.d) + " m — submit to the global board?"
         : "Shown on the global boards";
       nameInput.value = playerName();
       showScreen("scr-name");
@@ -1971,8 +1991,14 @@
     }
 
     // Build the board rows for one score list (shared by cached + fresh
-    // renders). Each entry: rank / name / localised date / distance / ▶ watch.
+    // renders). Each entry is TWO LINES: rank / [name over localised
+    // date+time] / distance / ▶ watch. renderedBoardJson remembers what's
+    // on screen so a background refetch that returns identical data doesn't
+    // rebuild the DOM under an in-flight tap (same mis-tap hazard as the
+    // level picker — see renderLevels).
+    let renderedBoardJson = null;
     function renderBoardRows(scores) {
+      renderedBoardJson = JSON.stringify(scores);
       scoresList.textContent = "";
       scoresEmpty.style.display = scores.length ? "none" : "";
       scores.forEach((s, i) => {
@@ -1980,17 +2006,24 @@
         const rank = document.createElement("span");
         rank.className = "rank";
         rank.textContent = (i + 1) + ".";
+        const col = document.createElement("span");
+        col.className = "pcol";
         const who = document.createElement("span");
         who.className = "pname";
         who.textContent = s.name;
         const when = document.createElement("span");
         when.className = "pdate";
-        // toLocaleDateString() with no options = the viewer's locale short date.
-        when.textContent = s.ts ? new Date(s.ts).toLocaleDateString() : "";
+        // No explicit locale = the viewer's own (dateStyle/timeStyle keep it
+        // compact: e.g. "2026-07-11 16:32" in sv-SE, "7/11/26, 4:32 PM" in
+        // en-US).
+        when.textContent = s.ts
+          ? new Date(s.ts).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })
+          : "";
+        col.append(who, when);
         const dist = document.createElement("span");
         dist.className = "dist";
         dist.textContent = Math.round(s.score) + " m";
-        li.append(rank, who, when, dist);
+        li.append(rank, col, dist);
         if (s.replayPath) {
           const watch = document.createElement("button");
           watch.className = "watch";
@@ -2009,13 +2042,19 @@
     function renderGlobalScores() {
       if (overlay !== "scr-scores") return;
       const file = scoresFile || currentLevelFile;
-      if (!backendCfg || !file) { scoresList.textContent = ""; scoresEmpty.style.display = "none"; return; }
+      if (!backendCfg || !file) {
+        scoresList.textContent = "";
+        renderedBoardJson = null;
+        scoresEmpty.style.display = "none";
+        return;
+      }
       const stem = levelStem(file);
       // Show the cached board immediately; only flash "Fetching…" when we
       // have nothing to show yet.
       const cached = getBoard(stem, scoresPeriod);
       if (cached) { renderBoardRows(cached); scoresStatus.style.display = "none"; }
-      else { scoresList.textContent = ""; scoresEmpty.style.display = "none";
+      else { scoresList.textContent = ""; renderedBoardJson = null;
+             scoresEmpty.style.display = "none";
              scoresStatus.textContent = "Fetching…"; scoresStatus.style.display = ""; }
       const seq = ++globalFetchSeq;
       const url = backendCfg.apiBaseUrl + "/v1/levels/"
@@ -2028,7 +2067,9 @@
           const scores = data.scores || [];
           putBoard(stem, scoresPeriod, scores);
           scoresStatus.style.display = "none";
-          renderBoardRows(scores);
+          // Rebuild only when the data actually changed — a rebuild under an
+          // in-flight tap retargets it (see renderBoardRows).
+          if (JSON.stringify(scores) !== renderedBoardJson) renderBoardRows(scores);
         })
         .catch(() => {
           if (seq !== globalFetchSeq || scoresSrc !== "global") return;
@@ -2054,7 +2095,10 @@
           .then(data => {
             if (!data) return;
             putBoard(stem, "alltime", data.scores || []);
-            if (overlay === "scr-levels") renderLevels(); // fill the row in place
+            // In-place text update ONLY — never rebuild the rows from an
+            // async callback (see renderLevels).
+            const el = levelBestEls[file];
+            if (el) el.textContent = levelBestText(file);
           })
           .catch(() => {});
       }
