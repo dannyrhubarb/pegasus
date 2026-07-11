@@ -836,11 +836,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">5b21888-pr-82</div>
+        <div class="info-value" id="git-rev">7d15b4e-pr-82</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-11 06:33 UTC</div>
+        <div class="info-value" id="build-time">2026-07-11 07:05 UTC</div>
       </div>
       <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
       <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
@@ -1267,6 +1267,7 @@
     let rpUiVisible = true;
     let rpHideAt = Date.now() + RP_HIDE_MS;
     let rpWasPaused = false;
+    let rpWasOn = false;
     function rpShowUi(show) {
       rpUiVisible = show;
       rpBar.classList.toggle("faded", !show);
@@ -1302,8 +1303,17 @@
       rpBar.classList.toggle("on", on);
       if (!on) {
         rpSpeedMenu.classList.remove("open");
-        if (!rpUiVisible) rpShowUi(true); // reset for the next replay
+        rpWasOn = false;
         return;
+      }
+      // A fresh replay ALWAYS starts with the GUI shown and the fade timer
+      // re-armed. (Resetting only on exit left rpHideAt from the previous
+      // watch: idle in the menu > 2.5 s and the next replay's first poll
+      // tick faded the GUI instantly — seen as "randomly starts hidden".)
+      if (!rpWasOn) {
+        rpWasOn = true;
+        rpWasPaused = false;
+        rpShowUi(true);
       }
       // Auto-hide clock. Pausing SURFACES the GUI on the transition only
       // (so the freeze-frame ending and a space-bar pause bring it up),
@@ -1349,7 +1359,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "5b21888-pr-82";
+    const wasmRev = "7d15b4e-pr-82";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
