@@ -549,6 +549,11 @@ static REPLAY_STEP: AtomicI32 = AtomicI32::new(0);
 static REPLAY_SPEED: AtomicU32 = AtomicU32::new(1.0f32.to_bits());
 static REPLAY_POS: AtomicU32 = AtomicU32::new(0);
 static REPLAY_LEN: AtomicU32 = AtomicU32::new(0);
+// Whether the HTML replay GUI (bar + ✕) is currently shown. JS owns the
+// YouTube-style auto-hide (fade while playing, tap to bring back) and
+// mirrors it here so the recorded-input stick can swap between its
+// half-size spot above the bar and its full-size parked home.
+static REPLAY_UI_VISIBLE: AtomicU32 = AtomicU32::new(1);
 
 const REPLAY_SPEEDS: [f32; 5] = [0.25, 0.5, 1.0, 2.0, 4.0];
 
@@ -588,6 +593,14 @@ pub extern "C" fn replay_step(delta: i32) {
 #[unsafe(no_mangle)]
 pub extern "C" fn set_replay_speed(speed: f32) {
     REPLAY_SPEED.store(speed.clamp(0.05, 5.0).to_bits(), Ordering::Relaxed);
+}
+
+/// The HTML replay GUI's visibility (JS auto-hides it YouTube-style while
+/// playing untouched; a canvas tap brings it back). Hidden ⇒ the in-canvas
+/// recorded-input stick returns to its full-size parked home.
+#[unsafe(no_mangle)]
+pub extern "C" fn set_replay_ui_visible(on: i32) {
+    REPLAY_UI_VISIBLE.store(on as u32, Ordering::Relaxed);
 }
 
 /// Current speed, so the JS button label tracks the in-canvas S-key cycle.
@@ -1017,6 +1030,7 @@ async fn main() {
             REPLAY_STEP.store(0, Ordering::Relaxed);
             REPLAY_SEEK.store(SEEK_NONE, Ordering::Relaxed);
             REPLAY_SPEED.store(1.0f32.to_bits(), Ordering::Relaxed);
+            REPLAY_UI_VISIBLE.store(1, Ordering::Relaxed);
         }
 
         // One-shot HTML-UI commands (menu buttons). Reset flows through the
@@ -1033,6 +1047,7 @@ async fn main() {
                     REPLAY_STEP.store(0, Ordering::Relaxed);
                     REPLAY_SEEK.store(SEEK_NONE, Ordering::Relaxed);
                     REPLAY_SPEED.store(1.0f32.to_bits(), Ordering::Relaxed);
+                    REPLAY_UI_VISIBLE.store(1, Ordering::Relaxed);
                 }
             }
             3 if mode == Mode::Replay => {
@@ -2074,6 +2089,7 @@ async fn main() {
                     REPLAY_STEP.store(0, Ordering::Relaxed);
                     REPLAY_SEEK.store(SEEK_NONE, Ordering::Relaxed);
                     REPLAY_SPEED.store(1.0f32.to_bits(), Ordering::Relaxed);
+                    REPLAY_UI_VISIBLE.store(1, Ordering::Relaxed);
                 }
             }
         } else if mode == Mode::Replay {
@@ -2087,16 +2103,24 @@ async fn main() {
             // longer displayed. Throttle meter: see #67.)
             let inp = replay_player.as_ref().map(|p| p.current_input()).unwrap_or_default();
             let (isx, isy) = inp.steer_f32();
-            // Half size, tucked into the corner with tighter margins than
-            // the full-size park spot, and clear of the HTML replay bar
-            // (~154 CSS px incl. its bottom offset; logical px == CSS px).
-            let r = STICK_RADIUS * 0.5;
-            let replay_stick_home = vec2(
-                sw - safe_right - r - 12.0,
-                sh - safe_bottom - r - 168.0,
-            );
-            draw_stick(replay_stick_home, vec2(isx, isy) * STICK_TRAVEL,
-                inp.stick_held != 0, 0.5);
+            if REPLAY_UI_VISIBLE.load(Ordering::Relaxed) != 0 {
+                // Half size, tucked into the corner with tighter margins
+                // than the full-size park spot, and clear of the HTML replay
+                // bar (~154 CSS px incl. its bottom offset; logical px ==
+                // CSS px).
+                let r = STICK_RADIUS * 0.5;
+                let replay_stick_home = vec2(
+                    sw - safe_right - r - 12.0,
+                    sh - safe_bottom - r - 168.0,
+                );
+                draw_stick(replay_stick_home, vec2(isx, isy) * STICK_TRAVEL,
+                    inp.stick_held != 0, 0.5);
+            } else {
+                // GUI auto-hidden: the stick takes back its full-size parked
+                // home, exactly where the live stick sits.
+                draw_stick(stick_park, vec2(isx, isy) * STICK_TRAVEL,
+                    inp.stick_held != 0, 1.0);
+            }
         } else if crashed {
             let msg = "CRASHED";
             let fs = 96.0 * ui;
