@@ -745,10 +745,13 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   (including the freeze-frame ending) SURFACES it on the transition, and
   while paused / picker-open the timer is suspended — but an explicit
   canvas tap still hides it even paused, like YouTube (forcing it visible
-  continuously fought the tap toggle: show-hide flicker). Visibility is mirrored to the wasm
-  (`set_replay_ui_visible` → `REPLAY_UI_VISIBLE`, reset to visible at the
-  replay entry points): hidden ⇒ the stick returns to its FULL-SIZE parked
-  home (`stick_park`), exactly where the live stick sits.
+  continuously fought the tap toggle: show-hide flicker). A fresh replay ALWAYS starts with the GUI
+  shown and the fade timer re-armed (the poll detects the transition into
+  state 3 — resetting only on exit left a stale `rpHideAt` that faded the
+  GUI on the first tick after > 2.5 s in the menu). Visibility is mirrored
+  to the wasm (`set_replay_ui_visible` → `REPLAY_UI_VISIBLE`, reset to
+  visible at the replay entry points): hidden ⇒ the stick returns to its
+  FULL-SIZE parked home (`stick_park`), exactly where the live stick sits.
   WATCH REPLAY is a no-op if the recording has no ticks. **The same `Replay`
   mode also plays stored highscore replays** (see "High scores"): the ▶
   button sets `watch_rec` and playback sources from it instead of the live

@@ -1267,6 +1267,7 @@
     let rpUiVisible = true;
     let rpHideAt = Date.now() + RP_HIDE_MS;
     let rpWasPaused = false;
+    let rpWasOn = false;
     function rpShowUi(show) {
       rpUiVisible = show;
       rpBar.classList.toggle("faded", !show);
@@ -1302,8 +1303,17 @@
       rpBar.classList.toggle("on", on);
       if (!on) {
         rpSpeedMenu.classList.remove("open");
-        if (!rpUiVisible) rpShowUi(true); // reset for the next replay
+        rpWasOn = false;
         return;
+      }
+      // A fresh replay ALWAYS starts with the GUI shown and the fade timer
+      // re-armed. (Resetting only on exit left rpHideAt from the previous
+      // watch: idle in the menu > 2.5 s and the next replay's first poll
+      // tick faded the GUI instantly — seen as "randomly starts hidden".)
+      if (!rpWasOn) {
+        rpWasOn = true;
+        rpWasPaused = false;
+        rpShowUi(true);
       }
       // Auto-hide clock. Pausing SURFACES the GUI on the transition only
       // (so the freeze-frame ending and a space-bar pause bring it up),
