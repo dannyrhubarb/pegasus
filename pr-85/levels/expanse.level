@@ -1,0 +1,10 @@
+# Level 1 — The Expanse: fly as far as you can in either direction; the
+# high score is the farthest |x| you reach. Same cave as the demo but with
+# no vertical shafts — one long winding tunnel, boulders and all, with
+# refueling pads every ~130 m.
+name = The Expanse
+scoring = distance
+shafts = off
+obstacles = on
+pad_spacing = 130
+seed = 0
