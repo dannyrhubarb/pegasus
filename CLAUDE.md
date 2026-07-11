@@ -148,7 +148,9 @@ while the wasm loads):
   + Fly / Levels / High scores / Settings / About.
 - **scr-levels**: level rows (name + stored best) replacing the old
   `<select>`; tapping pushes the level (see "Levels") and highlights it.
-- **scr-scores**: top 5 per level with ▶ watch buttons (see "High scores").
+- **scr-scores**: top 5 per level with ▶ watch buttons (see "High scores");
+  with a backend config.json deployed it becomes the **global board** with
+  Today / This week / All time period chips (see "Online high scores").
 - **scr-settings**: **Sound** (`#sound-toggle-row`, `pegasus_sound`, **off by
   default** → `set_sound_enabled` → `SOUND_ON`; off mutes the thruster loop
   and skips boom playback), **Velocity vector** (`#vel-toggle-row`), **Invert
@@ -156,6 +158,8 @@ while the wasm loads):
   default), **Debug HUD** (`#debug-toggle-row`, `pegasus_debug_hud`, **off by
   default** → `set_debug_hud` → `DEBUG_HUD`; shows the telemetry text line —
   see "HUD") as styled toggles; same localStorage → export → atomic plumbing.
+  Plus the **Pilot name** row (`#name-row`, hidden offline) — opens the
+  submit-score dialog in edit mode (see "Online high scores").
 - **scr-about**: build **git revision** + **build time** (deploy-time `sed`
   of `__GIT_REVISION__` / `__BUILD_TIME__` placeholders by `build-site`;
   local fallback "dev (local build)" via `startsWith("__")`) and the
@@ -922,6 +926,49 @@ button. The wasm↔JS contract:
   (`stored_highscore_blob_round_trips_into_a_watchable_replay`): fly →
   serialize + deflate → decode → re-play to the end, drift 0.
 
+### Online high scores (dannyrhubarb/pegasus-backend)
+The deployed site can carry a **`config.json`** next to `index.html`:
+`{"apiBaseUrl": …, "replayBaseUrl": …}` — written by `build-site` from the
+**`BACKEND_CONFIG_JSON` repo variable** (the backend stack's
+`FrontendConfigJson` output, pasted once into Settings → Actions →
+Variables; validated at build time). No variable → no config.json → the
+whole online layer is invisible (local dev, forks). Previews get the same
+config, so a PR preview talks to the real backend. All JS-side in
+`index.html`, layered on the local high-score plumbing:
+- **Submit**: `maybeSubmitOnline` hooks `collectEndedRun` — every banked
+  run (≥ 1 m; the game already drops runs < `GHOST_MIN_SECS`) POSTs
+  `{level: <file stem>, name, score, replay}` to `/v1/scores` once a
+  **pilot name** is persisted (`pegasus_player_name`). Replays over the
+  server's 512 KiB decoded cap are submitted score-only.
+- **First-time name dialog** (`#scr-name`): while no name is stored, a
+  crash-ended publishable run is held in `pendingSubmit` and the ui-state
+  poll shows the SUBMIT SCORE dialog **instead of** the game-over screen
+  (submit → save name + POST → game-over; skip → that run just stays
+  local, asks again next crash). Reset-ended runs never pop UI mid-flight
+  — they go unsubmitted until a name exists. The same screen doubles as
+  the Settings "Pilot name" editor (`openNameDialog(returnTo)`).
+  Its input `stopPropagation()`s keydown so typing never reaches the game.
+- **Global boards**: when a config.json is present the High-scores screen
+  IS the global board (no local/global toggle — the local top-5 store
+  still lives underneath as the ghost source). Today / This week /
+  All time period chips fetch `/v1/levels/<stem>/scores?period=…` (top 50,
+  ranked server-side); rows show rank/name/distance and a ▶ watch button
+  when the entry has a replay. **Refetched on every entry** to the screen
+  (`showScreen("scr-scores")` calls `renderScores`; `renderGlobalScores`
+  no-ops while the screen isn't up, so banking a run doesn't spam the API).
+  Stale fetches are dropped via a sequence counter.
+- **Watching a server replay**: ▶ fetches `<replayBaseUrl>/<replayPath>`
+  (CloudFront) and pushes the bytes through the SAME
+  `watch_replay_blob` path as local entries (`pushBytesToWasm` — the
+  base64 variant `pushBlobToWasm` now wraps it); the blob's header
+  carries its level, so it re-sims in the right world regardless of the
+  selected level.
+- E2E-tested headless (Playwright + a stub API server, scratch-only):
+  crash → dialog → POST body → auto-post on second crash → global board →
+  server replay playback. The submit threshold and dialog gating live in
+  `maybeSubmitOnline`; keep them in sync with the backend's validation
+  (`score > 0`, name ≤ 24 chars — the input carries `maxlength=24`).
+
 ## Physics notes
 
 The body has `angular_damping(3.0)` and `linear_damping(0.2)` (see Thrust /
@@ -978,7 +1025,7 @@ commit the refreshed page.
 - **Always open a PR** after pushing a feature branch — standing instruction
   from the owner (no need to ask first). The PR also produces a phone-testable
   preview deployment at `pr-<n>/`.
-- Development branch: `claude/crash-replay-dialog-qmvtn8` (current); previous: `claude/replicate-pr-review-deployment-gjw4x0`
+- Development branch: `claude/highscores-api-dialog-btzwny` (current); previous: `claude/crash-replay-dialog-qmvtn8`
 - Merges to `main` via rebase PRs using the GitHub MCP tools (`mcp__github__create_pull_request`, `mcp__github__merge_pull_request`).
 - **Curate the branch before merging.** Rebase merges land every branch
   commit on `main` verbatim, so branch noise becomes permanent history.
