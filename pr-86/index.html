@@ -951,11 +951,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">9448afd-pr-86</div>
+        <div class="info-value" id="git-rev">c2e887e-pr-86</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-11T22:26:12Z</div>
+        <div class="info-value" id="build-time">2026-07-11T22:40:03Z</div>
       </div>
       <a class="mbtn" href="third-party-licenses.html" target="_blank" rel="noopener">Third-party licenses</a>
       <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
@@ -1281,10 +1281,12 @@
     });
     document.getElementById("btn-again").addEventListener("click", () => {
       call("ui_command", 1);
+      uiCmdPending = true; // see the ui-state poll
       closeMenu();
     });
     document.getElementById("btn-replay").addEventListener("click", () => {
       call("ui_command", 2);
+      uiCmdPending = true;
       closeMenu(); // state flips to replay; the poll below brings us back
     });
     document.getElementById("btn-gomenu").addEventListener("click", () => {
@@ -1323,10 +1325,18 @@
     const goBest = document.getElementById("go-best");
     let prevState = 0;
     let watchFromMenu = false;
+    let uiCmdPending = false; // ui_command sent, game hasn't consumed it yet
     setInterval(() => {
       if (typeof wasm_exports === "undefined" || !wasm_exports.ui_state) return;
       const st = wasm_exports.ui_state();
-      if (st === 2 && overlay === null) {
+      // "Fly again"/"Watch replay" send a ui_command and close the menu, but
+      // the game consumes commands on its NEXT FRAME — a poll tick landing
+      // in that window still sees state 2 with no overlay and would re-open
+      // the game-over screen over the fresh run (pausing it: the menu
+      // silently flashing back, seen as a wedged e2e run). Hold this branch
+      // off until the game has actually left state 2.
+      if (st !== 2) uiCmdPending = false;
+      if (st === 2 && overlay === null && !uiCmdPending) {
         goDist.textContent = Math.round(wasm_exports.cur_dist()) + " m";
         goBest.textContent = "best " + Math.round(wasm_exports.get_best_dist()) + " m";
         // Every crash-ended publishable run gets the submit/skip dialog in
@@ -1529,7 +1539,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "9448afd-pr-86";
+    const wasmRev = "c2e887e-pr-86";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -1933,20 +1943,24 @@
     // .timeZone is still Europe/Stockholm. Intl only maps region -> zones
     // (Intl.Locale getTimeZones), so reverse-map by scanning the 676
     // candidate region codes for the one whose zone list contains ours
-    // (~200 ms: deferred off the boot path and memoized per zone+language
-    // in localStorage). The locale is then <ui language>-<zone region>,
-    // e.g. en-SE -> "2026-07-11, 14:00". Regionless zones (UTC, Etc/*),
-    // missing APIs (old Safari), or a not-yet-finished scan fall back to a
-    // fixed ISO local format.
+    // (~200 ms: deferred off the boot path and memoized in localStorage).
+    // Formatting then follows the REGION'S OWN conventions — its dominant
+    // language via maximize() (und-SE -> sv-Latn-SE -> "2026-07-11 16:00"),
+    // NOT the UI language glued onto the region (en-SE inserts a comma
+    // that is not the standard Swedish format). These timestamps are
+    // purely numeric, so no words from that language ever surface;
+    // -u-nu-latn pins Latin digits for regions whose default numerals
+    // aren't. Regionless zones (UTC, Etc/*), missing APIs (old Safari),
+    // or a not-yet-finished scan fall back to a fixed ISO local format.
     let DATE_LOCALE = null;
     (function initDateLocale() {
       let zone = "";
       try { zone = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) { return; }
       if (!zone) return;
-      const lang = (navigator.language || "en").split("-")[0];
       try {
         const c = JSON.parse(localStorage.getItem("pegasus_date_locale") || "null");
-        if (c && c.zone === zone && c.lang === lang) { DATE_LOCALE = c.locale; return; }
+        // v2: region-dominant-language formatting (v1 cached <lang>-<region>)
+        if (c && c.v === 2 && c.zone === zone) { DATE_LOCALE = c.locale; return; }
       } catch (e) { /* recompute below */ }
       setTimeout(() => {
         let locale = null;
@@ -1958,12 +1972,16 @@
               const l = new Intl.Locale("und-" + region);
               zones = l.getTimeZones ? l.getTimeZones() : l.timeZones;
             } catch (e) { continue; }
-            if (zones && zones.includes(zone)) { locale = lang + "-" + region; break; }
+            if (zones && zones.includes(zone)) {
+              try { locale = new Intl.Locale("und-" + region).maximize().toString() + "-u-nu-latn"; }
+              catch (e) { locale = "en-" + region; }
+              break;
+            }
           }
         }
         DATE_LOCALE = locale;
         try {
-          localStorage.setItem("pegasus_date_locale", JSON.stringify({ zone, lang, locale }));
+          localStorage.setItem("pegasus_date_locale", JSON.stringify({ v: 2, zone, locale }));
         } catch (e) { /* quota — recompute next load */ }
       }, 0);
     })();
