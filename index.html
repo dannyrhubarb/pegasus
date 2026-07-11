@@ -1266,6 +1266,7 @@
     const RP_HIDE_MS = 2500;
     let rpUiVisible = true;
     let rpHideAt = Date.now() + RP_HIDE_MS;
+    let rpWasPaused = false;
     function rpShowUi(show) {
       rpUiVisible = show;
       rpBar.classList.toggle("faded", !show);
@@ -1304,10 +1305,16 @@
         if (!rpUiVisible) rpShowUi(true); // reset for the next replay
         return;
       }
-      // Auto-hide clock: paused playback (incl. the freeze-frame ending)
-      // and an open speed picker always surface and hold the GUI.
-      if (wasm_exports.replay_paused() !== 0 || rpSpeedMenu.classList.contains("open")) {
-        if (!rpUiVisible) rpShowUi(true);
+      // Auto-hide clock. Pausing SURFACES the GUI on the transition only
+      // (so the freeze-frame ending and a space-bar pause bring it up),
+      // and while paused / picker-open the timer is suspended — but an
+      // explicit canvas tap can still hide it, like YouTube. Forcing it
+      // visible continuously here fought the tap toggle (show-hide
+      // flicker).
+      const rpPaused = wasm_exports.replay_paused() !== 0;
+      if (rpPaused && !rpWasPaused && !rpUiVisible) rpShowUi(true);
+      rpWasPaused = rpPaused;
+      if (rpPaused || rpSpeedMenu.classList.contains("open")) {
         rpHideAt = Date.now() + RP_HIDE_MS;
       } else if (rpUiVisible && Date.now() > rpHideAt) {
         rpShowUi(false);
