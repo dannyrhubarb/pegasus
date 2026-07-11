@@ -157,7 +157,13 @@ while the wasm loads):
   pre-selected highlight**. The per-row "best" is the level's **global
   all-time record** when online (the #1 from the board cache, refreshed by
   `prefetchGlobalBests` on every open), falling back to the device's local
-  best offline. No level list (manifest fetch failed) ⇒ the picker is
+  best offline. **DOM-stability rule (hard-won)**: async results update the
+  row text IN PLACE (`levelBestEls`) — rebuilding the rows under an
+  in-flight tap retargeted the tap to whatever landed at those coordinates,
+  including the Back button right below the list (= surprise exit to the
+  main menu, seen in the field). The board applies the same rule by
+  skipping the post-cache re-render when the fresh data is identical
+  (`renderedBoardJson`). No level list (manifest fetch failed) ⇒ the picker is
   skipped and Fly / High scores go straight to their destination on the
   built-in level.
 - **scr-scores**: the board for **`scoresFile`** (the level picked for
@@ -950,26 +956,27 @@ Variables; validated at build time). No variable → no config.json → the
 whole online layer is invisible (local dev, forks). Previews get the same
 config, so a PR preview talks to the real backend. All JS-side in
 `index.html`, layered on the local high-score plumbing:
-- **Submit**: `maybeSubmitOnline` hooks `collectEndedRun` — every banked
-  run (≥ 1 m; the game already drops runs < `GHOST_MIN_SECS`) POSTs
-  `{level: <file stem>, name, score, replay}` to `/v1/scores` once a
-  **pilot name** is persisted (`pegasus_player_name`). Replays over the
-  server's 512 KiB decoded cap are submitted score-only.
-- **First-time name dialog** (`#scr-name`): while no name is stored, a
-  crash-ended publishable run is held in `pendingSubmit` and the ui-state
-  poll shows the SUBMIT SCORE dialog **instead of** the game-over screen
-  (submit → save name + POST → game-over; skip → that run just stays
-  local, asks again next crash). Reset-ended runs never pop UI mid-flight
-  — they go unsubmitted until a name exists. The same screen doubles as
-  the Settings "Pilot name" editor (`openNameDialog(returnTo)`).
-  Its input `stopPropagation()`s keydown so typing never reaches the game.
+- **Submit is always an explicit choice**: `maybeSubmitOnline` hooks
+  `collectEndedRun` — every crash-ended publishable run (≥ 1 m; the game
+  already drops runs < `GHOST_MIN_SECS`) is held in `pendingSubmit`, and
+  the ui-state poll shows the SUBMIT SCORE dialog (`#scr-name`) **instead
+  of** the game-over screen: submit → save name + POST
+  `{level: <file stem>, name, score, replay}` to `/v1/scores` → game-over;
+  skip → the run stays local. The callsign input arrives prefilled once a
+  name is persisted (`pegasus_player_name`). Reset-ended runs (restart /
+  exit-to-menu mid-flight) never pop UI and are therefore **not
+  submitted**. Replays over the server's 512 KiB decoded cap are submitted
+  score-only. The same screen doubles as the Settings "Pilot name" editor
+  (`openNameDialog(returnTo)`). Its input `stopPropagation()`s keydown so
+  typing never reaches the game.
 - **Global boards**: when a config.json is present the High-scores screen
   IS the global board (no local/global toggle — the local top-5 store
   still lives underneath as the ghost source). Today / This week /
   All time period chips fetch `/v1/levels/<stem>/scores?period=…` (top 50,
-  ranked server-side); rows show rank / name / **localised date**
-  (`toLocaleDateString()`) / distance and a ▶ watch button when the entry
-  has a replay. The `#scores-list` scrolls internally (`max-height:54vh`) so
+  ranked server-side); each row is TWO LINES — rank / [pilot name over the
+  **localised date+time** (`toLocaleString(undefined, {dateStyle/timeStyle:
+  "short"})`, `.pcol` column)] / distance — plus a ▶ watch button when the
+  entry has a replay. The `#scores-list` scrolls internally (`max-height:54vh`) so
   the title/chips/Back stay fixed under a long board. **Results are cached**
   (`boardCache`, keyed `level|period`, persisted to localStorage): the
   cached board paints instantly on entry while a fresh fetch runs in the
