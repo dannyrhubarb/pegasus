@@ -836,11 +836,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">8293a47-pr-82</div>
+        <div class="info-value" id="git-rev">5b21888-pr-82</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-11 06:19 UTC</div>
+        <div class="info-value" id="build-time">2026-07-11 06:33 UTC</div>
       </div>
       <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
       <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
@@ -1266,6 +1266,7 @@
     const RP_HIDE_MS = 2500;
     let rpUiVisible = true;
     let rpHideAt = Date.now() + RP_HIDE_MS;
+    let rpWasPaused = false;
     function rpShowUi(show) {
       rpUiVisible = show;
       rpBar.classList.toggle("faded", !show);
@@ -1304,10 +1305,16 @@
         if (!rpUiVisible) rpShowUi(true); // reset for the next replay
         return;
       }
-      // Auto-hide clock: paused playback (incl. the freeze-frame ending)
-      // and an open speed picker always surface and hold the GUI.
-      if (wasm_exports.replay_paused() !== 0 || rpSpeedMenu.classList.contains("open")) {
-        if (!rpUiVisible) rpShowUi(true);
+      // Auto-hide clock. Pausing SURFACES the GUI on the transition only
+      // (so the freeze-frame ending and a space-bar pause bring it up),
+      // and while paused / picker-open the timer is suspended — but an
+      // explicit canvas tap can still hide it, like YouTube. Forcing it
+      // visible continuously here fought the tap toggle (show-hide
+      // flicker).
+      const rpPaused = wasm_exports.replay_paused() !== 0;
+      if (rpPaused && !rpWasPaused && !rpUiVisible) rpShowUi(true);
+      rpWasPaused = rpPaused;
+      if (rpPaused || rpSpeedMenu.classList.contains("open")) {
         rpHideAt = Date.now() + RP_HIDE_MS;
       } else if (rpUiVisible && Date.now() > rpHideAt) {
         rpShowUi(false);
@@ -1342,7 +1349,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "8293a47-pr-82";
+    const wasmRev = "5b21888-pr-82";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
