@@ -6,6 +6,14 @@ inputs:
   revision:
     description: Revision label injected into the info overlay (__GIT_REVISION__).
     required: true
+  backend-config:
+    description: >
+      JSON for site/config.json ({"apiBaseUrl": …, "replayBaseUrl": …} — the
+      pegasus-backend stack's FrontendConfigJson output, stored in the
+      BACKEND_CONFIG_JSON repo variable). Empty = no config.json is written
+      and the game runs with online scores disabled.
+    required: false
+    default: ""
 runs:
   using: composite
   steps:
@@ -39,6 +47,7 @@ runs:
       shell: bash
       env:
         GIT_REV: ${{ inputs.revision }}
+        BACKEND_CONFIG: ${{ inputs.backend-config }}
       run: |
         mkdir -p site
         cp index.html site/
@@ -61,3 +70,12 @@ runs:
         # Version marker fetched with cache bypassed by index.html, to detect
         # a stale cached page and offer the "new build" reload toast.
         printf '{"revision":"%s"}\n' "${GIT_REV}" > site/version.json
+        # Backend endpoints (online high scores). Comes from the
+        # BACKEND_CONFIG_JSON repo variable so URLs rotate without a code
+        # change; validated so a malformed variable fails the build here
+        # rather than silently shipping a broken config.json. Absent
+        # variable = no config.json = the game runs offline-only.
+        if [ -n "${BACKEND_CONFIG}" ]; then
+          echo "${BACKEND_CONFIG}" | python3 -c 'import json,sys; c = json.load(sys.stdin); assert c["apiBaseUrl"].startswith("https://") and c["replayBaseUrl"].startswith("https://")'
+          printf '%s\n' "${BACKEND_CONFIG}" > site/config.json
+        fi

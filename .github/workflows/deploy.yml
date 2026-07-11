@@ -31,6 +31,7 @@ jobs:
         uses: ./.github/actions/build-site
         with:
           revision: ${{ steps.rev.outputs.short }}
+          backend-config: ${{ vars.BACKEND_CONFIG_JSON }}
 
       - name: Sync site root into gh-pages branch
         uses: ./.github/actions/sync-pages-branch
