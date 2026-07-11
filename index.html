@@ -103,6 +103,14 @@
       z-index: 10;
     }
     #replay-bar.on { display: flex; }
+    /* YouTube-style auto-hide: fade out while playing untouched, tap the
+       canvas to bring back. pointer-events off so a hidden bar can't eat
+       the tap that re-shows it. */
+    #replay-bar, #exit-replay-btn { transition: opacity 0.25s; }
+    #replay-bar.faded, #exit-replay-btn.faded {
+      opacity: 0;
+      pointer-events: none;
+    }
     .rp-row {
       display: flex;
       align-items: center;
@@ -828,11 +836,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">a4919b0</div>
+        <div class="info-value" id="git-rev">efe25a9</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-11 07:07 UTC</div>
+        <div class="info-value" id="build-time">2026-07-11 10:35 UTC</div>
       </div>
       <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
       <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
@@ -1248,6 +1256,35 @@
           rpSpeedMenu.classList.remove("open");
         }
       }));
+
+    // --- Auto-hide (YouTube-style) ---
+    // The GUI (bar + ✕) fades after a few seconds of untouched playback;
+    // tapping the canvas toggles it back. Never hides while paused (incl.
+    // the freeze-frame ending) or with the speed picker open. The wasm
+    // mirrors visibility so the recorded-input stick swaps between its
+    // half-size spot above the bar and its full-size parked home.
+    const RP_HIDE_MS = 2500;
+    let rpUiVisible = true;
+    let rpHideAt = Date.now() + RP_HIDE_MS;
+    let rpWasPaused = false;
+    let rpWasOn = false;
+    function rpShowUi(show) {
+      rpUiVisible = show;
+      rpBar.classList.toggle("faded", !show);
+      exitReplayBtn.classList.toggle("faded", !show);
+      call("set_replay_ui_visible", show ? 1 : 0);
+      if (show) rpHideAt = Date.now() + RP_HIDE_MS;
+    }
+    // Any bar interaction re-arms the timer.
+    ["pointerdown", "pointerup", "input"].forEach(ev =>
+      rpBar.addEventListener(ev, () => { rpHideAt = Date.now() + RP_HIDE_MS; }));
+    // Canvas tap: toggle the GUI (the game ignores touches during replay).
+    document.getElementById("glcanvas").addEventListener("pointerdown", () => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.ui_state
+          && wasm_exports.ui_state() === 3 && overlay === null) {
+        rpShowUi(!rpUiVisible);
+      }
+    });
     const fmtT = s => {
       // m:ss.t — tenths make frame-stepping visibly move the clock.
       s = Math.max(0, s);
@@ -1266,7 +1303,31 @@
       rpBar.classList.toggle("on", on);
       if (!on) {
         rpSpeedMenu.classList.remove("open");
+        rpWasOn = false;
         return;
+      }
+      // A fresh replay ALWAYS starts with the GUI shown and the fade timer
+      // re-armed. (Resetting only on exit left rpHideAt from the previous
+      // watch: idle in the menu > 2.5 s and the next replay's first poll
+      // tick faded the GUI instantly — seen as "randomly starts hidden".)
+      if (!rpWasOn) {
+        rpWasOn = true;
+        rpWasPaused = false;
+        rpShowUi(true);
+      }
+      // Auto-hide clock. Pausing SURFACES the GUI on the transition only
+      // (so the freeze-frame ending and a space-bar pause bring it up),
+      // and while paused / picker-open the timer is suspended — but an
+      // explicit canvas tap can still hide it, like YouTube. Forcing it
+      // visible continuously here fought the tap toggle (show-hide
+      // flicker).
+      const rpPaused = wasm_exports.replay_paused() !== 0;
+      if (rpPaused && !rpWasPaused && !rpUiVisible) rpShowUi(true);
+      rpWasPaused = rpPaused;
+      if (rpPaused || rpSpeedMenu.classList.contains("open")) {
+        rpHideAt = Date.now() + RP_HIDE_MS;
+      } else if (rpUiVisible && Date.now() > rpHideAt) {
+        rpShowUi(false);
       }
       const len = wasm_exports.replay_len();
       const pos = wasm_exports.replay_pos();
@@ -1298,7 +1359,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "a4919b0";
+    const wasmRev = "efe25a9";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
