@@ -951,11 +951,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">416a692-pr-86</div>
+        <div class="info-value" id="git-rev">098f1cf-pr-86</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-11 21:58 UTC</div>
+        <div class="info-value" id="build-time">2026-07-11 22:04 UTC</div>
       </div>
       <a class="mbtn" href="third-party-licenses.html" target="_blank" rel="noopener">Third-party licenses</a>
       <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
@@ -1519,7 +1519,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "416a692-pr-86";
+    const wasmRev = "098f1cf-pr-86";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -1915,16 +1915,54 @@
       return file.replace(/\.level$/, ""); // the backend keys boards by stem
     }
 
-    // Board timestamps: fixed ISO-style format in the device's LOCAL
-    // timezone (2026-07-11 23:44). Locale-derived formatting is a dead
-    // end here — the browser exposes no region setting, only language
-    // tags, and a phone set to English in Sweden reports a bare en-US
-    // (verified in the field via a temporary Settings debug readout), so
-    // "localised" rendered as US dates. ISO is unambiguous for a global
-    // board and fits the arcade monospace anyway; only the timezone
-    // (which Date does know) is device-specific.
+    // Board timestamps: formatted for the region derived from the device
+    // TIMEZONE — the one regional setting browsers actually expose.
+    // Language tags lie about region: a phone set to English in Sweden
+    // reports a bare en-US (verified in the field via a temporary Settings
+    // debug readout), but its Intl.DateTimeFormat().resolvedOptions()
+    // .timeZone is still Europe/Stockholm. Intl only maps region -> zones
+    // (Intl.Locale getTimeZones), so reverse-map by scanning the 676
+    // candidate region codes for the one whose zone list contains ours
+    // (~200 ms: deferred off the boot path and memoized per zone+language
+    // in localStorage). The locale is then <ui language>-<zone region>,
+    // e.g. en-SE -> "2026-07-11, 14:00". Regionless zones (UTC, Etc/*),
+    // missing APIs (old Safari), or a not-yet-finished scan fall back to a
+    // fixed ISO local format.
+    let DATE_LOCALE = null;
+    (function initDateLocale() {
+      let zone = "";
+      try { zone = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) { return; }
+      if (!zone) return;
+      const lang = (navigator.language || "en").split("-")[0];
+      try {
+        const c = JSON.parse(localStorage.getItem("pegasus_date_locale") || "null");
+        if (c && c.zone === zone && c.lang === lang) { DATE_LOCALE = c.locale; return; }
+      } catch (e) { /* recompute below */ }
+      setTimeout(() => {
+        let locale = null;
+        for (let i = 0; i < 26 && !locale; i++) {
+          for (let j = 0; j < 26; j++) {
+            const region = String.fromCharCode(65 + i) + String.fromCharCode(65 + j);
+            let zones;
+            try {
+              const l = new Intl.Locale("und-" + region);
+              zones = l.getTimeZones ? l.getTimeZones() : l.timeZones;
+            } catch (e) { continue; }
+            if (zones && zones.includes(zone)) { locale = lang + "-" + region; break; }
+          }
+        }
+        DATE_LOCALE = locale;
+        try {
+          localStorage.setItem("pegasus_date_locale", JSON.stringify({ zone, lang, locale }));
+        } catch (e) { /* quota — recompute next load */ }
+      }, 0);
+    })();
     function fmtDateTime(ts) {
       const d = new Date(ts);
+      if (DATE_LOCALE) {
+        try { return d.toLocaleString(DATE_LOCALE, { dateStyle: "short", timeStyle: "short" }); }
+        catch (e) { /* engine rejects the constructed tag — fall through */ }
+      }
       const p = n => String(n).padStart(2, "0");
       return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate())
         + " " + p(d.getHours()) + ":" + p(d.getMinutes());
