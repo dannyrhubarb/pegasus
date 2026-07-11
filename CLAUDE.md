@@ -145,12 +145,23 @@ while the wasm loads):
   real vector ship — same geometry as `icon.svg` / `src/ship_mesh.rs` —
   inlined so it ships with `index.html`; bobs, flame flickers; hidden under
   `max-height:560px` so landscape phones keep the Fly button above the fold)
-  + Fly / Levels / High scores / Settings / About.
-- **scr-levels**: level rows (name + stored best) replacing the old
-  `<select>`; tapping pushes the level (see "Levels") and highlights it.
-- **scr-scores**: top 5 per level with ▶ watch buttons (see "High scores");
-  with a backend config.json deployed it becomes the **global board** with
-  Today / This week / All time period chips (see "Online high scores").
+  + Fly / High scores / Settings / About. **No top-level Levels button** —
+  level choice is a step inside Fly and High scores (see scr-levels).
+- **scr-levels**: the **shared level picker** — level rows (name + stored
+  best), reached two ways via `openLevelPicker(mode)` (`levelPickerMode`
+  drives its title + row action): **fly mode** (from Fly, titled "SELECT
+  LEVEL") loads the picked level and closes the menu to fly it; **scores
+  mode** (from High scores or a board's Back, titled "HIGH SCORES") sets
+  `scoresFile` and opens that level's board **without reloading the game**
+  (viewing a board must not reset the flight waiting behind the menu). No
+  level list (manifest fetch failed) ⇒ the picker is skipped and Fly /
+  High scores go straight to their destination on the built-in level.
+- **scr-scores**: the board for **`scoresFile`** (the level picked for
+  viewing — defaults to the loaded level, decoupled from `currentLevelFile`
+  so browsing another level's scores doesn't reload). Top 5 per level with
+  ▶ watch buttons (see "High scores"); with a backend config.json deployed
+  it becomes the **global board** with Today / This week / All time period
+  chips (see "Online high scores"). Back returns to the scores-mode picker.
 - **scr-settings**: **Sound** (`#sound-toggle-row`, `pegasus_sound`, **off by
   default** → `set_sound_enabled` → `SOUND_ON`; off mutes the thruster loop
   and skips boom playback), **Velocity vector** (`#vel-toggle-row`), **Invert

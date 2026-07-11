@@ -842,14 +842,16 @@
         </g>
       </svg>
       <div class="mbtn primary" id="btn-fly">Fly</div>
-      <div class="mbtn" data-goto="scr-levels">Levels</div>
-      <div class="mbtn" data-goto="scr-scores">High scores</div>
+      <div class="mbtn" id="btn-scores">High scores</div>
       <div class="mbtn" data-goto="scr-settings">Settings</div>
       <div class="mbtn" data-goto="scr-about">About</div>
     </div>
 
+    <!-- Shared level picker: a step inside Fly (pick → fly) and High scores
+         (pick → that level's board). Its title + row action follow the mode
+         it was opened in (see levelPickerMode). -->
     <div class="screen" id="scr-levels">
-      <div class="h2">LEVELS</div>
+      <div class="h2" id="levels-title">SELECT LEVEL</div>
       <div class="rowlist" id="level-list"></div>
       <div class="hint" id="level-none">Level list unavailable — flying the built-in level</div>
       <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
@@ -866,7 +868,7 @@
       <ol class="rowlist" id="scores-list"></ol>
       <div class="hint" id="scores-status" style="display:none"></div>
       <div class="hint" id="scores-empty">No flights recorded yet</div>
-      <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
+      <div class="mbtn back" id="btn-scores-back">&#8249; Back</div>
     </div>
 
     <div class="screen" id="scr-settings">
@@ -1191,12 +1193,35 @@
       hudBtns.addEventListener(ev, swallow);
     });
 
-    // Plain navigation buttons (Levels / High scores / Settings / About / Back).
+    // Plain navigation buttons (Settings / About / Back).
     menuEl.querySelectorAll("[data-goto]").forEach(el =>
       el.addEventListener("click", () => showScreen(el.dataset.goto)));
 
+    // Level choice is a step inside Fly and High scores (the old top-level
+    // Levels button is gone): openLevelPicker(mode) shows the shared level
+    // list, and each row's action follows the mode (see renderLevels). With
+    // no level list (manifest fetch failed) there's nothing to pick, so skip
+    // straight to the destination on the built-in level.
+    const levelsTitle = document.getElementById("levels-title");
+    function openLevelPicker(mode) {
+      levelPickerMode = mode;
+      if (!levelFiles.length) {
+        if (mode === "scores") showScreen("scr-scores");
+        else closeMenu();
+        return;
+      }
+      levelsTitle.textContent = mode === "scores" ? "HIGH SCORES" : "SELECT LEVEL";
+      renderLevels();
+      showScreen("scr-levels");
+    }
+    document.getElementById("btn-scores").addEventListener("click", () => openLevelPicker("scores"));
+    // Back from a board returns to the level picker to check another level —
+    // or home when there's no picker (no level list).
+    document.getElementById("btn-scores-back").addEventListener("click", () =>
+      levelFiles.length ? openLevelPicker("scores") : showScreen("scr-home"));
+
     // Home / pause / game-over actions.
-    document.getElementById("btn-fly").addEventListener("click", closeMenu);
+    document.getElementById("btn-fly").addEventListener("click", () => openLevelPicker("fly"));
     document.getElementById("btn-resume").addEventListener("click", closeMenu);
     document.getElementById("btn-exit").addEventListener("click", () => {
       // Abandoning the run ends it (a reset while alive also banks it in the
@@ -1578,17 +1603,22 @@
     const levelTexts = {};        // file -> level text
     const levelNames = {};        // file -> display name
     const levelFiles = [];        // manifest order
-    let currentLevelFile = null;  // set once the level actually reached wasm
+    let currentLevelFile = null;  // the level LOADED in the game
+    let scoresFile = null;        // the level whose board scr-scores shows
+    let levelPickerMode = "fly";  // "fly" -> pick & load & fly; "scores" -> pick & show board
 
     function bestFor(file) {
       return parseFloat(localStorage.getItem("pegasus_best_" + file) || "0");
     }
 
     function renderLevels() {
+      // Highlight the level this picker is about: the loaded one in fly mode,
+      // the board being viewed in scores mode.
+      const selected = levelPickerMode === "scores" ? scoresFile : currentLevelFile;
       levelList.textContent = "";
       for (const file of levelFiles) {
         const row = document.createElement("div");
-        row.className = "row" + (file === currentLevelFile ? " sel" : "");
+        row.className = "row" + (file === selected ? " sel" : "");
         const name = document.createElement("span");
         name.className = "lname";
         name.textContent = levelNames[file];
@@ -1598,8 +1628,16 @@
         best.textContent = b > 0 ? "best " + Math.round(b) + " m" : "—";
         row.append(name, best);
         row.addEventListener("click", () => {
+          if (levelPickerMode === "scores") {
+            // View this level's board WITHOUT reloading the game (checking a
+            // board must never reset the flight waiting behind the menu).
+            scoresFile = file;
+            showScreen("scr-scores");
+            return;
+          }
           localStorage.setItem("pegasus_level", file);
-          pushLevel(file);
+          pushLevel(file); // no-op if it's already the loaded level
+          closeMenu();     // ...and fly it
         });
         levelList.appendChild(row);
       }
@@ -1618,6 +1656,7 @@
         const best = bestFor(file);
         if (best > 0) wasm_exports.set_best_dist(best);
         currentLevelFile = file;
+        scoresFile = file; // the board defaults to the loaded level
         renderLevels();
         renderScores();
         pushGhost();
@@ -1723,11 +1762,14 @@
       if (best) pushBlobToWasm(best, "load_ghost_blob");
     }
 
+    // The board shows `scoresFile` — the level picked for viewing, which
+    // defaults to the loaded level but can differ (browsing another level's
+    // scores must not reload the game).
     function renderScores() {
-      scoresLevelEl.textContent = currentLevelFile
-        ? (levelNames[currentLevelFile] || "") : "";
+      const file = scoresFile || currentLevelFile;
+      scoresLevelEl.textContent = file ? (levelNames[file] || "") : "";
       if (scoresSrc === "global") { renderGlobalScores(); return; }
-      const scores = currentLevelFile ? loadScores(currentLevelFile) : [];
+      const scores = file ? loadScores(file) : [];
       scoresStatus.style.display = "none";
       scoresList.textContent = "";
       scoresEmpty.style.display = scores.length ? "none" : "";
@@ -1906,12 +1948,13 @@
       if (overlay !== "scr-scores") return;
       scoresList.textContent = "";
       scoresEmpty.style.display = "none";
-      if (!backendCfg || !currentLevelFile) return;
+      const file = scoresFile || currentLevelFile;
+      if (!backendCfg || !file) return;
       scoresStatus.textContent = "Fetching…";
       scoresStatus.style.display = "";
       const seq = ++globalFetchSeq;
       const url = backendCfg.apiBaseUrl + "/v1/levels/"
-        + encodeURIComponent(levelStem(currentLevelFile))
+        + encodeURIComponent(levelStem(file))
         + "/scores?period=" + scoresPeriod;
       fetch(url, { cache: "no-store" })
         .then(r => (r.ok ? r.json() : null))
