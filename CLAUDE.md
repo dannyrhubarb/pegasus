@@ -979,10 +979,19 @@ config, so a PR preview talks to the real backend. All JS-side in
   IS the global board (no local/global toggle — the local top-5 store
   still lives underneath as the ghost source). Today / This week /
   All time period chips fetch `/v1/levels/<stem>/scores?period=…` (top 50,
-  ranked server-side); each row is TWO LINES — rank / [pilot name over the
-  **localised date+time** (`toLocaleString(undefined, {dateStyle/timeStyle:
-  "short"})`, `.pcol` column)] / distance — plus a ▶ watch button when the
-  entry has a replay. The `#scores-list` scrolls internally (`max-height:54vh`) so
+  ranked server-side); each row is TWO LINES — rank / [pilot name over a
+  timestamp (`fmtDateTime`, `.pcol` column)] / distance — plus a ▶ watch
+  button when the entry has a replay. **Timestamp locale lesson
+  (2026-07)**: language tags lie about region — a phone set to English in
+  Sweden reports a bare `en-US` (verified in the field via a temporary
+  Settings debug readout), so `toLocaleString(undefined, …)` rendered US
+  dates. The device TIMEZONE is the one regional setting the browser does
+  expose: `fmtDateTime` derives the region by reverse-mapping
+  `resolvedOptions().timeZone` through `Intl.Locale getTimeZones` (a
+  676-region scan, ~200 ms — deferred off boot, memoized per zone+language
+  in `pegasus_date_locale`) and formats with `<ui language>-<region>`
+  (`en-SE` → `2026-07-11, 14:00`). Regionless zones / old engines / a
+  not-yet-finished scan fall back to a fixed ISO local format. The `#scores-list` scrolls internally (`max-height:54vh`) so
   the title/chips/Back stay fixed under a long board. **Results are cached**
   (`boardCache`, keyed `level|period`, persisted to localStorage): the
   cached board paints instantly on entry while a fresh fetch runs in the
