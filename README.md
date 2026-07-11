@@ -101,3 +101,9 @@ site is never affected.
 rustup target add wasm32-unknown-unknown
 brew install ngrok  # optional, for iOS testing
 ```
+
+## License
+
+Pegasus is licensed under [GPL-3.0-or-later](LICENSE). Contributions are
+accepted under the terms of the [Contributor License Agreement](CLA.md) —
+see [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
