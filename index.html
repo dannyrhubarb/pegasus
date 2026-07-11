@@ -496,6 +496,61 @@
       text-shadow: 0 0 8px rgba(70, 255, 156, 0.6);
     }
     #scores-list .watch:hover { background: rgba(70, 255, 156, 0.28); }
+    #scores-list .pname {
+      flex: 1;
+      text-align: left;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* Local/Global + period pickers on the High-scores screen (shown only
+       when a backend config.json is deployed — see "Online high scores") */
+    .chiprow { display: flex; gap: 8px; }
+    .chip {
+      font: 700 12px/1 var(--mono);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--dim);
+      border: 1.5px solid var(--faint);
+      border-radius: 6px;
+      padding: 9px 13px;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .chip.sel {
+      color: var(--cyan);
+      border-color: var(--cyan);
+      background: rgba(52, 231, 255, 0.12);
+      box-shadow: 0 0 10px rgba(52, 231, 255, 0.4);
+      text-shadow: 0 0 8px rgba(52, 231, 255, 0.6);
+    }
+
+    /* Callsign input on the submit-score dialog */
+    .name-input {
+      width: min(340px, 84vw);
+      background: rgba(4, 10, 24, 0.9);
+      border: 1.5px solid rgba(52, 231, 255, 0.55);
+      border-radius: 8px;
+      padding: 14px 15px;
+      font: 700 clamp(16px, 4vw, 20px)/1.2 var(--mono);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      text-align: center;
+      color: var(--cyan);
+      text-shadow: 0 0 8px rgba(52, 231, 255, 0.6);
+      caret-color: var(--cyan);
+      outline: none;
+    }
+    .name-input:focus {
+      border-color: var(--cyan);
+      box-shadow: 0 0 14px rgba(52, 231, 255, 0.45), inset 0 0 10px rgba(52, 231, 255, 0.15);
+    }
+    .name-input::placeholder { color: var(--faint); text-shadow: none; }
 
     /* Settings rows: custom neon toggle switches, no native checkboxes */
     .setrow {
@@ -803,7 +858,13 @@
     <div class="screen" id="scr-scores">
       <div class="h2">HIGH SCORES</div>
       <div class="hint" id="scores-level"></div>
+      <div class="chiprow" id="scores-period" style="display:none">
+        <div class="chip sel" data-period="today">Today</div>
+        <div class="chip" data-period="week">This week</div>
+        <div class="chip" data-period="alltime">All time</div>
+      </div>
       <ol class="rowlist" id="scores-list"></ol>
+      <div class="hint" id="scores-status" style="display:none"></div>
       <div class="hint" id="scores-empty">No flights recorded yet</div>
       <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
     </div>
@@ -830,6 +891,10 @@
         <span>Debug HUD</span>
         <input type="checkbox" id="debug-toggle"><span class="tgl"></span>
       </label>
+      <div class="setrow" id="name-row" style="display:none">
+        <span>Pilot name</span>
+        <span id="name-cur" style="color:var(--dim)">—</span>
+      </div>
       <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
     </div>
 
@@ -837,11 +902,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">d9a5114</div>
+        <div class="info-value" id="git-rev">1e92987</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-11 10:43 UTC</div>
+        <div class="info-value" id="build-time">2026-07-11 15:32 UTC</div>
       </div>
       <a class="mbtn" href="third-party-licenses.html" target="_blank" rel="noopener">Third-party licenses</a>
       <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
@@ -863,6 +928,18 @@
       <div class="mbtn primary" id="btn-again">Fly again</div>
       <div class="mbtn" id="btn-replay">Watch replay</div>
       <div class="mbtn" id="btn-gomenu">Main menu</div>
+    </div>
+
+    <!-- First-time score submission: pops instead of the game-over screen
+         while no pilot name is persisted (see "Online high scores") -->
+    <div class="screen" id="scr-name">
+      <div class="h2">SUBMIT SCORE</div>
+      <div class="hint" id="name-dist"></div>
+      <input class="name-input" id="name-input" maxlength="24"
+             autocomplete="nickname" spellcheck="false" enterkeyhint="send"
+             placeholder="YOUR CALLSIGN">
+      <div class="mbtn primary" id="btn-name-submit">Submit</div>
+      <div class="mbtn back" id="btn-name-skip">Skip</div>
     </div>
 
     <!-- CRT scanlines + vignette + sweep, over everything but tap-transparent -->
@@ -1094,6 +1171,10 @@
       menuEl.querySelectorAll(".screen").forEach(s =>
         s.classList.toggle("on", s.id === id));
       setPause(1);
+      // Entering High scores always re-renders — the global board refetches
+      // so it's never stale (renderGlobalScores skips fetching while the
+      // screen isn't up, so this entry point is what keeps it fresh).
+      if (id === "scr-scores") renderScores();
     }
     function closeMenu() {
       overlay = null;
@@ -1174,7 +1255,12 @@
       if (st === 2 && overlay === null) {
         goDist.textContent = Math.round(wasm_exports.cur_dist()) + " m";
         goBest.textContent = "best " + Math.round(wasm_exports.get_best_dist()) + " m";
-        showScreen("scr-gameover");
+        // First crash with online scores configured but no persisted name:
+        // the submit-score dialog takes the game-over screen's slot (and
+        // leads there on submit/skip). Once a name is stored, runs auto-post
+        // at bank time and this branch never triggers again.
+        if (pendingSubmit && !playerName()) openNameDialog("scr-gameover");
+        else showScreen("scr-gameover");
       }
       if (watchFromMenu && prevState === 3 && st !== 3) {
         watchFromMenu = false;
@@ -1361,7 +1447,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "d9a5114";
+    const wasmRev = "1e92987";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -1618,12 +1704,14 @@
       return out;
     }
 
-    function pushBlobToWasm(entry, exportName) {
+    function pushBytesToWasm(bytes, exportName) {
       if (typeof wasm_exports === "undefined" || !wasm_exports[exportName]) return false;
-      const bytes = bytesFromB64(entry.b);
       const ptr = wasm_exports.blob_in_ptr(bytes.length);
       new Uint8Array(wasm_memory.buffer, ptr, bytes.length).set(bytes);
       return wasm_exports[exportName](bytes.length) === 1;
+    }
+    function pushBlobToWasm(entry, exportName) {
+      return pushBytesToWasm(bytesFromB64(entry.b), exportName);
     }
 
     // The current level's best run becomes the in-game ghost (the game
@@ -1636,9 +1724,11 @@
     }
 
     function renderScores() {
-      const scores = currentLevelFile ? loadScores(currentLevelFile) : [];
       scoresLevelEl.textContent = currentLevelFile
         ? (levelNames[currentLevelFile] || "") : "";
+      if (scoresSrc === "global") { renderGlobalScores(); return; }
+      const scores = currentLevelFile ? loadScores(currentLevelFile) : [];
+      scoresStatus.style.display = "none";
       scoresList.textContent = "";
       scoresEmpty.style.display = scores.length ? "none" : "";
       scores.forEach((entry, i) => {
@@ -1691,8 +1781,206 @@
       renderScores();
       renderLevels(); // the per-level best shown in the list may have moved
       if (top[0] === entry) pushGhost(); // a new record races next spawn
+      maybeSubmitOnline(currentLevelFile, entry);
     }
     setInterval(collectEndedRun, 500);
+
+    // --- Online high scores (dannyrhubarb/pegasus-backend) -----------------
+    // config.json ({apiBaseUrl, replayBaseUrl}) is written at deploy time
+    // from the BACKEND_CONFIG_JSON repo variable (see build-site); no file =
+    // offline-only build (local dev, forks, variable unset) and none of this
+    // UI appears. With it: every banked run auto-POSTs under the persisted
+    // pilot name (`pegasus_player_name`); until a name exists, the first
+    // crash pops the submit-score dialog instead of the game-over screen.
+    // The High-scores screen gains Local/Global pickers — Global fetches the
+    // top-50 board (today / week / all time) and its ▶ buttons pull the
+    // replay blob from CloudFront into the same watch_replay_blob path the
+    // local entries use.
+    let backendCfg = null;
+    let pendingSubmit = null; // {file, entry} awaiting the first-time dialog
+    const scoresPeriodRow = document.getElementById("scores-period");
+    const scoresStatus = document.getElementById("scores-status");
+    const nameRow = document.getElementById("name-row");
+    const nameCur = document.getElementById("name-cur");
+    const nameDistEl = document.getElementById("name-dist");
+    const nameInput = document.getElementById("name-input");
+    let scoresSrc = "local";
+    let scoresPeriod = "today";
+
+    function playerName() {
+      return localStorage.getItem("pegasus_player_name") || "";
+    }
+    function levelStem(file) {
+      return file.replace(/\.level$/, ""); // the backend keys boards by stem
+    }
+
+    fetch("config.json?nocache=" + Date.now(), { cache: "no-store" })
+      .then(r => (r.ok ? r.json() : null))
+      .then(c => {
+        if (!c || !c.apiBaseUrl || !c.replayBaseUrl) return;
+        backendCfg = c;
+        // Online build: the High-scores screen IS the global board (the
+        // local top-5 store stays alive underneath for the ghost).
+        scoresSrc = "global";
+        scoresPeriodRow.style.display = "";
+        nameRow.style.display = "";
+        nameCur.textContent = playerName() || "—";
+        if (overlay === "scr-scores") renderScores(); // config raced the open screen
+      })
+      .catch(() => {}); // offline build / no server: everything stays local
+
+    function submitScore(file, entry) {
+      const body = { level: levelStem(file), name: playerName(), score: entry.d };
+      // The server caps decoded replays at 512 KiB (~699k base64 chars);
+      // an over-long run still submits its score, just without the replay.
+      if (entry.b && entry.b.length <= 699050) body.replay = entry.b;
+      fetch(backendCfg.apiBaseUrl + "/v1/scores", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }).then(r => {
+        if (!r.ok) console.warn("score submit failed:", r.status);
+      }).catch(e => console.warn("score submit failed:", e));
+    }
+
+    function maybeSubmitOnline(file, entry) {
+      if (!backendCfg || entry.d < 1) return;
+      if (playerName()) { submitScore(file, entry); return; }
+      // No name yet: hold the run for the dialog, but only when the crash
+      // flow is about to show the game-over screen (state 1 wreck / 2
+      // dialog). A reset-ended run mid-flight must not pop UI over the new
+      // flight — it just goes unsubmitted.
+      const st = wasm_exports.ui_state ? wasm_exports.ui_state() : 0;
+      if (st === 1 || st === 2) pendingSubmit = { file, entry };
+    }
+
+    // The submit-score dialog doubles as the Settings name editor: with a
+    // pending run it submits on save, without one it just persists the name.
+    let nameReturnTo = "scr-gameover";
+    function openNameDialog(returnTo) {
+      nameReturnTo = returnTo;
+      nameDistEl.textContent = pendingSubmit
+        ? Math.round(pendingSubmit.entry.d) + " m — enter your callsign"
+        : "Shown on the global boards";
+      nameInput.value = playerName();
+      showScreen("scr-name");
+      nameInput.focus();
+    }
+    nameRow.addEventListener("click", () => openNameDialog("scr-settings"));
+    document.getElementById("btn-name-submit").addEventListener("click", () => {
+      const name = nameInput.value.replace(/\s+/g, " ").trim().slice(0, 24);
+      if (!name) { nameInput.focus(); return; }
+      localStorage.setItem("pegasus_player_name", name);
+      nameCur.textContent = name;
+      if (pendingSubmit) {
+        submitScore(pendingSubmit.file, pendingSubmit.entry);
+        pendingSubmit = null;
+      }
+      showScreen(nameReturnTo);
+    });
+    document.getElementById("btn-name-skip").addEventListener("click", () => {
+      pendingSubmit = null; // this run stays unsubmitted; asks again next crash
+      showScreen(nameReturnTo);
+    });
+    nameInput.addEventListener("keydown", e => {
+      e.stopPropagation(); // typing must never reach the game's key handlers
+      if (e.key === "Enter") document.getElementById("btn-name-submit").click();
+    });
+
+    // Period picker (global board only).
+    scoresPeriodRow.querySelectorAll(".chip").forEach(ch =>
+      ch.addEventListener("click", () => {
+        scoresPeriod = ch.dataset.period;
+        scoresPeriodRow.querySelectorAll(".chip").forEach(c =>
+          c.classList.toggle("sel", c === ch));
+        renderScores();
+      }));
+
+    // Global board: fetched on every entry to the High-scores screen (and
+    // per picker tap); a stale response (slow fetch racing a picker tap) is
+    // dropped via the sequence check. While the screen isn't up, skip the
+    // network entirely — banking a run calls renderScores too, and the
+    // entry-point refetch in showScreen covers freshness.
+    let globalFetchSeq = 0;
+    function renderGlobalScores() {
+      if (overlay !== "scr-scores") return;
+      scoresList.textContent = "";
+      scoresEmpty.style.display = "none";
+      if (!backendCfg || !currentLevelFile) return;
+      scoresStatus.textContent = "Fetching…";
+      scoresStatus.style.display = "";
+      const seq = ++globalFetchSeq;
+      const url = backendCfg.apiBaseUrl + "/v1/levels/"
+        + encodeURIComponent(levelStem(currentLevelFile))
+        + "/scores?period=" + scoresPeriod;
+      fetch(url, { cache: "no-store" })
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+          if (seq !== globalFetchSeq || scoresSrc !== "global") return;
+          if (!data) throw new Error("bad response");
+          scoresStatus.style.display = "none";
+          const scores = data.scores || [];
+          scoresEmpty.style.display = scores.length ? "none" : "";
+          scores.forEach((s, i) => {
+            const li = document.createElement("li");
+            const rank = document.createElement("span");
+            rank.className = "rank";
+            rank.textContent = (i + 1) + ".";
+            const who = document.createElement("span");
+            who.className = "pname";
+            who.textContent = s.name;
+            const dist = document.createElement("span");
+            dist.className = "dist";
+            dist.textContent = Math.round(s.score) + " m";
+            li.append(rank, who, dist);
+            if (s.replayPath) {
+              const watch = document.createElement("button");
+              watch.className = "watch";
+              watch.textContent = "▶ watch";
+              watch.addEventListener("click", e => {
+                e.stopPropagation();
+                watchGlobalReplay(s.replayPath);
+              });
+              li.appendChild(watch);
+            }
+            scoresList.appendChild(li);
+          });
+        })
+        .catch(() => {
+          if (seq !== globalFetchSeq || scoresSrc !== "global") return;
+          scoresStatus.textContent = "Couldn't reach the score server";
+          scoresStatus.style.display = "";
+        });
+    }
+
+    // A global replay plays through the exact machinery as a local one —
+    // the blob carries its level in the header, so it re-sims in the world
+    // it was flown in even if that's not the selected level. Failures are
+    // SURFACED on the status line ("HTTP 403" = CDN/permissions, "Failed to
+    // fetch" = network/CORS, "rejected" = format/build mismatch) — a silent
+    // watch button is undebuggable in the field.
+    function watchGlobalReplay(path) {
+      scoresStatus.textContent = "Fetching replay…";
+      scoresStatus.style.display = "";
+      fetch(backendCfg.replayBaseUrl + "/" + path)
+        .then(r => {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.arrayBuffer();
+        })
+        .then(buf => {
+          if (!pushBytesToWasm(new Uint8Array(buf), "watch_replay_blob")) {
+            throw new Error("replay rejected by the game (build mismatch?)");
+          }
+          scoresStatus.style.display = "none";
+          watchFromMenu = true;
+          closeMenu(); // the ui_state poll returns here when it ends
+        })
+        .catch(e => {
+          console.warn("replay fetch failed:", e);
+          scoresStatus.textContent = "Replay unavailable — " + e.message;
+          scoresStatus.style.display = "";
+        });
+    }
 
     // "Race best ghost" toggle (on by default), same pattern as the others.
     const ghostToggle = document.getElementById("ghost-toggle");
