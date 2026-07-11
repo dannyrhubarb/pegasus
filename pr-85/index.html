@@ -858,13 +858,9 @@
     <div class="screen" id="scr-scores">
       <div class="h2">HIGH SCORES</div>
       <div class="hint" id="scores-level"></div>
-      <div class="chiprow" id="scores-src" style="display:none">
-        <div class="chip sel" data-src="local">Local</div>
-        <div class="chip" data-src="global">Global</div>
-      </div>
       <div class="chiprow" id="scores-period" style="display:none">
         <div class="chip sel" data-period="today">Today</div>
-        <div class="chip" data-period="week">Week</div>
+        <div class="chip" data-period="week">This week</div>
         <div class="chip" data-period="alltime">All time</div>
       </div>
       <ol class="rowlist" id="scores-list"></ol>
@@ -906,11 +902,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">870c6da-pr-85</div>
+        <div class="info-value" id="git-rev">704a7c4-pr-85</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-11 14:38 UTC</div>
+        <div class="info-value" id="build-time">2026-07-11 15:15 UTC</div>
       </div>
       <a class="mbtn" href="third-party-licenses.html" target="_blank" rel="noopener">Third-party licenses</a>
       <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
@@ -1175,6 +1171,10 @@
       menuEl.querySelectorAll(".screen").forEach(s =>
         s.classList.toggle("on", s.id === id));
       setPause(1);
+      // Entering High scores always re-renders — the global board refetches
+      // so it's never stale (renderGlobalScores skips fetching while the
+      // screen isn't up, so this entry point is what keeps it fresh).
+      if (id === "scr-scores") renderScores();
     }
     function closeMenu() {
       overlay = null;
@@ -1447,7 +1447,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "870c6da-pr-85";
+    const wasmRev = "704a7c4-pr-85";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -1798,7 +1798,6 @@
     // local entries use.
     let backendCfg = null;
     let pendingSubmit = null; // {file, entry} awaiting the first-time dialog
-    const scoresSrcRow = document.getElementById("scores-src");
     const scoresPeriodRow = document.getElementById("scores-period");
     const scoresStatus = document.getElementById("scores-status");
     const nameRow = document.getElementById("name-row");
@@ -1820,9 +1819,13 @@
       .then(c => {
         if (!c || !c.apiBaseUrl || !c.replayBaseUrl) return;
         backendCfg = c;
-        scoresSrcRow.style.display = "";
+        // Online build: the High-scores screen IS the global board (the
+        // local top-5 store stays alive underneath for the ghost).
+        scoresSrc = "global";
+        scoresPeriodRow.style.display = "";
         nameRow.style.display = "";
         nameCur.textContent = playerName() || "—";
+        if (overlay === "scr-scores") renderScores(); // config raced the open screen
       })
       .catch(() => {}); // offline build / no server: everything stays local
 
@@ -1884,15 +1887,7 @@
       if (e.key === "Enter") document.getElementById("btn-name-submit").click();
     });
 
-    // Local/Global + period pickers.
-    scoresSrcRow.querySelectorAll(".chip").forEach(ch =>
-      ch.addEventListener("click", () => {
-        scoresSrc = ch.dataset.src;
-        scoresSrcRow.querySelectorAll(".chip").forEach(c =>
-          c.classList.toggle("sel", c === ch));
-        scoresPeriodRow.style.display = scoresSrc === "global" ? "" : "none";
-        renderScores();
-      }));
+    // Period picker (global board only).
     scoresPeriodRow.querySelectorAll(".chip").forEach(ch =>
       ch.addEventListener("click", () => {
         scoresPeriod = ch.dataset.period;
@@ -1901,10 +1896,14 @@
         renderScores();
       }));
 
-    // Global board: one fetch per view change; a stale response (slow fetch
-    // racing a picker tap) is dropped via the sequence check.
+    // Global board: fetched on every entry to the High-scores screen (and
+    // per picker tap); a stale response (slow fetch racing a picker tap) is
+    // dropped via the sequence check. While the screen isn't up, skip the
+    // network entirely — banking a run calls renderScores too, and the
+    // entry-point refetch in showScreen covers freshness.
     let globalFetchSeq = 0;
     function renderGlobalScores() {
+      if (overlay !== "scr-scores") return;
       scoresList.textContent = "";
       scoresEmpty.style.display = "none";
       if (!backendCfg || !currentLevelFile) return;
