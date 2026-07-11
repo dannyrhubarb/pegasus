@@ -738,7 +738,15 @@ two **pause physics** (the stepping loop is gated on `Flying` and drains
   final tick counts as the finish transition (pause + boom) too. The only in-canvas replay UI is
   the recorded-input stick, HALF SIZE via `draw_stick`'s scale param — the
   old banner / hint line / progress bar / drift readout are gone (the
-  drift check + snap still run, just undisplayed).
+  drift check + snap still run, just undisplayed). **Auto-hide
+  (YouTube-style)**: JS fades the GUI (bar + ✕) after 2.5 s of untouched
+  playback and a canvas tap toggles it back (the game ignores touches in
+  replay, so the canvas is free to be the show/hide surface); paused
+  playback — including the freeze-frame ending — and an open speed picker
+  always surface and hold it. Visibility is mirrored to the wasm
+  (`set_replay_ui_visible` → `REPLAY_UI_VISIBLE`, reset to visible at the
+  replay entry points): hidden ⇒ the stick returns to its FULL-SIZE parked
+  home (`stick_park`), exactly where the live stick sits.
   WATCH REPLAY is a no-op if the recording has no ticks. **The same `Replay`
   mode also plays stored highscore replays** (see "High scores"): the ▶
   button sets `watch_rec` and playback sources from it instead of the live
