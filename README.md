@@ -107,3 +107,8 @@ brew install ngrok  # optional, for iOS testing
 Pegasus is licensed under [GPL-3.0-or-later](LICENSE). Contributions are
 accepted under the terms of the [Contributor License Agreement](CLA.md) —
 see [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+
+Third-party components are attributed in
+[third-party-licenses.html](third-party-licenses.html) (also linked from
+the in-game About screen). The page is generated — after changing
+dependencies, regenerate it with `python3 tools/gen-third-party-licenses.py`.
