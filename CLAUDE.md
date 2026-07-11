@@ -147,15 +147,19 @@ while the wasm loads):
   `max-height:560px` so landscape phones keep the Fly button above the fold)
   + Fly / High scores / Settings / About. **No top-level Levels button** —
   level choice is a step inside Fly and High scores (see scr-levels).
-- **scr-levels**: the **shared level picker** — level rows (name + stored
-  best), reached two ways via `openLevelPicker(mode)` (`levelPickerMode`
-  drives its title + row action): **fly mode** (from Fly, titled "SELECT
-  LEVEL") loads the picked level and closes the menu to fly it; **scores
-  mode** (from High scores or a board's Back, titled "HIGH SCORES") sets
-  `scoresFile` and opens that level's board **without reloading the game**
-  (viewing a board must not reset the flight waiting behind the menu). No
-  level list (manifest fetch failed) ⇒ the picker is skipped and Fly /
-  High scores go straight to their destination on the built-in level.
+- **scr-levels**: the **shared level picker** — level rows (name + best),
+  reached two ways via `openLevelPicker(mode)` (`levelPickerMode` drives its
+  title + row action): **fly mode** (from Fly, titled "SELECT LEVEL") loads
+  the picked level and closes the menu to fly it; **scores mode** (from High
+  scores or a board's Back, titled "HIGH SCORES") sets `scoresFile` and opens
+  that level's board **without reloading the game** (viewing a board must not
+  reset the flight waiting behind the menu). It's a chooser, so **no
+  pre-selected highlight**. The per-row "best" is the level's **global
+  all-time record** when online (the #1 from the board cache, refreshed by
+  `prefetchGlobalBests` on every open), falling back to the device's local
+  best offline. No level list (manifest fetch failed) ⇒ the picker is
+  skipped and Fly / High scores go straight to their destination on the
+  built-in level.
 - **scr-scores**: the board for **`scoresFile`** (the level picked for
   viewing — defaults to the loaded level, decoupled from `currentLevelFile`
   so browsing another level's scores doesn't reload). Top 5 per level with
@@ -963,11 +967,18 @@ config, so a PR preview talks to the real backend. All JS-side in
   IS the global board (no local/global toggle — the local top-5 store
   still lives underneath as the ghost source). Today / This week /
   All time period chips fetch `/v1/levels/<stem>/scores?period=…` (top 50,
-  ranked server-side); rows show rank/name/distance and a ▶ watch button
-  when the entry has a replay. **Refetched on every entry** to the screen
-  (`showScreen("scr-scores")` calls `renderScores`; `renderGlobalScores`
-  no-ops while the screen isn't up, so banking a run doesn't spam the API).
-  Stale fetches are dropped via a sequence counter.
+  ranked server-side); rows show rank / name / **localised date**
+  (`toLocaleDateString()`) / distance and a ▶ watch button when the entry
+  has a replay. The `#scores-list` scrolls internally (`max-height:54vh`) so
+  the title/chips/Back stay fixed under a long board. **Results are cached**
+  (`boardCache`, keyed `level|period`, persisted to localStorage): the
+  cached board paints instantly on entry while a fresh fetch runs in the
+  background (no "Fetching…" flash when cached; the error line only shows
+  when there's nothing cached to fall back on). **Refetched on every entry**
+  (`showScreen("scr-scores")` → `renderScores`; `renderGlobalScores` no-ops
+  while the screen isn't up, so banking a run doesn't spam the API). Stale
+  fetches are dropped via a sequence counter. Replay blobs are **not**
+  fetched here — only on a ▶ tap (`watchGlobalReplay`).
 - **Watching a server replay**: ▶ fetches `<replayBaseUrl>/<replayPath>`
   (CloudFront) and pushes the bytes through the SAME
   `watch_replay_blob` path as local entries (`pushBytesToWasm` — the
