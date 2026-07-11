@@ -45,6 +45,10 @@ runs:
         cp manifest.json site/
         cp icon-512.png icon-192.png icon-180.png site/
         cp mq_js_bundle.js site/
+        # License compliance: the GPL text + the generated third-party
+        # attribution page (linked from the About screen) ship with the site.
+        cp LICENSE site/
+        cp third-party-licenses.html site/
         # Levels are runtime data (fetched by index.html) — new levels ship
         # by editing levels/ + manifest.json, no wasm rebuild needed.
         cp -r levels site/
