@@ -571,11 +571,13 @@
       .loader { animation: none; }
     }
 
-    /* Callsign input on the submit-score dialog */
+    /* Callsign input on the submit-score dialog. Neutral white/gray border
+       so the INPUT reads as a field and doesn't compete with the glowing
+       Submit button right below it. */
     .name-input {
       width: min(340px, 84vw);
       background: rgba(4, 10, 24, 0.9);
-      border: 1.5px solid rgba(52, 231, 255, 0.55);
+      border: 1.5px solid rgba(200, 210, 226, 0.45);
       border-radius: 8px;
       padding: 14px 15px;
       font: 700 clamp(16px, 4vw, 20px)/1.2 var(--mono);
@@ -588,8 +590,8 @@
       outline: none;
     }
     .name-input:focus {
-      border-color: var(--cyan);
-      box-shadow: 0 0 14px rgba(52, 231, 255, 0.45), inset 0 0 10px rgba(52, 231, 255, 0.15);
+      border-color: rgba(235, 241, 250, 0.9);
+      box-shadow: 0 0 12px rgba(210, 222, 240, 0.3), inset 0 0 10px rgba(210, 222, 240, 0.1);
     }
     .name-input::placeholder { color: var(--faint); text-shadow: none; }
 
@@ -656,7 +658,7 @@
       gap: 4px;
       margin-bottom: 10px;
     }
-    #go-dist { font: 800 clamp(32px, 8vw, 50px)/1.1 var(--mono); color: var(--amber); text-shadow: 0 0 16px rgba(255, 194, 75, 0.6); }
+    #go-dist, #name-score { font: 800 clamp(32px, 8vw, 50px)/1.1 var(--mono); color: var(--amber); text-shadow: 0 0 16px rgba(255, 194, 75, 0.6); }
     #go-best { font-size: clamp(13px, 3.2vw, 16px); color: var(--dim); letter-spacing: 0.1em; }
 
     /* "New build available" toast — GitHub Pages caches index.html for
@@ -986,6 +988,7 @@
          while no pilot name is persisted (see "Online high scores") -->
     <div class="screen" id="scr-name">
       <div class="h2">SUBMIT SCORE</div>
+      <div id="name-score"></div>
       <div class="hint" id="name-dist"></div>
       <input class="name-input" id="name-input" maxlength="24"
              autocomplete="nickname" spellcheck="false" enterkeyhint="send"
@@ -1951,6 +1954,7 @@
     const nameRow = document.getElementById("name-row");
     const nameCur = document.getElementById("name-cur");
     const nameDistEl = document.getElementById("name-dist");
+    const nameScoreEl = document.getElementById("name-score");
     const nameInput = document.getElementById("name-input");
     let scoresSrc = "local";
     let scoresPeriod = "today";
@@ -2068,8 +2072,12 @@
     let nameReturnTo = "scr-gameover";
     function openNameDialog(returnTo) {
       nameReturnTo = returnTo;
+      // Big amber score readout like the game-over screen; empty (zero
+      // height) in the Settings name-editor mode.
+      nameScoreEl.textContent = pendingSubmit
+        ? Math.round(pendingSubmit.entry.d) + " m" : "";
       nameDistEl.textContent = pendingSubmit
-        ? Math.round(pendingSubmit.entry.d) + " m — submit to the global board?"
+        ? "Submit to the global board?"
         : "Shown on the global boards";
       nameInput.value = playerName();
       showScreen("scr-name");
