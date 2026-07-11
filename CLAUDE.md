@@ -1004,8 +1004,11 @@ config, so a PR preview talks to the real backend. All JS-side in
   the title/chips/Back stay fixed under a long board. **Results are cached**
   (`boardCache`, keyed `level|period`, persisted to localStorage): the
   cached board paints instantly on entry while a fresh fetch runs in the
-  background; a neon ring spinner (`#scores-wait`, a FIXED-HEIGHT slot so
-  the list never shifts under a tap) shows during any board/replay fetch,
+  background; a neon ring spinner (in `#scores-wait`, a FIXED-HEIGHT slot so
+  the list never shifts under a tap — shared with the **bucket-reset
+  countdown** `updateResetHint` shows on Today / This week: "board resets
+  in 1h 8m", UTC bucket ends, re-ticked every 30 s) shows during any
+  board/replay fetch,
   and the error line only shows when there's nothing cached to fall back
   on. **Refetched on every entry**
   (`showScreen("scr-scores")` → `renderScores`; `renderGlobalScores` no-ops
