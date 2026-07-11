@@ -190,8 +190,9 @@ while the wasm loads):
   distance + best, Fly again / Watch replay / Main menu.
 
 During flight the only HTML is two corner buttons (`#hud-btns`, top-right):
-**⏸ pause** (opens scr-pause) and **⟳ restart** (same path as the R key);
-during a replay they swap for a single amber **✕ exit-replay** button
+**✕ menu** (opens scr-pause — an X, not a pause glyph, since it reads as
+"leave the game view") and **⟳ restart** (same path as the R key); during a
+replay they swap for a single amber **✕ exit-replay** button
 (`ui_command(3)`, toggled by the 100 ms replay poll).
 The menu container and the corner buttons swallow `mousedown`/`touchstart`
 (`stopPropagation`, no `preventDefault` — that would kill label clicks) so
@@ -262,7 +263,12 @@ build available — tap to reload"); tapping navigates to
 `location.pathname + "?fresh=<ts>"`, which bypasses the cached HTML. Skipped
 entirely in local dev (placeholder revision) and on 404 (pre-toast deploys),
 and the toast swallows `mousedown` like the menu so it can't fire the
-thruster.
+thruster. **Tap-stealer lesson (2026-07)**: the toast is fixed at z-index 60
+over the menu and was "hidden" with `opacity: 0` only — an invisible
+`pointer-events: all` rectangle floating exactly over the High-scores title,
+so taps there "mysteriously" reloaded to the main menu whenever a newer
+build existed. Hidden overlays must be `pointer-events: none` (the `.show`
+state re-enables them).
 
 **Hard-won caveat (2026-07): query strings do NOT reliably bust the cache.**
 An intermediary on the owner's phone served one broken `pr-59/index.html` for
@@ -980,8 +986,10 @@ config, so a PR preview talks to the real backend. All JS-side in
   the title/chips/Back stay fixed under a long board. **Results are cached**
   (`boardCache`, keyed `level|period`, persisted to localStorage): the
   cached board paints instantly on entry while a fresh fetch runs in the
-  background (no "Fetching…" flash when cached; the error line only shows
-  when there's nothing cached to fall back on). **Refetched on every entry**
+  background; a neon ring spinner (`#scores-wait`, a FIXED-HEIGHT slot so
+  the list never shifts under a tap) shows during any board/replay fetch,
+  and the error line only shows when there's nothing cached to fall back
+  on. **Refetched on every entry**
   (`showScreen("scr-scores")` → `renderScores`; `renderGlobalScores` no-ops
   while the screen isn't up, so banking a run doesn't spam the API). Stale
   fetches are dropped via a sequence counter. Replay blobs are **not**
