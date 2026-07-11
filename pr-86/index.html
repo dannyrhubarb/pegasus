@@ -459,6 +459,15 @@
       gap: 8px;
       width: min(440px, 88vw);
     }
+    /* The board can hold 50 entries — scroll the LIST itself (keeping the
+       title, period chips and Back button fixed) rather than the whole
+       screen. A hair of right padding keeps rows clear of the scrollbar. */
+    #scores-list {
+      max-height: 54vh;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      padding-right: 4px;
+    }
     .rowlist li, .rowlist .row {
       display: flex;
       align-items: center;
@@ -473,17 +482,12 @@
       -webkit-user-select: none;
     }
     .rowlist .row:hover { background: rgba(52, 231, 255, 0.12); }
-    .rowlist .row.sel {
-      border-color: var(--amber);
-      color: var(--amber);
-      box-shadow: 0 0 12px rgba(255, 194, 75, 0.35), inset 0 0 10px rgba(255, 194, 75, 0.1);
-      text-shadow: 0 0 8px rgba(255, 194, 75, 0.6);
-    }
     .rowlist .row .lname { flex: 1; text-align: left; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
     .rowlist .row .lbest { color: var(--dim); font-size: 0.85em; }
     #scores-list .rank { color: var(--amber); width: 1.6em; text-align: left; }
     #scores-list .dist { font-weight: 700; min-width: 4.5em; text-align: right; color: var(--text); }
     #scores-list .when { color: var(--faint); flex: 1; text-align: right; font-size: 0.78em; }
+    #scores-list .pdate { color: var(--faint); font-size: 0.72em; white-space: nowrap; }
     #scores-list .watch {
       font: 700 12px/1 var(--mono);
       letter-spacing: 0.08em;
@@ -904,11 +908,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">10c0d83-pr-86</div>
+        <div class="info-value" id="git-rev">8f77179-pr-86</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-11 15:46 UTC</div>
+        <div class="info-value" id="build-time">2026-07-11 20:35 UTC</div>
       </div>
       <a class="mbtn" href="third-party-licenses.html" target="_blank" rel="noopener">Third-party licenses</a>
       <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
@@ -1212,6 +1216,7 @@
       }
       levelsTitle.textContent = mode === "scores" ? "HIGH SCORES" : "SELECT LEVEL";
       renderLevels();
+      prefetchGlobalBests(); // warm each level's global record for the rows
       showScreen("scr-levels");
     }
     document.getElementById("btn-scores").addEventListener("click", () => openLevelPicker("scores"));
@@ -1472,7 +1477,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "10c0d83-pr-86";
+    const wasmRev = "8f77179-pr-86";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -1612,19 +1617,20 @@
     }
 
     function renderLevels() {
-      // Highlight the level this picker is about: the loaded one in fly mode,
-      // the board being viewed in scores mode.
-      const selected = levelPickerMode === "scores" ? scoresFile : currentLevelFile;
+      // A chooser, not a status view — no pre-selected highlight. The "best"
+      // shown per row is the level's GLOBAL all-time record when online
+      // (from the board cache, warmed by prefetchGlobalBests), falling back
+      // to this device's local best offline.
       levelList.textContent = "";
       for (const file of levelFiles) {
         const row = document.createElement("div");
-        row.className = "row" + (file === selected ? " sel" : "");
+        row.className = "row";
         const name = document.createElement("span");
         name.className = "lname";
         name.textContent = levelNames[file];
         const best = document.createElement("span");
         best.className = "lbest";
-        const b = bestFor(file);
+        const b = backendCfg ? globalBestFor(file) : bestFor(file);
         best.textContent = b > 0 ? "best " + Math.round(b) + " m" : "—";
         row.append(name, best);
         row.addEventListener("click", () => {
@@ -1943,57 +1949,115 @@
     // dropped via the sequence check. While the screen isn't up, skip the
     // network entirely — banking a run calls renderScores too, and the
     // entry-point refetch in showScreen covers freshness.
+    // Board result cache (level|period -> scores[]), persisted so it
+    // survives reloads. Two jobs: show a cached board INSTANTLY on entry
+    // while a fresh fetch runs in the background, and feed the level
+    // picker's per-level "best" (the all-time #1) without a blocking fetch.
+    const BOARD_CACHE_KEY = "pegasus_board_cache";
+    let boardCache = {};
+    try { boardCache = JSON.parse(localStorage.getItem(BOARD_CACHE_KEY) || "{}") || {}; }
+    catch (e) { boardCache = {}; }
+    const cacheKey = (stem, period) => stem + "|" + period;
+    function getBoard(stem, period) { return boardCache[cacheKey(stem, period)]; }
+    function putBoard(stem, period, scores) {
+      boardCache[cacheKey(stem, period)] = scores;
+      try { localStorage.setItem(BOARD_CACHE_KEY, JSON.stringify(boardCache)); }
+      catch (e) { /* quota — cache is best-effort */ }
+    }
+    // Global all-time record for a level, for the picker rows (null if unknown).
+    function globalBestFor(file) {
+      const c = getBoard(levelStem(file), "alltime");
+      return c && c.length ? c[0].score : null;
+    }
+
+    // Build the board rows for one score list (shared by cached + fresh
+    // renders). Each entry: rank / name / localised date / distance / ▶ watch.
+    function renderBoardRows(scores) {
+      scoresList.textContent = "";
+      scoresEmpty.style.display = scores.length ? "none" : "";
+      scores.forEach((s, i) => {
+        const li = document.createElement("li");
+        const rank = document.createElement("span");
+        rank.className = "rank";
+        rank.textContent = (i + 1) + ".";
+        const who = document.createElement("span");
+        who.className = "pname";
+        who.textContent = s.name;
+        const when = document.createElement("span");
+        when.className = "pdate";
+        // toLocaleDateString() with no options = the viewer's locale short date.
+        when.textContent = s.ts ? new Date(s.ts).toLocaleDateString() : "";
+        const dist = document.createElement("span");
+        dist.className = "dist";
+        dist.textContent = Math.round(s.score) + " m";
+        li.append(rank, who, when, dist);
+        if (s.replayPath) {
+          const watch = document.createElement("button");
+          watch.className = "watch";
+          watch.textContent = "▶ watch";
+          watch.addEventListener("click", e => {
+            e.stopPropagation();
+            watchGlobalReplay(s.replayPath); // blob fetched only now, on tap
+          });
+          li.appendChild(watch);
+        }
+        scoresList.appendChild(li);
+      });
+    }
+
     let globalFetchSeq = 0;
     function renderGlobalScores() {
       if (overlay !== "scr-scores") return;
-      scoresList.textContent = "";
-      scoresEmpty.style.display = "none";
       const file = scoresFile || currentLevelFile;
-      if (!backendCfg || !file) return;
-      scoresStatus.textContent = "Fetching…";
-      scoresStatus.style.display = "";
+      if (!backendCfg || !file) { scoresList.textContent = ""; scoresEmpty.style.display = "none"; return; }
+      const stem = levelStem(file);
+      // Show the cached board immediately; only flash "Fetching…" when we
+      // have nothing to show yet.
+      const cached = getBoard(stem, scoresPeriod);
+      if (cached) { renderBoardRows(cached); scoresStatus.style.display = "none"; }
+      else { scoresList.textContent = ""; scoresEmpty.style.display = "none";
+             scoresStatus.textContent = "Fetching…"; scoresStatus.style.display = ""; }
       const seq = ++globalFetchSeq;
       const url = backendCfg.apiBaseUrl + "/v1/levels/"
-        + encodeURIComponent(levelStem(file))
-        + "/scores?period=" + scoresPeriod;
+        + encodeURIComponent(stem) + "/scores?period=" + scoresPeriod;
       fetch(url, { cache: "no-store" })
         .then(r => (r.ok ? r.json() : null))
         .then(data => {
           if (seq !== globalFetchSeq || scoresSrc !== "global") return;
           if (!data) throw new Error("bad response");
-          scoresStatus.style.display = "none";
           const scores = data.scores || [];
-          scoresEmpty.style.display = scores.length ? "none" : "";
-          scores.forEach((s, i) => {
-            const li = document.createElement("li");
-            const rank = document.createElement("span");
-            rank.className = "rank";
-            rank.textContent = (i + 1) + ".";
-            const who = document.createElement("span");
-            who.className = "pname";
-            who.textContent = s.name;
-            const dist = document.createElement("span");
-            dist.className = "dist";
-            dist.textContent = Math.round(s.score) + " m";
-            li.append(rank, who, dist);
-            if (s.replayPath) {
-              const watch = document.createElement("button");
-              watch.className = "watch";
-              watch.textContent = "▶ watch";
-              watch.addEventListener("click", e => {
-                e.stopPropagation();
-                watchGlobalReplay(s.replayPath);
-              });
-              li.appendChild(watch);
-            }
-            scoresList.appendChild(li);
-          });
+          putBoard(stem, scoresPeriod, scores);
+          scoresStatus.style.display = "none";
+          renderBoardRows(scores);
         })
         .catch(() => {
           if (seq !== globalFetchSeq || scoresSrc !== "global") return;
-          scoresStatus.textContent = "Couldn't reach the score server";
-          scoresStatus.style.display = "";
+          // Keep the cached board on screen if we have one; only surface the
+          // error when there's nothing to show.
+          if (!cached) { scoresStatus.textContent = "Couldn't reach the score server";
+                         scoresStatus.style.display = ""; }
         });
+    }
+
+    // Warm each level's global record for the picker rows. The cached value
+    // (if any) paints immediately via renderLevels; this refreshes it in the
+    // background on every picker open (a deliberate, infrequent action — a
+    // few tiny GETs, and an empty cached board must not stay stale after a
+    // run lands). Rows update in place as results arrive.
+    function prefetchGlobalBests() {
+      if (!backendCfg) return;
+      for (const file of levelFiles) {
+        const stem = levelStem(file);
+        fetch(backendCfg.apiBaseUrl + "/v1/levels/" + encodeURIComponent(stem) + "/scores?period=alltime",
+              { cache: "no-store" })
+          .then(r => (r.ok ? r.json() : null))
+          .then(data => {
+            if (!data) return;
+            putBoard(stem, "alltime", data.scores || []);
+            if (overlay === "scr-levels") renderLevels(); // fill the row in place
+          })
+          .catch(() => {});
+      }
     }
 
     // A global replay plays through the exact machinery as a local one —
