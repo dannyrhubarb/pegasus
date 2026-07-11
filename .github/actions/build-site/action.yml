@@ -64,7 +64,9 @@ runs:
         # Shrink the wasm (~30% on top of the size-tuned release profile).
         wasm-opt -Oz -o site/pegasus.wasm target/wasm32-unknown-unknown/release/pegasus.wasm
         # Inject the build's git revision and timestamp into the info overlay.
-        BUILD_TIME=$(date -u +"%Y-%m-%d %H:%M UTC")
+        # ISO-8601 UTC: index.html re-renders it in the viewer's timezone
+        # and region-derived locale (fmtDateTime), like the board timestamps.
+        BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
         sed -i "s|__GIT_REVISION__|${GIT_REV}|g" site/index.html
         sed -i "s|__BUILD_TIME__|${BUILD_TIME}|g" site/index.html
         # Version marker fetched with cache bypassed by index.html, to detect

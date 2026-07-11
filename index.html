@@ -1224,6 +1224,7 @@
       // so it's never stale (renderGlobalScores skips fetching while the
       // screen isn't up, so this entry point is what keeps it fresh).
       if (id === "scr-scores") renderScores();
+      if (id === "scr-about") renderBuildTime();
     }
     function closeMenu() {
       overlay = null;
@@ -1509,11 +1510,20 @@
     // so compare with startsWith("__") rather than a literal match.
     const gitRev = document.getElementById("git-rev");
     const buildTime = document.getElementById("build-time");
+    const rawBuildTime = buildTime.textContent.trim(); // ISO-8601 UTC when deployed
     if (gitRev.textContent.trim().startsWith("__")) {
       gitRev.textContent = "dev (local build)";
     }
-    if (buildTime.textContent.trim().startsWith("__")) {
+    if (rawBuildTime.startsWith("__")) {
       buildTime.textContent = "dev (local build)";
+    }
+    // Render the baked UTC build time like the board timestamps (viewer's
+    // timezone + region-derived locale). Called when About opens, so the
+    // deferred locale scan has settled; unparseable values (dev fallback,
+    // pre-ISO deploys) are left as-is.
+    function renderBuildTime() {
+      const t = Date.parse(rawBuildTime);
+      if (!isNaN(t)) buildTime.textContent = fmtDateTime(t);
     }
 
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
