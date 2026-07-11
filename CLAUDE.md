@@ -208,6 +208,12 @@ screen on desktop.
   the R-key reset path via `ui_do_reset`), 2 = watch the last crashed run's
   replay (only honoured in `CrashDialog`), 3 = exit the replay (only in
   `Replay`; playback freezes on its final frame and never exits by itself).
+  **Race (fixed 2026-07)**: commands are consumed on the game's NEXT frame,
+  so after "Fly again"/"Watch replay" closes the menu a ui-state poll tick
+  can still see state 2 with no overlay and would re-open the game-over
+  screen over the fresh run (pausing it — a wedge found by e2e). JS sets
+  `uiCmdPending` when sending those commands and the poll's state-2 branch
+  holds off until the game has actually left state 2.
 - `ui_state() -> i32` / `cur_dist() -> f32`: per-frame mirrors (`UI_STATE`,
   `CUR_DIST` — exports can't read loop locals) of the mode (0 flying /
   1 wreck / 2 crash dialog / 3 replay) and `sim.max_dist`. JS polls at 200 ms:
@@ -988,10 +994,13 @@ config, so a PR preview talks to the real backend. All JS-side in
   dates. The device TIMEZONE is the one regional setting the browser does
   expose: `fmtDateTime` derives the region by reverse-mapping
   `resolvedOptions().timeZone` through `Intl.Locale getTimeZones` (a
-  676-region scan, ~200 ms — deferred off boot, memoized per zone+language
-  in `pegasus_date_locale`) and formats with `<ui language>-<region>`
-  (`en-SE` → `2026-07-11, 14:00`). Regionless zones / old engines / a
-  not-yet-finished scan fall back to a fixed ISO local format. The `#scores-list` scrolls internally (`max-height:54vh`) so
+  676-region scan, ~200 ms — deferred off boot, memoized per zone in
+  `pegasus_date_locale`) and formats with the REGION'S OWN conventions —
+  its dominant language via `maximize()` (`und-SE` → `sv-Latn-SE` →
+  `2026-07-11 16:00`), not the UI language glued onto the region (`en-SE`
+  inserts a comma that isn't the standard Swedish format); `-u-nu-latn`
+  pins Latin digits. Regionless zones / old engines / a not-yet-finished
+  scan fall back to a fixed ISO local format. The `#scores-list` scrolls internally (`max-height:54vh`) so
   the title/chips/Back stay fixed under a long board. **Results are cached**
   (`boardCache`, keyed `level|period`, persisted to localStorage): the
   cached board paints instantly on entry while a fresh fetch runs in the
