@@ -932,6 +932,24 @@ Each is built `ColliderBuilder::new(SharedShape::capsule(a, b, r)).restitution(0
 
 **RCS / attitude thrusters** (cosmetic particles, `kind 1/2`): bottom nozzles flanking the main booster vent **downward** (like a mini main thruster). Turning **left** → left nozzle at scaled-local `(−0.30, −0.71)`; turning **right** → right nozzle at `(0.30, −0.71)`. Gas exits `−Y` (downward) from both. The x positions sit in the leg nozzle (gold accent: unscaled x ≈ ±0.152–0.249 → midpoint ±0.30 scaled). Emission coords are in **scaled world units** — `lp()`/`ld()` do **not** apply `SHIP_SCALE` (only the render-time `rot` closure does), so don't multiply these by `SHIP_SCALE` (an earlier bug double-scaled them to ±0.60 and spawned the puffs outside the hull).
 
+## License
+
+Pegasus is **GPL-3.0-or-later** (`LICENSE`). Contributors sign on via the
+CLA in `CLA.md` (agreement is a PR-description statement, not a separate
+signing step — see `CONTRIBUTING.md`): they keep copyright on their own
+Contributions but also grant the Maintainer relicensing rights, so the
+Maintainer can offer a closed-source/commercial license to a specific third
+party later without having to track down every contributor for consent.
+GPL itself does **not** block commercial use or require anyone to ask
+permission — it only forces derivatives that get *distributed* (which
+includes serving the wasm binary to a browser) to stay open and freely
+redistributable; permission-gated commercial exceptions only work because
+the Maintainer, as a rights holder, can grant a separate license alongside
+the public GPL one. **Caveat:** the ship mesh (`src/ship_mesh.rs`, see
+"Origin of the ship mesh" below) is joint work with a friend from a 2005
+Flash project — get their sign-off before offering any commercial exception
+that includes it, since they hold copyright on that asset too.
+
 ## Git workflow
 - **Always open a PR** after pushing a feature branch — standing instruction
   from the owner (no need to ask first). The PR also produces a phone-testable
