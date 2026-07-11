@@ -944,6 +944,10 @@
         <span>Pilot name</span>
         <span id="name-cur" style="color:var(--dim)">—</span>
       </div>
+      <!-- TEMP debug: what the browser reports for locale/region and the
+           date locale the game derived from it (remove once date formats
+           are confirmed on real devices) -->
+      <div class="hint" id="locale-debug" style="max-width:min(440px,88vw);word-break:break-word"></div>
       <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
     </div>
 
@@ -951,11 +955,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">b22c006-pr-86</div>
+        <div class="info-value" id="git-rev">295c757-pr-86</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-11 21:17 UTC</div>
+        <div class="info-value" id="build-time">2026-07-11 21:27 UTC</div>
       </div>
       <a class="mbtn" href="third-party-licenses.html" target="_blank" rel="noopener">Third-party licenses</a>
       <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
@@ -1519,7 +1523,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "b22c006-pr-86";
+    const wasmRev = "295c757-pr-86";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -1842,9 +1846,7 @@
         dist.textContent = Math.round(entry.d) + " m";
         const when = document.createElement("span");
         when.className = "when";
-        when.textContent = new Date(entry.t).toLocaleString(undefined, {
-          dateStyle: "short", timeStyle: "short",
-        });
+        when.textContent = fmtDateTime(entry.t); // region-driven, see localeInfo
         const watch = document.createElement("button");
         watch.className = "watch";
         watch.textContent = "▶ watch";
@@ -1916,6 +1918,52 @@
     function levelStem(file) {
       return file.replace(/\.level$/, ""); // the backend keys boards by stem
     }
+
+    // Date/time formatting follows the device REGION, not just the UI
+    // language: a phone set to English in Sweden should show 2026-07-11
+    // 14:00, but browsers often report a plain language tag (en-US) whose
+    // CLDR defaults are American. Scan the reported locale tags for the
+    // first explicit region subtag and format with language-REGION; if none
+    // carries a region, infer the likely one (Intl.Locale.maximize) from
+    // the primary tag.
+    const localeInfo = (() => {
+      const tags = [
+        ...(navigator.languages || []),
+        navigator.language,
+        Intl.DateTimeFormat().resolvedOptions().locale,
+      ].filter(Boolean);
+      let lang = null, region = null, inferred = false;
+      for (const t of tags) {
+        try {
+          const l = new Intl.Locale(t);
+          if (!lang) lang = l.language;
+          if (l.region) { region = l.region; break; }
+        } catch (e) { /* skip malformed tags */ }
+      }
+      if (!region && tags.length) {
+        try { region = new Intl.Locale(tags[0]).maximize().region; inferred = true; }
+        catch (e) { /* leave undefined */ }
+      }
+      const locale = region && lang ? lang + "-" + region : undefined;
+      return { tags, lang, region, inferred, locale };
+    })();
+    const DATE_LOCALE = localeInfo.locale; // undefined = browser default
+    function fmtDateTime(ts) {
+      try {
+        return new Date(ts).toLocaleString(DATE_LOCALE, { dateStyle: "short", timeStyle: "short" });
+      } catch (e) { // an exotic constructed tag the engine rejects
+        return new Date(ts).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
+      }
+    }
+
+    // TEMP debug readout in Settings (see #locale-debug).
+    document.getElementById("locale-debug").textContent =
+      "locale dbg · language: " + (navigator.language || "?") +
+      " · languages: [" + (navigator.languages || []).join(", ") + "]" +
+      " · resolved: " + Intl.DateTimeFormat().resolvedOptions().locale +
+      " · region: " + (localeInfo.region || "?") + (localeInfo.inferred ? " (inferred)" : "") +
+      " · using: " + (DATE_LOCALE || "browser default") +
+      " · sample: " + fmtDateTime(Date.now());
 
     fetch("config.json?nocache=" + Date.now(), { cache: "no-store" })
       .then(r => (r.ok ? r.json() : null))
@@ -2048,12 +2096,9 @@
         who.textContent = s.name;
         const when = document.createElement("span");
         when.className = "pdate";
-        // No explicit locale = the viewer's own (dateStyle/timeStyle keep it
-        // compact: e.g. "2026-07-11 16:32" in sv-SE, "7/11/26, 4:32 PM" in
-        // en-US).
-        when.textContent = s.ts
-          ? new Date(s.ts).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })
-          : "";
+        // Region-driven locale (see localeInfo): "2026-07-11 16:32" for a
+        // Sweden-region device even when its UI language is English.
+        when.textContent = s.ts ? fmtDateTime(s.ts) : "";
         col.append(who, when);
         const dist = document.createElement("span");
         dist.className = "dist";
