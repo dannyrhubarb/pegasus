@@ -960,11 +960,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">9db8dd1-pr-88</div>
+        <div class="info-value" id="git-rev">d0163a3-pr-88</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-12T09:42:05Z</div>
+        <div class="info-value" id="build-time">2026-07-12T23:36:44Z</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors) are sent to
@@ -990,20 +990,22 @@
         <span id="go-dist"></span>
         <span id="go-best"></span>
       </div>
-      <!-- One-time analytics consent ask (equal-weight buttons; the game is
-           identical either way — a "consent or no play" wall would not be
-           freely-given consent under GDPR). Shown at the first race end of
-           a never-asked device, wired by the analytics module. -->
-      <div id="consent-box" style="display:none">
-        <div class="hint">Help improve Pegasus? Store an anonymous id on this
-          device to count returning players. No account, no ads, no third
-          parties.</div>
-        <div class="mbtn" id="consent-yes">Sure</div>
-        <div class="mbtn" id="consent-no">No thanks</div>
-      </div>
       <div class="mbtn primary" id="btn-again">Fly again</div>
       <div class="mbtn" id="btn-replay">Watch replay</div>
       <div class="mbtn" id="btn-gomenu">Main menu</div>
+    </div>
+
+    <!-- One-time analytics consent ask: its own full screen, slotted
+         between the submit-score dialog and the game-over screen once the
+         device has 3 plays (see "Analytics"). Equal-weight buttons — the
+         game is identical either way; a "consent or no play" wall would
+         not be freely-given consent under GDPR. -->
+    <div class="screen" id="scr-consent">
+      <div class="h2">HELP IMPROVE PEGASUS?</div>
+      <div class="hint">Store an anonymous id on this device to count
+        returning players. No account, no ads, no third parties.</div>
+      <div class="mbtn" id="consent-yes">Sure</div>
+      <div class="mbtn" id="consent-no">No thanks</div>
     </div>
 
     <!-- First-time score submission: pops instead of the game-over screen
@@ -1396,15 +1398,17 @@
       if (st === 2 && overlay === null && !uiCmdPending) {
         goDist.textContent = Math.round(wasm_exports.cur_dist()) + " m";
         goBest.textContent = "best " + Math.round(wasm_exports.get_best_dist()) + " m";
-        // Arm the one-time consent ask (the box lives in scr-gameover, so
-        // it shows whenever that screen next appears — including after the
-        // submit dialog below hands over to it).
-        pegAnalytics.maybeAskConsent();
+        // Bank the just-ended run first (its run_end drives the play
+        // counter), then slot the one-time consent screen between the
+        // score dialog and the game-over screen once the device has
+        // 3 plays: crash → [submit dialog] → [scr-consent] → scr-gameover.
+        pegAnalytics.pollRuns();
+        const afterScore = pegAnalytics.consentDue() ? "scr-consent" : "scr-gameover";
         // Every crash-ended publishable run gets the submit/skip dialog in
         // the game-over screen's slot (leading there on either choice); the
         // callsign input arrives prefilled once a name is persisted.
-        if (pendingSubmit) openNameDialog("scr-gameover");
-        else showScreen("scr-gameover");
+        if (pendingSubmit) openNameDialog(afterScore);
+        else showScreen(afterScore);
       }
       if (watchFromMenu && prevState === 3 && st !== 3) {
         watchFromMenu = false;
@@ -1600,7 +1604,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "9db8dd1-pr-88";
+    const wasmRev = "d0163a3-pr-88";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -2528,6 +2532,13 @@
             // A jump > 1 lost the intermediate payloads (one atomic slot) —
             // report the latest run; the start counter above kept the count.
             lastEndSeq = e;
+            // Device-local play counter (functional state, never sent):
+            // gates when the consent screen appears. Capped — its only job
+            // is crossing the ask threshold.
+            try {
+              const n = parseInt(localStorage.getItem("pegasus_play_count") || "0", 10) || 0;
+              if (n < 100) localStorage.setItem("pegasus_play_count", String(n + 1));
+            } catch (_) {}
             const ticks = wasm_exports.run_end_ticks();
             enqueue("run_end", {
               level,
@@ -2564,31 +2575,32 @@
         } catch (_) {}
       }
 
-      const consentBox = document.getElementById("consent-box");
-      function maybeAskConsent() {
+      // Should the crash flow detour through scr-consent? Only when
+      // analytics is live, the device was never asked (missing key —
+      // Safari ITP may have purged it; re-asking is then correct), and it
+      // has at least 3 plays behind it (goodwill, not a door banner).
+      // Returning true also arms the once-per-session latch, since the
+      // caller navigates to the screen immediately.
+      function consentDue() {
         try {
-          const show = !!apiBase && !consentAsked &&
-            localStorage.getItem("pegasus_analytics_consent") === null;
-          consentBox.style.display = show ? "" : "none";
-          if (show) consentAsked = true; // at most once per session
-        } catch (_) {}
+          const due = !!apiBase && !consentAsked &&
+            localStorage.getItem("pegasus_analytics_consent") === null &&
+            (parseInt(localStorage.getItem("pegasus_play_count") || "0", 10) || 0) >= 3;
+          if (due) consentAsked = true;
+          return due;
+        } catch (_) {
+          return false;
+        }
       }
+      // Both answers land on the game-over screen — the consent view sits
+      // in the middle of the crash flow, never dead-ends it.
       document.getElementById("consent-yes").addEventListener("click", () => {
         setConsent("accepted");
-        consentBox.style.display = "none";
+        showScreen("scr-gameover");
       });
       document.getElementById("consent-no").addEventListener("click", () => {
         setConsent("declined");
-        consentBox.style.display = "none";
-      });
-      // Leaving the game-over screen without answering = dismissed. No key
-      // is written, so the prompt returns another session.
-      document.getElementById("scr-gameover").addEventListener("click", e => {
-        if (consentBox.style.display === "none") return;
-        const b = e.target.closest(".mbtn");
-        if (!b || b.id === "consent-yes" || b.id === "consent-no") return;
-        consentBox.style.display = "none";
-        enqueue("consent_choice", { choice: "dismissed" });
+        showScreen("scr-gameover");
       });
 
       // Every menu control, generically: ONE delegated listener reporting
@@ -2608,7 +2620,7 @@
         enqueue,
         configure,
         pollRuns,
-        maybeAskConsent,
+        consentDue,
         setConsent,
         flushNow: () => { drainErrors(); flush(true); },
         screen: id => {
