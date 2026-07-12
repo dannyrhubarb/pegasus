@@ -446,6 +446,62 @@ fn report_run_end(rec: &Recording, dist: f32) {
     RUN_SEQ.fetch_add(1, Ordering::Relaxed);
 }
 
+// --- Analytics run channel (JS polls it alongside run_seq) ---
+// Separate from the highscore publish above: analytics wants EVERY ended
+// run — short runs are difficulty signal — so there is no GHOST_MIN_SECS
+// gate here, and the highscore path stays untouched. Counters, not flags,
+// so a run that starts and ends within one JS poll window still counts.
+static RUN_START_SEQ: AtomicU32 = AtomicU32::new(0);
+static RUN_END_SEQ: AtomicU32 = AtomicU32::new(0);
+static RUN_END_CAUSE: AtomicU32 = AtomicU32::new(0); // 0 crash / 1 reset
+static RUN_END_TICKS: AtomicU32 = AtomicU32::new(0);
+static RUN_END_DIST: AtomicU32 = AtomicU32::new(0); // f32 bits
+static RUN_END_FUEL: AtomicU32 = AtomicU32::new(0); // f32 bits
+static RUN_END_HULL: AtomicU32 = AtomicU32::new(0); // f32 bits
+
+#[unsafe(no_mangle)]
+pub extern "C" fn run_start_seq() -> u32 {
+    RUN_START_SEQ.load(Ordering::Relaxed)
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn run_end_seq() -> u32 {
+    RUN_END_SEQ.load(Ordering::Relaxed)
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn run_end_cause() -> i32 {
+    RUN_END_CAUSE.load(Ordering::Relaxed) as i32
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn run_end_ticks() -> u32 {
+    RUN_END_TICKS.load(Ordering::Relaxed)
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn run_end_dist() -> f32 {
+    f32::from_bits(RUN_END_DIST.load(Ordering::Relaxed))
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn run_end_fuel() -> f32 {
+    f32::from_bits(RUN_END_FUEL.load(Ordering::Relaxed))
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn run_end_hull() -> f32 {
+    f32::from_bits(RUN_END_HULL.load(Ordering::Relaxed))
+}
+
+/// Publish an ended run for analytics. Payload stored first, seq bumped
+/// last, so the payload is complete when JS sees the new seq.
+fn report_run_analytics(cause: u32, ticks: u32, dist: f32, fuel: f32, hull: f32) {
+    if ticks == 0 {
+        return; // a reset from the armed-idle state ended nothing
+    }
+    RUN_END_CAUSE.store(cause, Ordering::Relaxed);
+    RUN_END_TICKS.store(ticks, Ordering::Relaxed);
+    RUN_END_DIST.store(dist.to_bits(), Ordering::Relaxed);
+    RUN_END_FUEL.store(fuel.to_bits(), Ordering::Relaxed);
+    RUN_END_HULL.store(hull.to_bits(), Ordering::Relaxed);
+    RUN_END_SEQ.fetch_add(1, Ordering::Relaxed);
+}
+
 // Blobs coming BACK from the JS store: watch a stored replay, or race its
 // best run as the ghost. Same buffer-write pattern as load_level: JS asks
 // for a buffer (blob_in_ptr), writes the deflated blob, then calls the
@@ -1177,6 +1233,7 @@ async fn main() {
         // it was never ticked or recorded.
         if !run_started && !input.is_neutral() {
             run_started = true;
+            RUN_START_SEQ.fetch_add(1, Ordering::Relaxed);
         }
         if mode == Mode::Flying && !ui_paused && run_started {
             phys_accum = (phys_accum + get_frame_time()).min(0.05);
@@ -1245,8 +1302,10 @@ async fn main() {
                     fuel: sim.fuel, hull: sim.hull, glow,
                     land_timer: 0.0, // a destroying tick always zeroes it
                 });
-                // Publish for the JS highscore store (top 5 per level).
+                // Publish for the JS highscore store (top 5 per level)
+                // and the analytics channel (which also takes short runs).
                 report_run_end(&recorder, sim.max_dist);
+                report_run_analytics(0, recorder.ticks(), sim.max_dist, sim.fuel, sim.hull);
             } else {
                 // Survivable scrape: a spray of sparks + a quiet thud,
                 // scaled to the damage taken. The ship keeps flying.
@@ -2279,6 +2338,7 @@ async fn main() {
             // crashed run was already published at the impact.
             let ended_alive = !sim.crashed;
             let ended_dist = sim.max_dist;
+            let (ended_fuel, ended_hull) = (sim.fuel, sim.hull);
             sim = Sim::new(sim.level.clone());
             // Snap the interpolation too, or the camera lerps across the
             // teleport for a frame.
@@ -2293,7 +2353,10 @@ async fn main() {
                     (HYBRID_MAX_SECS / PHYSICS_DT) as u32),
             );
             if ended_alive {
+                // A crashed run was already published (both channels) at
+                // the impact — only alive resets report here.
                 report_run_end(&ended, ended_dist);
+                report_run_analytics(1, ended.ticks(), ended_dist, ended_fuel, ended_hull);
             }
             // The ghost re-simulates the BEST run (pushed from the JS store)
             // from its first keyframe, in lockstep with the new run.
@@ -2600,6 +2663,22 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_analytics_publishes_payload_and_skips_zero_tick_runs() {
+        let seq0 = run_end_seq();
+        // A reset from the armed-idle state ended nothing — no publish.
+        report_run_analytics(1, 0, 5.0, 50.0, 50.0);
+        assert_eq!(run_end_seq(), seq0);
+        // A real run publishes the full payload before bumping the seq.
+        report_run_analytics(1, 240, 123.5, 61.25, 88.0);
+        assert_eq!(run_end_seq(), seq0 + 1);
+        assert_eq!(run_end_cause(), 1);
+        assert_eq!(run_end_ticks(), 240);
+        assert_eq!(run_end_dist(), 123.5);
+        assert_eq!(run_end_fuel(), 61.25);
+        assert_eq!(run_end_hull(), 88.0);
+    }
 
     // The whole world is pure functions of (level, position/slot index).
     // These tests pin the invariants the rendering and collision code rely

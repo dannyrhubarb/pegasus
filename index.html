@@ -945,10 +945,17 @@
         <span>Debug HUD</span>
         <input type="checkbox" id="debug-toggle"><span class="tgl"></span>
       </label>
+      <label class="setrow" id="retid-toggle-row">
+        <span>Share returning-player id</span>
+        <input type="checkbox" id="retid-toggle"><span class="tgl"></span>
+      </label>
       <div class="setrow" id="name-row" style="display:none">
         <span>Pilot name</span>
         <span id="name-cur" style="color:var(--dim)">—</span>
       </div>
+      <!-- Debug-only (shown while the Debug HUD toggle is on): forget the
+           consent answer so the scr-consent flow can be re-tested. -->
+      <div class="mbtn" id="reset-consent" style="display:none">Reset analytics consent</div>
       <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
     </div>
 
@@ -961,6 +968,13 @@
       <div class="info-row">
         <div class="info-label">Build time</div>
         <div class="info-value" id="build-time">__BUILD_TIME__</div>
+      </div>
+      <div class="hint" id="privacy-note">
+        Anonymous play stats (runs, distances, menu taps, errors) are sent to
+        the developer to improve the game &mdash; no account, no ads, no third
+        parties, no IP address stored. Optionally (Settings &rarr; &ldquo;Share
+        returning-player id&rdquo;) a random id is kept on this device so
+        returning players can be counted; switching it off deletes the id.
       </div>
       <a class="mbtn" href="third-party-licenses.html" target="_blank" rel="noopener">Third-party licenses</a>
       <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
@@ -982,6 +996,19 @@
       <div class="mbtn primary" id="btn-again">Fly again</div>
       <div class="mbtn" id="btn-replay">Watch replay</div>
       <div class="mbtn" id="btn-gomenu">Main menu</div>
+    </div>
+
+    <!-- One-time analytics consent ask: its own full screen, slotted
+         between the submit-score dialog and the game-over screen once the
+         device has 3 plays (see "Analytics"). Equal-weight buttons — the
+         game is identical either way; a "consent or no play" wall would
+         not be freely-given consent under GDPR. -->
+    <div class="screen" id="scr-consent">
+      <div class="h2">HELP IMPROVE PEGASUS?</div>
+      <div class="hint">Store an anonymous id on this device to count
+        returning players. No account, no ads, no third parties.</div>
+      <div class="mbtn" id="consent-yes">Sure</div>
+      <div class="mbtn" id="consent-no">No thanks</div>
     </div>
 
     <!-- First-time score submission: pops instead of the game-over screen
@@ -1034,6 +1061,23 @@
       // its same-origin check. Mirror the last console.error so the banner
       // can show the real panic instead. Installed here (before the bundle
       // loads) so the bundle's console_error import routes through it.
+      // Tiny capped error buffer drained by the analytics module in the
+      // main script. Push-only here — the guard stays standalone and never
+      // depends on analytics. Entries inherit exactly the banner's
+      // signal/noise filtering below.
+      window.__pegErrs = [];
+      function recErr(kind, message, file, line) {
+        try {
+          if (window.__pegErrs.length < 10) {
+            window.__pegErrs.push({
+              kind: kind,
+              message: String(message).slice(0, 300),
+              file: file || "",
+              line: line || 0,
+            });
+          }
+        } catch (_) { /* never let telemetry break the guard */ }
+      }
       var lastConsoleError = "";
       var origConsoleError = console.error;
       console.error = function () {
@@ -1058,17 +1102,23 @@
         // bare "Script error." (no filename); Chrome attributes them to the
         // .wasm URL but the message is just "unreachable". Either way the
         // last console.error (the panic hook's output) is the real cause.
-        if ((!e.filename || /\.wasm(\?|$)/.test(e.filename)) && lastConsoleError) {
+        var isPanic = (!e.filename || /\.wasm(\?|$)/.test(e.filename)) && lastConsoleError;
+        if (isPanic) {
           msg += "\n" + lastConsoleError;
         }
+        recErr(isPanic ? "panic" : "script",
+          isPanic ? lastConsoleError : (e.message || "unknown"),
+          e.filename ? e.filename.split("/").pop() : "", e.lineno);
         show(msg);
       });
       window.addEventListener("unhandledrejection", function (e) {
         if (e.reason == null) return; // contentless → same third-party noise rule
+        recErr("rejection", String(e.reason));
         show("Unhandled promise rejection: " + String(e.reason).slice(0, 300));
       });
       setTimeout(function () {
         if (typeof wasm_exports === "undefined" || !wasm_exports) {
+          recErr("boot_timeout", "wasm not running after 8 s");
           show("Game failed to start (wasm not running after 8 s).");
         }
       }, 8000);
@@ -1231,6 +1281,7 @@
       // screen isn't up, so this entry point is what keeps it fresh).
       if (id === "scr-scores") renderScores();
       if (id === "scr-about") renderBuildTime();
+      pegAnalytics.screen(id); // funnel signal (consecutive-deduped inside)
     }
     function closeMenu() {
       overlay = null;
@@ -1291,6 +1342,7 @@
       closeMenu();
     });
     document.getElementById("btn-replay").addEventListener("click", () => {
+      pegAnalytics.replayWatch("gameover");
       call("ui_command", 2);
       uiCmdPending = true;
       closeMenu(); // state flips to replay; the poll below brings us back
@@ -1304,11 +1356,15 @@
     const pauseBtn = document.getElementById("pause-btn");
     const restartBtn = document.getElementById("restart-btn");
     function onTap(el, fn) {
-      el.addEventListener("click", e => { e.stopPropagation(); fn(); });
+      // The corner buttons preventDefault their touchstart (no synthesized
+      // click follows), so the menu's click-delegated ui_click never sees
+      // them — log here instead, where every tap lands exactly once.
+      const go = () => { pegAnalytics.enqueue("ui_click", { target: el.id }); fn(); };
+      el.addEventListener("click", e => { e.stopPropagation(); go(); });
       el.addEventListener("touchstart", e => {
         e.preventDefault();
         e.stopPropagation();
-        fn();
+        go();
       }, { passive: false });
     }
     const exitReplayBtn = document.getElementById("exit-replay-btn");
@@ -1345,11 +1401,17 @@
       if (st === 2 && overlay === null && !uiCmdPending) {
         goDist.textContent = Math.round(wasm_exports.cur_dist()) + " m";
         goBest.textContent = "best " + Math.round(wasm_exports.get_best_dist()) + " m";
+        // Bank the just-ended run first (its run_end drives the play
+        // counter), then slot the one-time consent screen between the
+        // score dialog and the game-over screen once the device has
+        // 3 plays: crash → [submit dialog] → [scr-consent] → scr-gameover.
+        pegAnalytics.pollRuns();
+        const afterScore = pegAnalytics.consentDue() ? "scr-consent" : "scr-gameover";
         // Every crash-ended publishable run gets the submit/skip dialog in
         // the game-over screen's slot (leading there on either choice); the
         // callsign input arrives prefilled once a name is persisted.
-        if (pendingSubmit) openNameDialog("scr-gameover");
-        else showScreen("scr-gameover");
+        if (pendingSubmit) openNameDialog(afterScore);
+        else showScreen(afterScore);
       }
       if (watchFromMenu && prevState === 3 && st !== 3) {
         watchFromMenu = false;
@@ -1574,6 +1636,8 @@
     // Navigate to a ?fresh=<ts> URL: a unique query string bypasses the
     // cached copy of index.html (a plain reload would re-serve it).
     function freshReload() {
+      pegAnalytics.enqueue("stale_cache", { action: "reload" });
+      pegAnalytics.flushNow(); // beacon — survives the navigation below
       location.replace(location.pathname + "?fresh=" + Date.now());
     }
 
@@ -1586,6 +1650,9 @@
         .then(r => (r.ok ? r.json() : null))
         .then(v => {
           if (v && v.revision && v.revision !== wasmRev) {
+            if (!updateToast.classList.contains("show")) {
+              pegAnalytics.enqueue("stale_cache", { action: "shown" });
+            }
             updateToast.classList.add("show");
           }
         })
@@ -1734,6 +1801,7 @@
       const push = () => {
         if (typeof wasm_exports === "undefined" || !wasm_exports.load_level) return false;
         collectEndedRun(); // bank any just-ended run under the OLD level first
+        pegAnalytics.pollRuns(); // same: the run belongs to the OLD level
         const bytes = new TextEncoder().encode(text);
         const ptr = wasm_exports.level_buf_ptr(bytes.length);
         new Uint8Array(wasm_memory.buffer, ptr, bytes.length).set(bytes);
@@ -1876,6 +1944,7 @@
         watch.addEventListener("click", e => {
           e.stopPropagation();
           if (pushBlobToWasm(entry, "watch_replay_blob")) {
+            pegAnalytics.replayWatch("scores");
             watchFromMenu = true;
             closeMenu(); // the ui_state poll returns here when it ends
           }
@@ -1909,7 +1978,10 @@
       if (top[0] === entry) pushGhost(); // a new record races next spawn
       maybeSubmitOnline(currentLevelFile, entry);
     }
-    setInterval(collectEndedRun, 500);
+    setInterval(() => {
+      collectEndedRun();
+      pegAnalytics.pollRuns();
+    }, 500);
 
     // --- Online high scores (dannyrhubarb/pegasus-backend) -----------------
     // config.json ({apiBaseUrl, replayBaseUrl}) is written at deploy time
@@ -2030,6 +2102,7 @@
     fetch("config.json?nocache=" + Date.now(), { cache: "no-store" })
       .then(r => (r.ok ? r.json() : null))
       .then(c => {
+        pegAnalytics.configure(c); // analytics needs only apiBaseUrl
         if (!c || !c.apiBaseUrl || !c.replayBaseUrl) return;
         backendCfg = c;
         // Online build: the High-scores screen IS the global board (the
@@ -2301,9 +2374,17 @@
     // + the minimap. Same plumbing as the others.
     const debugToggle = document.getElementById("debug-toggle");
     debugToggle.checked = localStorage.getItem("pegasus_debug_hud") === "1";
+    const resetConsentBtn = document.getElementById("reset-consent");
     function applyDebugSetting() {
       call("set_debug_hud", debugToggle.checked ? 1 : 0);
+      // The consent-reset test button rides the same switch.
+      resetConsentBtn.style.display = debugToggle.checked ? "" : "none";
     }
+    resetConsentBtn.addEventListener("click", () => {
+      pegAnalytics.resetConsent();
+      resetConsentBtn.textContent = "Consent forgotten — crash to re-test";
+      setTimeout(() => { resetConsentBtn.textContent = "Reset analytics consent"; }, 2000);
+    });
     debugToggle.addEventListener("change", () => {
       localStorage.setItem("pegasus_debug_hud", debugToggle.checked ? "1" : "0");
       applyDebugSetting();
@@ -2314,6 +2395,283 @@
         clearInterval(debugTimer);
       }
     }, 200);
+
+    // --- Analytics (self-contained; must NEVER break the game) -----------
+    // Anonymous by default: a per-page-load session id held in memory, no
+    // cookies, no IP/UA stored (backend contract). Events are batched to
+    // POST {apiBaseUrl}/v1/events using config.json — a missing/empty
+    // config (local checkout, no deployed backend) leaves analytics
+    // silently off; local dev opts in with
+    // localStorage.pegasus_analytics_debug = "1".
+    // The tab-close flush is a sendBeacon STRING body → text/plain → a CORS
+    // simple request, no preflight. Do NOT "improve" it to a Blob typed
+    // application/json: that forces a preflight sendBeacon handles
+    // inconsistently (the backend deliberately ignores content-type, see
+    // pegasus-backend's track_events.rs). Every public entry point is
+    // try/caught — an analytics failure must never reach game code.
+    const pegAnalytics = (() => {
+      const MAX_QUEUE = 100, MAX_BATCH = 50, FLUSH_MS = 15000;
+      const TICK_MS = 1000 / 120; // PHYSICS_DT, for run durations
+      const SHORT_TICKS = 240;    // GHOST_MIN_SECS (2 s) in ticks: runs the
+                                  // highscore path drops, flagged not lost
+      const env = wasmRev.startsWith("__")
+        ? "dev" : (/\/pr-\d+\//.test(location.pathname) ? "preview" : "prod");
+      const newId = () => (crypto.randomUUID && crypto.randomUUID()) ||
+        (Date.now() + "-" + Math.random().toString(36).slice(2, 10));
+      const sessionId = newId();
+      const t0 = Date.now();
+      let apiBase = null; // stays null = disabled
+      let seq = 0, queue = [], runs = 0;
+      let activeMs = 0, hiddenMs = 0, bgCount = 0, visSince = Date.now();
+      let lastScreen = null, lastEndSent = 0, consentAsked = false;
+      let lastStartSeq = 0, lastEndSeq = 0;
+
+      function enqueue(name, props) {
+        try {
+          queue.push({ seq: seq++, t: Date.now(), name, props: props || {} });
+          if (queue.length > MAX_QUEUE) queue.shift(); // drop oldest
+        } catch (_) { /* never throw into game code */ }
+      }
+
+      // The boot guard buffers {kind, message, file, line} error records in
+      // window.__pegErrs (it stays standalone — push-only); drain them into
+      // the pipe whenever we flush.
+      function drainErrors() {
+        try {
+          const buf = window.__pegErrs;
+          if (buf && buf.length) buf.splice(0).forEach(e => enqueue("error", e));
+        } catch (_) {}
+      }
+
+      function flush(useBeacon) {
+        try {
+          if (!apiBase || !queue.length) return;
+          const events = queue.slice(0, MAX_BATCH);
+          const payload = {
+            sessionId,
+            build: wasmRev.startsWith("__") ? "dev" : wasmRev,
+            env,
+            events,
+          };
+          // deviceId rides along only while consent stands.
+          if (localStorage.getItem("pegasus_analytics_consent") === "1") {
+            const did = localStorage.getItem("pegasus_device_id");
+            if (did) payload.deviceId = did;
+          }
+          const body = JSON.stringify(payload);
+          let sent;
+          if (useBeacon && navigator.sendBeacon) {
+            sent = navigator.sendBeacon(apiBase + "/v1/events", body);
+          } else {
+            // A string fetch body is also text/plain → also preflight-free.
+            fetch(apiBase + "/v1/events", { method: "POST", body, keepalive: true })
+              .catch(() => {});
+            sent = true; // fire-and-forget: no retry, never re-queue
+          }
+          if (sent) queue = queue.slice(events.length);
+        } catch (_) {}
+      }
+
+      // Fed by the ONE config.json fetch (the online-highscores block above
+      // calls this before its own stricter checks): analytics needs only
+      // apiBaseUrl. No config / no apiBaseUrl = analytics stays off.
+      function configure(cfg) {
+        try {
+          if (apiBase || !cfg || !cfg.apiBaseUrl) return;
+          if (env === "dev" &&
+              localStorage.getItem("pegasus_analytics_debug") !== "1") return;
+          apiBase = String(cfg.apiBaseUrl).replace(/\/+$/, "");
+          const vp = Math.min(innerWidth, innerHeight);
+          enqueue("session_start", {
+            touch: (navigator.maxTouchPoints || 0) > 0,
+            // Same 600 CSS px threshold the game's mobile zoom keys on.
+            viewport: vp < 600 ? "small" : vp < 900 ? "medium" : "large",
+            dpr: Math.round(devicePixelRatio || 1),
+          });
+        } catch (_) {}
+      }
+
+      setInterval(() => { drainErrors(); flush(false); }, FLUSH_MS);
+
+      // Session length without heartbeats: a session_end on every tab-hide
+      // (the beacon survives navigation/close); analysis takes the max per
+      // session. hidden + pagehide fire back-to-back — send once.
+      function noteEnd() {
+        const now = Date.now();
+        if (now - lastEndSent > 1000) {
+          lastEndSent = now;
+          enqueue("session_end", {
+            durationMs: now - t0,
+            activeMs: activeMs +
+              (document.visibilityState === "visible" ? now - visSince : 0),
+            hiddenMs,
+            bgCount,
+            runs,
+          });
+        }
+        drainErrors();
+        flush(true);
+      }
+      document.addEventListener("visibilitychange", () => {
+        const now = Date.now();
+        if (document.visibilityState === "hidden") {
+          activeMs += now - visSince;
+          bgCount++;
+          visSince = now;
+          noteEnd();
+        } else {
+          hiddenMs += now - visSince;
+          visSince = now;
+        }
+      });
+      window.addEventListener("pagehide", noteEnd);
+
+      // The wasm analytics run channel (run_start_seq / run_end_seq
+      // counters + payload mirrors) — polled on the same 500 ms cadence as
+      // the highscore publish, and once before a level switch.
+      function pollRuns() {
+        try {
+          if (typeof wasm_exports === "undefined" || !wasm_exports.run_start_seq) return;
+          const level = currentLevelFile || "builtin";
+          const s = wasm_exports.run_start_seq();
+          for (; lastStartSeq < s; lastStartSeq++) {
+            runs++;
+            enqueue("run_start", { level });
+          }
+          const e = wasm_exports.run_end_seq();
+          if (e !== lastEndSeq) {
+            // A jump > 1 lost the intermediate payloads (one atomic slot) —
+            // report the latest run; the start counter above kept the count.
+            lastEndSeq = e;
+            // Device-local play counter (functional state, never sent):
+            // gates when the consent screen appears. Capped — its only job
+            // is crossing the ask threshold.
+            try {
+              const n = parseInt(localStorage.getItem("pegasus_play_count") || "0", 10) || 0;
+              if (n < 100) localStorage.setItem("pegasus_play_count", String(n + 1));
+            } catch (_) {}
+            const ticks = wasm_exports.run_end_ticks();
+            enqueue("run_end", {
+              level,
+              cause: wasm_exports.run_end_cause() === 0 ? "crash" : "reset",
+              distance: wasm_exports.run_end_dist(),
+              durationMs: Math.round(ticks * TICK_MS),
+              fuel: wasm_exports.run_end_fuel(),
+              hull: wasm_exports.run_end_hull(),
+              short: ticks < SHORT_TICKS,
+            });
+          }
+        } catch (_) {}
+      }
+
+      // Consent for the returning-player id: opt-in and freely given — the
+      // game plays identically either way (a "consent or no play" wall
+      // would not be valid consent under GDPR Art. 7(4)). A missing key =
+      // never asked; Safari ITP purges script-writable storage after 7 days
+      // of Safari use without a visit, so a long-lapsed device may
+      // legitimately be asked again (the consent record is genuinely gone).
+      function setConsent(choice) {
+        try {
+          if (choice === "accepted") {
+            localStorage.setItem("pegasus_analytics_consent", "1");
+            if (!localStorage.getItem("pegasus_device_id")) {
+              localStorage.setItem("pegasus_device_id", newId());
+            }
+          } else { // declined / revoked
+            localStorage.setItem("pegasus_analytics_consent", "0");
+            localStorage.removeItem("pegasus_device_id");
+          }
+          retidToggle.checked = choice === "accepted";
+          enqueue("consent_choice", { choice });
+        } catch (_) {}
+      }
+
+      // Should the crash flow detour through scr-consent? Only when
+      // analytics is live, the device was never asked (missing key —
+      // Safari ITP may have purged it; re-asking is then correct), and it
+      // has at least 3 plays behind it (goodwill, not a door banner).
+      // Returning true also arms the once-per-session latch, since the
+      // caller navigates to the screen immediately.
+      function consentDue() {
+        try {
+          const due = !!apiBase && !consentAsked &&
+            localStorage.getItem("pegasus_analytics_consent") === null &&
+            (parseInt(localStorage.getItem("pegasus_play_count") || "0", 10) || 0) >= 3;
+          if (due) consentAsked = true;
+          return due;
+        } catch (_) {
+          return false;
+        }
+      }
+      // Debug helper (the Settings button, visible while Debug HUD is on):
+      // forget the consent answer + device id and re-arm the per-session
+      // latch, so the next crash re-runs the scr-consent flow without
+      // clearing site data. Leaves pegasus_play_count alone — a test
+      // device is already past the 3-play gate.
+      function resetConsent() {
+        try {
+          localStorage.removeItem("pegasus_analytics_consent");
+          localStorage.removeItem("pegasus_device_id");
+          consentAsked = false;
+          retidToggle.checked = false;
+        } catch (_) {}
+      }
+
+      // Both answers land on the game-over screen — the consent view sits
+      // in the middle of the crash flow, never dead-ends it.
+      document.getElementById("consent-yes").addEventListener("click", () => {
+        setConsent("accepted");
+        showScreen("scr-gameover");
+      });
+      document.getElementById("consent-no").addEventListener("click", () => {
+        setConsent("declined");
+        showScreen("scr-gameover");
+      });
+
+      // Every menu control, generically: ONE delegated listener reporting
+      // the nearest ancestor WITH an id (skipping the menu/screen
+      // containers) — covers settings toggles, watch buttons and any future
+      // button with zero per-feature code. Payloads stay content-free:
+      // element ids and durations only, never text.
+      menuEl.addEventListener("click", e => {
+        try {
+          const el = e.target.closest("[id]");
+          if (!el || el.id === "menu" || el.id.startsWith("scr-")) return;
+          enqueue("ui_click", { target: el.id });
+        } catch (_) {}
+      });
+
+      return {
+        enqueue,
+        configure,
+        pollRuns,
+        consentDue,
+        setConsent,
+        resetConsent,
+        flushNow: () => { drainErrors(); flush(true); },
+        screen: id => {
+          try {
+            const s = String(id).replace(/^scr-/, "");
+            if (s !== lastScreen) {
+              lastScreen = s;
+              enqueue("screen_view", { screen: s });
+            }
+          } catch (_) {}
+        },
+        replayWatch: source =>
+          enqueue("replay_watch", { source, level: currentLevelFile || "builtin" }),
+      };
+    })();
+
+    // "Share returning-player id" toggle mirrors the consent choice; turning
+    // it off deletes the stored id.
+    const retidToggle = document.getElementById("retid-toggle");
+    retidToggle.checked =
+      localStorage.getItem("pegasus_analytics_consent") === "1" &&
+      !!localStorage.getItem("pegasus_device_id");
+    retidToggle.addEventListener("change", () => {
+      pegAnalytics.setConsent(retidToggle.checked ? "accepted" : "revoked");
+    });
 
     // Manual reload button in the About screen — same ?fresh= mechanism as
     // the toast, for when you want the newest build without waiting.
