@@ -953,6 +953,9 @@
         <span>Pilot name</span>
         <span id="name-cur" style="color:var(--dim)">—</span>
       </div>
+      <!-- Debug-only (shown while the Debug HUD toggle is on): forget the
+           consent answer so the scr-consent flow can be re-tested. -->
+      <div class="mbtn" id="reset-consent" style="display:none">Reset analytics consent</div>
       <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
     </div>
 
@@ -960,11 +963,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">d0163a3-pr-88</div>
+        <div class="info-value" id="git-rev">8dc3cb8-pr-88</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-12T23:36:44Z</div>
+        <div class="info-value" id="build-time">2026-07-12T23:50:57Z</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors) are sent to
@@ -1604,7 +1607,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "d0163a3-pr-88";
+    const wasmRev = "8dc3cb8-pr-88";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -2371,9 +2374,17 @@
     // + the minimap. Same plumbing as the others.
     const debugToggle = document.getElementById("debug-toggle");
     debugToggle.checked = localStorage.getItem("pegasus_debug_hud") === "1";
+    const resetConsentBtn = document.getElementById("reset-consent");
     function applyDebugSetting() {
       call("set_debug_hud", debugToggle.checked ? 1 : 0);
+      // The consent-reset test button rides the same switch.
+      resetConsentBtn.style.display = debugToggle.checked ? "" : "none";
     }
+    resetConsentBtn.addEventListener("click", () => {
+      pegAnalytics.resetConsent();
+      resetConsentBtn.textContent = "Consent forgotten — crash to re-test";
+      setTimeout(() => { resetConsentBtn.textContent = "Reset analytics consent"; }, 2000);
+    });
     debugToggle.addEventListener("change", () => {
       localStorage.setItem("pegasus_debug_hud", debugToggle.checked ? "1" : "0");
       applyDebugSetting();
@@ -2592,6 +2603,20 @@
           return false;
         }
       }
+      // Debug helper (the Settings button, visible while Debug HUD is on):
+      // forget the consent answer + device id and re-arm the per-session
+      // latch, so the next crash re-runs the scr-consent flow without
+      // clearing site data. Leaves pegasus_play_count alone — a test
+      // device is already past the 3-play gate.
+      function resetConsent() {
+        try {
+          localStorage.removeItem("pegasus_analytics_consent");
+          localStorage.removeItem("pegasus_device_id");
+          consentAsked = false;
+          retidToggle.checked = false;
+        } catch (_) {}
+      }
+
       // Both answers land on the game-over screen — the consent view sits
       // in the middle of the crash flow, never dead-ends it.
       document.getElementById("consent-yes").addEventListener("click", () => {
@@ -2622,6 +2647,7 @@
         pollRuns,
         consentDue,
         setConsent,
+        resetConsent,
         flushNow: () => { drainErrors(); flush(true); },
         screen: id => {
           try {
