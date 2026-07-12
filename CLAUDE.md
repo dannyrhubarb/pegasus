@@ -53,7 +53,7 @@ push-retry loop for concurrent deploys):
 - `src/audio.rs` — in-memory WAV synthesis (`wav_from_samples`, `thruster_wav`, `boom_wav`)
 - `levels/` — **runtime level data**: `*.level` files (`key = value`) + `manifest.json` (menu order), fetched by `index.html` and pushed into the wasm — new levels deploy with no recompile (see "Levels")
 - `tools/gen-third-party-licenses.py` + `third-party-licenses.html` — the generated third-party attribution page served with the site and linked from the About screen; regenerate when `Cargo.lock` changes (see "License")
-- `index.html` — web wrapper, safe-area insets, the **HTML game menu** (start / pause / game-over screens, level picker, settings, high scores, about — see "Game menu"), **gamepad polling**, and a **boot guard** (touch/stick input moved in-canvas — no touch handlers here any more): a small standalone `<script>` tag ahead of the bundle (script tags parse independently, so no error in the bundle/main script can kill it) that paints any script error on screen with file:line and offers a tap-to-reload if `wasm_exports` is missing 8 s after load. Keep it first and self-contained. It also wraps `console.error` (installed ahead of the bundle, so the wasm `console_error` import routes through it) and appends the last logged error to the banner when the error event is anonymous or attributed to the `.wasm` file — **a Rust panic reaches JS as an opaque trap** (`RuntimeError: unreachable`; iOS Safari mutes it further to a bare "Script error." with no filename, because wasm frames fail its same-origin check), and the only useful description is the panic-hook line logged just before the trap (`src/main.rs` installs `std::panic::set_hook` → `error!("{}", info)`; the *default* hook prints the useless Debug form `PanicHookInfo { payload: Any { .. }, … }`). Unhandled promise rejections get the same banner (skipped when `reason` is null). **Fully-anonymous errors (no filename AND no console.error trace) are deliberately ignored**: same-origin scripts always carry file:line and a wasm panic always logs via the hook first, so the only things that land there are Safari-injected third-party scripts — reproduced live on iOS: opening the **share sheet** runs share/action extensions' preprocessing JS in the page, and an error in any of them arrives as a muted "Script error." (this was the mystery banner of 2026-07-06, seen right after the Pegasus rename and initially blamed on it).
+- `index.html` — web wrapper, safe-area insets, the **HTML game menu** (start / pause / game-over screens, level picker, settings, high scores, about — see "Game menu"), **gamepad polling**, and a **boot guard** (touch/stick input moved in-canvas — no touch handlers here any more): a small standalone `<script>` tag ahead of the bundle (script tags parse independently, so no error in the bundle/main script can kill it) that paints any script error on screen with file:line and offers a tap-to-reload if `wasm_exports` is missing 8 s after load. Keep it first and self-contained. It also pushes each reported error into a capped `window.__pegErrs` buffer (push-only — the guard never depends on anything) that the analytics module drains (see "Analytics"). It also wraps `console.error` (installed ahead of the bundle, so the wasm `console_error` import routes through it) and appends the last logged error to the banner when the error event is anonymous or attributed to the `.wasm` file — **a Rust panic reaches JS as an opaque trap** (`RuntimeError: unreachable`; iOS Safari mutes it further to a bare "Script error." with no filename, because wasm frames fail its same-origin check), and the only useful description is the panic-hook line logged just before the trap (`src/main.rs` installs `std::panic::set_hook` → `error!("{}", info)`; the *default* hook prints the useless Debug form `PanicHookInfo { payload: Any { .. }, … }`). Unhandled promise rejections get the same banner (skipped when `reason` is null). **Fully-anonymous errors (no filename AND no console.error trace) are deliberately ignored**: same-origin scripts always carry file:line and a wasm panic always logs via the hook first, so the only things that land there are Safari-injected third-party scripts — reproduced live on iOS: opening the **share sheet** runs share/action extensions' preprocessing JS in the page, and an error in any of them arrives as a muted "Script error." (this was the mystery banner of 2026-07-06, seen right after the Pegasus rename and initially blamed on it).
 - `mq_js_bundle.js` — **vendored** miniquad/quad-snd JS loader (from not-fl3/miniquad-samples). Pinned in-repo so deploys don't depend on a third-party host; includes the audio backend. Update it deliberately if macroquad is upgraded. **Gotcha**: it declares globals at top level (`const canvas`, `var gl`, `wasm_exports`, `function load`, …) that share the page's global scope — redeclaring any of them in `index.html`'s inline script is a SyntaxError that silently kills the *whole* inline script (no `load()` → no wasm, page shows only the HTML chrome). Pick distinct names and check the bundle before adding top-level identifiers.
 
 ## Input sources
@@ -179,7 +179,9 @@ while the wasm loads):
   default), **Debug HUD** (`#debug-toggle-row`, `pegasus_debug_hud`, **off by
   default** → `set_debug_hud` → `DEBUG_HUD`; shows the telemetry text line —
   see "HUD") as styled toggles; same localStorage → export → atomic plumbing.
-  Plus the **Pilot name** row (`#name-row`, hidden offline) — opens the
+  Plus **Share returning-player id** (`#retid-toggle-row`) — JS-only, mirrors
+  the analytics consent choice (see "Analytics"); no wasm export behind it —
+  and the **Pilot name** row (`#name-row`, hidden offline) — opens the
   submit-score dialog in edit mode (see "Online high scores").
 - **scr-about**: build **git revision** + **build time** (deploy-time `sed`
   of `__GIT_REVISION__` / `__BUILD_TIME__` placeholders by `build-site`;
@@ -275,6 +277,72 @@ over the menu and was "hidden" with `opacity: 0` only — an invisible
 so taps there "mysteriously" reloaded to the main menu whenever a newer
 build existed. Hidden overlays must be `pointer-events: none` (the `.show`
 state re-enables them).
+
+## Analytics (web only)
+
+A self-contained module at the end of `index.html`'s main script
+(`pegAnalytics`) batches gameplay/funnel/error events to the pegasus-backend
+`POST /v1/events` endpoint. **It must never break the game**: every public
+entry point is try/caught, sends are fire-and-forget, and everything
+degrades to silence.
+
+- **Enablement**: the deploy-injected `config.json`'s `apiBaseUrl`
+  (missing/empty = off; ONE fetch shared with the online-highscores block —
+  its `.then` calls `pegAnalytics.configure(c)`, which needs only
+  `apiBaseUrl`, before the stricter scores checks). Builds are env-tagged
+  `prod` / `preview` (`/pr-<n>/` path) / `dev` (placeholder revision); dev
+  additionally requires `localStorage.pegasus_analytics_debug = "1"`.
+  Previews DO send (tagged) — every PR exercises the pipeline; queries
+  filter `env='prod'`.
+- **Privacy**: anonymous by default — a per-page-load `sessionId` in memory,
+  no cookies, no IP/UA stored (backend contract). Payloads are content-free:
+  enums, element ids, numbers; the only free text is error messages. The
+  About screen carries the plain-language privacy note (`#privacy-note`).
+- **Consent / returning-player id**: a one-time equal-weight FULL-SCREEN
+  ask (`#scr-consent`), slotted into the crash flow between the
+  submit-score dialog and the game-over screen (crash → [scr-name] →
+  [scr-consent] → scr-gameover; `consentDue()` picks the submit dialog's
+  `returnTo`) once the device has **≥ 3 plays** (`pegasus_play_count`,
+  bumped per observed run_end, device-local, never sent, capped at 100) —
+  never a consent wall; the game plays identically either way and both
+  buttons land on scr-gameover. Accept → `pegasus_device_id` (random UUID)
+  + `pegasus_analytics_consent = "1"`, and the id rides the batch envelope;
+  decline → `"0"`, never re-asked while the key survives; the
+  `#retid-toggle` Settings row mirrors/revokes (revoke deletes the id).
+  Testing aid: the `#reset-consent` Settings button (visible while the
+  Debug HUD toggle is on) forgets the answer + id and re-arms the
+  per-session latch, so the next crash re-runs the flow (`pegasus_play_count`
+  is left alone — a test device is already past the gate).
+  **Safari ITP purges script-writable storage after 7 days of Safari use
+  without a visit** — a long-lapsed device loses the key and is legitimately
+  re-asked; D30-style retention undercounts iOS/Safari.
+- **Events** (allowlisted backend-side; see pegasus-backend CLAUDE.md):
+  `session_start` (touch/viewport bucket/dpr), `session_end` (on every
+  tab-hide via beacon — durationMs/activeMs/hiddenMs/bgCount/runs; analysis
+  takes the max per session, no heartbeats), `screen_view` (in
+  `showScreen`, consecutive-deduped), `ui_click` (ONE delegated listener on
+  `#menu` — nearest ancestor with an id, containers skipped — plus the
+  corner buttons via `onTap`, whose `preventDefault`ed touchstart never
+  produces a click), `run_start`/`run_end` (wasm channel below),
+  `replay_watch`, `error` (drained from the boot guard's `window.__pegErrs`
+  buffer — the guard stays standalone, push-only, ≤10 entries),
+  `stale_cache` (toast shown / reload), `consent_choice`.
+- **Wasm run channel** (`src/main.rs`, next to the RUN_SEQ block):
+  `run_start_seq()` bumps when the armed-idle gate flips;
+  `report_run_analytics` publishes cause/ticks/dist/fuel/hull mirrors +
+  `run_end_seq()` — **no GHOST_MIN_SECS gate** (short runs are difficulty
+  signal, flagged `short` = < 240 ticks JS-side), zero-tick runs skipped,
+  payload stored before the seq bump. Called at both `report_run_end` call
+  sites; the highscore channel is untouched. Polled by JS on the existing
+  500 ms `collectEndedRun` cadence and once before a level switch (the run
+  banks under the OLD level).
+- **Transport**: in-memory queue (cap 100, drop-oldest), `(sessionId, seq)`
+  is the server-side dedupe key; flush every 15 s via `fetch` (string body)
+  and on `visibilitychange→hidden`/`pagehide` via `navigator.sendBeacon`.
+  **Both sends are `text/plain` CORS simple requests — no preflight. Never
+  "fix" this to a Blob typed `application/json`**: that forces a preflight
+  sendBeacon handles inconsistently; the lambda parses the raw body and
+  ignores content-type by design.
 
 **Hard-won caveat (2026-07): query strings do NOT reliably bust the cache.**
 An intermediary on the owner's phone served one broken `pr-59/index.html` for
@@ -1083,7 +1151,7 @@ commit the refreshed page.
 - **Always open a PR** after pushing a feature branch — standing instruction
   from the owner (no need to ask first). The PR also produces a phone-testable
   preview deployment at `pr-<n>/`.
-- Development branch: `claude/highscores-api-dialog-btzwny` (current); previous: `claude/crash-replay-dialog-qmvtn8`
+- Development branch: `claude/game-analytics-planning-verjk8` (current); previous: `claude/highscores-api-dialog-btzwny`
 - Merges to `main` via rebase PRs using the GitHub MCP tools (`mcp__github__create_pull_request`, `mcp__github__merge_pull_request`).
 - **Curate the branch before merging.** Rebase merges land every branch
   commit on `main` verbatim, so branch noise becomes permanent history.
