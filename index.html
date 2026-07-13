@@ -1024,11 +1024,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">b96c84a</div>
+        <div class="info-value" id="git-rev">11403c3</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-13T20:45:12Z</div>
+        <div class="info-value" id="build-time">2026-07-13T22:12:33Z</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors, which site
@@ -1069,7 +1069,7 @@
       </div>
       <div class="mbtn primary" id="btn-again">Fly again</div>
       <div class="mbtn" id="btn-replay">Watch replay</div>
-      <div class="mbtn" id="btn-gomenu">Main menu</div>
+      <div class="mbtn back" id="btn-gomenu">&#8249; Back</div>
     </div>
 
     <!-- One-time analytics consent ask: its own full screen, slotted
@@ -1358,12 +1358,14 @@
       if (id === "scr-scores") renderScores();
       if (id === "scr-about") renderBuildTime();
       pegAnalytics.screen(id); // funnel signal (consecutive-deduped inside)
+      syncHistory();
     }
     function closeMenu() {
       overlay = null;
       menuEl.classList.remove("open");
       hudBtns.classList.add("on");
       setPause(0);
+      syncHistory();
     }
 
     // Taps inside the menu / corner buttons must never reach the canvas
@@ -1423,8 +1425,11 @@
       closeMenu(); // state flips to replay; the poll below brings us back
     });
     document.getElementById("btn-gomenu").addEventListener("click", () => {
+      // Back from the game-over screen: end the run (the fresh ship waits
+      // behind the menu) and return to the level picker — or home when
+      // there's no level list.
       call("ui_command", 1);
-      showScreen("scr-home");
+      levelFiles.length ? openLevelPicker("fly") : showScreen("scr-home");
     });
 
     // In-game corner buttons.
@@ -1453,6 +1458,167 @@
       if (overlay === null) showScreen("scr-pause");
       else if (overlay === "scr-pause") closeMenu();
     });
+
+    // =====================================================================
+    // Hardware / browser back = one step back in the game UI
+    // =====================================================================
+    // Android's back button (and browser Back / iOS edge-swipe) must step
+    // back through the game's screens, not dump the player out of the
+    // site. Session history mirrors the LOGICAL SCREEN STACK — one entry
+    // per screen (histPath gives each UI state its canonical ancestor
+    // chain), each tagged {pegasus, s: state, d: depth}. Entries matter
+    // beyond popstate routing: mobile browsers animate a back navigation
+    // with a stored SCREENSHOT of the destination entry, so the entry
+    // beneath the current one must BE the screen back will land on —
+    // that's why a single sentinel entry didn't work (its one screenshot
+    // — the main menu — flashed before every real destination). Because
+    // showScreen flips the DOM and reconciles in the same task, each
+    // entry's screenshot is the screen it represents.
+    //
+    // A back press runs uiBack() — the current state's own Back action,
+    // via the UI's real controls — and syncHistory() reconciles the
+    // session history to the new state's canonical path afterwards:
+    // deeper → pushState, one up → the traversal already happened,
+    // lateral (the crash flow name → consent → game-over swaps at one
+    // depth) → replaceState, jumps (exit-to-menu) → history.go(-k) with
+    // the resulting popstate swallowed and reconciliation continued
+    // there. UI Back buttons need no special wiring: their showScreen
+    // lands one-above-target and reconcile issues the real history.go.
+    // At depth 0 (home / announce) there is nothing beneath, so back
+    // leaves the site as usual.
+    let histDepth = 0;
+    const histEntries = []; // depth -> state string, our mirror of the entries
+    let histSwallow = 0;    // popstates from our own go()/back(), not the user
+    const hs0 = history.state;
+    if (hs0 && hs0.pegasus && typeof hs0.d === "number") {
+      // Reload landed mid-stack (history.state survives reloads): adopt
+      // the depth; the boot reconcile below unwinds to the announce root.
+      histDepth = hs0.d;
+      histEntries[histDepth] = hs0.s;
+    } else {
+      history.replaceState({ pegasus: 1, s: "scr-announce", d: 0 }, "");
+      histEntries[0] = "scr-announce";
+    }
+
+    // The canonical entry chain (root -> state) for every UI state.
+    // "game" = no overlay: flight, the wreck phase and replay playback.
+    function histPath(s) {
+      switch (s) {
+        case "scr-announce": return ["scr-announce"];
+        case "scr-home":     return ["scr-home"];
+        case "scr-levels":   return ["scr-home", "scr-levels"];
+        case "scr-scores":   return levelFiles.length
+          ? ["scr-home", "scr-levels", "scr-scores"]
+          : ["scr-home", "scr-scores"]; // no manifest: boards open directly
+        case "scr-settings": return ["scr-home", "scr-settings"];
+        case "scr-about":    return ["scr-home", "scr-about"];
+        case "scr-whatsnew": return ["scr-home", "scr-about", "scr-whatsnew"];
+        case "game":         return ["scr-home", "game"];
+        case "scr-pause":    return ["scr-home", "game", "scr-pause"];
+        case "scr-gameover": return levelFiles.length
+          ? ["scr-home", "scr-levels", "scr-gameover"] // back = level picker
+          : ["scr-home", "scr-gameover"];
+        case "scr-consent":  return ["scr-home", "game", "scr-consent"];
+        case "scr-name":     return nameReturnTo === "scr-settings"
+          ? ["scr-home", "scr-settings", "scr-name"] // the Settings name editor
+          : ["scr-home", "game", "scr-name"];        // the crash-flow submit ask
+        default:             return ["scr-home", s]; // future screens: child of home
+      }
+    }
+    function histTag(s) { return { pegasus: 1, s: s, d: histDepth }; }
+    function histState() { return overlay === null ? "game" : overlay; }
+
+    function syncHistory() {
+      // A traversal of ours is still in flight: reconciling now would
+      // double-issue it (go() is async). The swallowed popstate calls
+      // back in here with the settled depth and the CURRENT ui state.
+      if (histSwallow > 0) return;
+      const cur = histState();
+      const target = histPath(cur);
+      const top = target.length - 1;
+      // The lazily-armed flight guard (below) is a legal extra entry.
+      if (cur === "game" && histDepth === top + 1 &&
+          histEntries[histDepth] === "game") return;
+      if (histDepth > top) {
+        // Above the target depth (a UI Back button, exit-to-menu, fly
+        // again): perform the real traversal; the swallowed popstate
+        // re-runs this reconciler on arrival.
+        histSwallow++;
+        history.go(top - histDepth);
+        return;
+      }
+      if (histEntries[histDepth] !== target[histDepth]) {
+        // Lateral move at one depth (crash flow, announce -> home).
+        histEntries[histDepth] = target[histDepth];
+        history.replaceState(histTag(target[histDepth]), "");
+      }
+      while (histDepth < top) {
+        // Deeper: push the missing tail (clobbers any forward entries).
+        histDepth++;
+        histEntries.length = histDepth;
+        histEntries[histDepth] = target[histDepth];
+        history.pushState(histTag(target[histDepth]), "");
+      }
+      histEntries.length = histDepth + 1;
+      if (cur === "game") armFlightGuard();
+    }
+
+    // In-flight, back should PAUSE, not exit — so once a flight frame has
+    // PAINTED, a duplicate "game" entry goes on top. A back press pops
+    // the duplicate (whose beneath-screenshot is the flight itself, so
+    // the browser's back preview shows the game, not the menu) and
+    // uiBack opens the pause screen in its slot. Armed a frame late so
+    // the screenshot is right; re-armed after every resume.
+    let guardQueued = false;
+    function armFlightGuard() {
+      if (guardQueued) return;
+      guardQueued = true;
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        guardQueued = false;
+        if (histState() !== "game" || histSwallow > 0) return;
+        if (histDepth !== 1 || histEntries[1] !== "game") return; // moved on
+        histDepth++;
+        histEntries.length = histDepth;
+        histEntries[histDepth] = "game";
+        history.pushState(histTag("game"), "");
+      }));
+    }
+
+    function uiBack() {
+      if (overlay === null) {
+        // In-game: back exits a replay, otherwise opens the pause screen —
+        // the same actions as the ✕ corner buttons (driven as clicks so
+        // analytics sees them like taps).
+        const st = (typeof wasm_exports !== "undefined" && wasm_exports.ui_state)
+          ? wasm_exports.ui_state() : 0;
+        (st === 3 ? exitReplayBtn : pauseBtn).click();
+      } else if (overlay === "scr-pause") {
+        document.getElementById("btn-resume").click();
+      } else if (overlay === "scr-consent") {
+        // The consent ask has no default answer — back just re-arms.
+      } else {
+        // Generic: the screen's own Back button (the name dialog's Skip
+        // carries the same class) — any future screen with an .mbtn.back
+        // gets hardware back for free. Root screens (home / announce)
+        // have none: no action, depth stays 0, the next back exits.
+        const b = document.querySelector("#" + overlay + " .mbtn.back");
+        if (b) b.click();
+      }
+    }
+    window.addEventListener("popstate", e => {
+      // Trust the landed entry's own tag — it survives reloads and keeps
+      // fast sequences racing our own async go() self-consistent.
+      if (e.state && e.state.pegasus) {
+        histDepth = e.state.d || 0;
+        histEntries[histDepth] = e.state.s;
+      } else {
+        histDepth = 0;
+      }
+      if (histSwallow > 0) { histSwallow--; syncHistory(); return; }
+      uiBack();
+      syncHistory(); // covers actions that open no screen (replay exit, consent)
+    });
+    syncHistory(); // boot: a reload that landed mid-stack unwinds to the root
 
     // Watch the game's mode: a finished crash (state 2) with no overlay up
     // becomes the game-over screen; a replay watched from the menu (state 3)
@@ -1731,7 +1897,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "b96c84a";
+    const wasmRev = "11403c3";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git

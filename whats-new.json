@@ -1,5 +1,15 @@
 [
  {
+  "rev": "11403c3",
+  "date": "2026-07-14T00:11:56+02:00",
+  "note": "The crash screen's menu button is now a Back button that returns to level selection, and the phone back button goes there too"
+ },
+ {
+  "rev": "4180522",
+  "date": "2026-07-14T00:11:56+02:00",
+  "note": "The phone/browser back button now steps back through the game's menus instead of leaving the game"
+ },
+ {
   "rev": "b96c84a",
   "date": "2026-07-13T22:44:28+02:00",
   "note": "What's New entries are now ordered by when each change went live"
