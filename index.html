@@ -1779,8 +1779,9 @@
         .then(r => (r.ok ? r.json() : null))
         .then(data => {
           if (!data) return;
-          putBoard(stem, "alltime", data);
-          apply(data);
+          const scores = data.scores || []; // API envelope is {scores: [...]}, not a bare array
+          putBoard(stem, "alltime", scores);
+          apply(scores);
         })
         .catch(() => {});
     }
