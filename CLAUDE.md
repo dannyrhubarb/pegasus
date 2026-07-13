@@ -142,6 +142,11 @@ form elements**. Palette in `:root` (`--cyan`/`--magenta`/`--amber`/
 `--green`). Respects `prefers-reduced-motion`. One `.screen` is visible at a
 time; the page **boots with the main menu open** (markup, not JS, so it shows
 while the wasm loads):
+- **scr-announce** (TEMPORARY, currently the actual boot screen): a
+  load-time announcement dialog ("Attention you floor scraping maggots…")
+  shown before scr-home; "Roger that" dismisses to the main menu. Remove
+  the screen, its `.announce-msg` CSS and the `overlay` boot value together
+  when the message expires — scr-home then takes back the markup `on` class.
 - **scr-home**: PEGASUS title + the **animated ship hero** (`.ship-hero`, the
   real vector ship — same geometry as `icon.svg` / `src/ship_mesh.rs` —
   inlined so it ships with `index.html`; bobs, flame flickers; hidden under
