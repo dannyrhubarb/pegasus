@@ -213,6 +213,51 @@ The menu container and the corner buttons swallow `mousedown`/`touchstart`
 taps never reach the canvas and fire the thruster. Esc toggles the pause
 screen on desktop.
 
+### Hardware / browser back navigation
+Android's back button (and browser Back / iOS edge-swipe) steps back ONE
+step in the game UI instead of leaving the site. Implementation
+(`index.html`, the block after the Esc handler): session history
+**mirrors the logical screen stack — one entry per screen**, each tagged
+`{pegasus, s: <state>, d: <depth>}`; `histPath(state)` defines every UI
+state's canonical ancestor chain (`[home]`, `[home, levels]`,
+`[home, levels, scores]`, `[home, game]`, `[home, game, pause]`, …;
+`"game"` = no overlay: flight/wreck/replay; scr-name's path follows
+`nameReturnTo`). **Why entry-per-screen instead of a single sentinel
+(lesson, 2026-07)**: mobile browsers animate back with a stored
+SCREENSHOT of the destination entry — with one sentinel the lone
+underlying entry's screenshot (the main menu, the frame painted when the
+sentinel was armed) flashed before EVERY real destination (seen in the
+field: board → menu flash → picker). Entries must therefore BE their
+screens; since `showScreen` flips the DOM and reconciles in the same
+task (before paint), each entry's screenshot shows the screen it
+represents, so the preview always matches where back lands.
+On `popstate`, `uiBack()` performs the current state's own Back action by
+clicking the UI's real controls (analytics logs them like taps):
+generically **the screen's `.mbtn.back`** (levels / scores / settings /
+about / what's-new — and scr-name, whose Skip carries the class; any new
+screen with an `.mbtn.back` gets hardware back for free), pause → Resume,
+**game-over → Fly again** (the entry beneath is the run; Main menu stays
+a button), flight → pause screen (like Esc/✕), replay → exit replay (✕);
+scr-consent deliberately no-ops. Afterwards `syncHistory()` (also called
+at the end of `showScreen`/`closeMenu`) **reconciles** history to the new
+state's path: deeper → `pushState`, lateral (the crash flow's
+name → consent → game-over swaps at one depth) → `replaceState`, jumps
+(UI Back buttons, exit-to-menu, fly-again) → `history.go(-k)` with the
+resulting popstate swallowed (`histSwallow`) and reconciliation resumed
+on arrival (`syncHistory` is a NO-OP while a traversal is in flight —
+go() is async, reconciling early would double-issue it). So UI Back
+buttons pop the real entries with zero per-button wiring. At depth 0
+(home / announce) back leaves the site normally; a reload landing
+mid-stack unwinds to a rooted announce at boot (`history.state` survives
+reloads); the forward button is neutralized. **Flight guard**: in-flight,
+back must PAUSE rather than exit, so once a flight frame has PAINTED
+(double-rAF, `armFlightGuard`) a duplicate `"game"` entry is pushed —
+back pops it (preview screenshot = the flight itself) and pause/game-over
+/name/consent take its slot via replace. Verified with a scratch
+Playwright suite (40 checks: entry tags per step, unwind chains, UI-back
+= real pop, exit-at-root, reload self-heal, forward button, flight guard
+pause⇄resume, rapid churn).
+
 ### wasm ↔ JS menu bridge (`src/main.rs`)
 - `set_ui_pause(i32)` → `UI_PAUSE`: any open screen freezes the live sim —
   the physics/stick/input paths are gated on `!ui_paused` and `phys_accum`
