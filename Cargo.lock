@@ -543,6 +543,14 @@ name = "pegasus"
 version = "0.1.0"
 dependencies = [
  "macroquad",
+ "pegasus-sim",
+]
+
+[[package]]
+name = "pegasus-sim"
+version = "0.1.0"
+dependencies = [
+ "glam",
  "miniz_oxide",
  "rapier2d",
 ]

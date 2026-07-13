@@ -4,11 +4,15 @@ version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 
+[workspace]
+members = ["sim-core"]
+
 [dependencies]
-rapier2d = { version = "0.23", features = ["default"] }
+# The deterministic core (sim/world/replay + the replay blob codec) lives in
+# its own macroquad-free crate so the score backend can compile the exact
+# same simulation for server-side verification.
+pegasus-sim = { path = "sim-core" }
 macroquad = "0.4"
-# Deflate for the shareable replay blob (pure Rust, wasm-friendly).
-miniz_oxide = "0.8"
 
 # Real audio only on the web build: the audio feature pulls quad-snd, which
 # needs ALSA headers to link native Linux builds. Native dev builds use

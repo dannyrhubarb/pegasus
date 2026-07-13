@@ -3,7 +3,7 @@
 // pure function of GLOBAL column indices (no seams) and row 0 must stay
 // exactly on the collider line — see CLAUDE.md "Faceted wall rendering".
 
-use crate::world::*;
+use pegasus_sim::world::*;
 use macroquad::prelude::*;
 
 // Vertex shader: passes screen-pixel position as a varying so the
