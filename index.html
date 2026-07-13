@@ -1771,7 +1771,8 @@
       const e = globalBestEntryFor(file);
       els.d.textContent = e && e.score > 0 ? "best " + Math.round(e.score) + " m" : "—";
       els.by.textContent =
-        levelPickerMode === "scores" && e && e.name ? "by " + e.name : "";
+        levelPickerMode === "scores" && e && e.name
+          ? "by " + e.name.toUpperCase() : "";
     }
     function renderLevels() {
       // A chooser, not a status view — no pre-selected highlight. The "best"

@@ -2010,9 +2010,11 @@ async fn main() {
                 // silhouette (unrotated; empty = no label, e.g. offline).
                 let name = GHOST_NAME.lock().unwrap();
                 if !name.is_empty() {
+                    // Names render uppercase everywhere (boards, picker, HUD).
+                    let label = name.to_uppercase();
                     let fs = 20.0 * ui;
-                    let dim = measure_text(&*name, None, fs as u16, 1.0);
-                    draw_text(&*name, gs.x - dim.width / 2.0,
+                    let dim = measure_text(&label, None, fs as u16, 1.0);
+                    draw_text(&label, gs.x - dim.width / 2.0,
                         gs.y + 1.05 * view_scale + fs,
                         fs, Color::from_rgba(150, 190, 255, 150));
                 }
@@ -2707,7 +2709,8 @@ async fn main() {
         if world_sim.level.scoring == Scoring::Distance {
             let name = BEST_NAME.lock().unwrap();
             if !name.is_empty() {
-                let by = format!("by {}", *name);
+                // Names render uppercase everywhere (boards, picker, ghost).
+                let by = format!("by {}", name.to_uppercase());
                 let mut by_fs = small_fs * 0.78;
                 let by_dim = measure_text(&by, None, by_fs as u16, 1.0);
                 if by_dim.width > mm_w - ro_margin {

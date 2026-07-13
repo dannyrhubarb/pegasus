@@ -679,7 +679,7 @@ icons; see "Fuel"), then the **primary readout** — the run **distance**
 (`{max_dist} m`, or the **score** on pads levels), **big** (`100*ui`, the
 best `0.36×` beneath, and under that the record attribution "by <pilot>"
 at `0.78×` of the BEST size — `BEST_NAME`, see "Online high scores";
-hidden when empty), **left-aligned** to the column's left edge (`mm_ox`,
+hidden when empty; pilot names render UPPERCASE everywhere they appear), **left-aligned** to the column's left edge (`mm_ox`,
 plus a `20*ui` margin) and **shrunk to the minimap width** so long numbers
 stay inside the column. (It's drawn in the gauge block, after the bars are
 laid out, so it can sit below them.) All HUD text/icon sizes are `× ui`, and
