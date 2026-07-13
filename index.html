@@ -493,6 +493,8 @@
     }
     .rowlist .row .lbest-by { color: var(--faint); font-size: 0.78em; white-space: nowrap; }
     .rowlist .row .lbest-by:empty { display: none; }
+    /* Drill-down chevron (scores-mode picker: a row opens that level's board) */
+    .rowlist .row .chev { color: var(--cyan); font-size: 1.25em; line-height: 1; opacity: 0.65; }
     #scores-list .rank { color: var(--amber); width: 1.6em; text-align: left; }
     #scores-list .dist { font-weight: 700; min-width: 4.5em; text-align: right; color: var(--text); }
     /* Two-line global entry: pilot name over the localised date+time */
@@ -1793,6 +1795,13 @@
         levelBestEls[file] = { d: bd, by };
         setLevelBest(file);
         row.append(name, best);
+        if (levelPickerMode === "scores") {
+          // Drill-down affordance: tapping a row opens that level's board.
+          const chev = document.createElement("span");
+          chev.className = "chev";
+          chev.textContent = "›";
+          row.appendChild(chev);
+        }
         row.addEventListener("click", () => {
           if (levelPickerMode === "scores") {
             // View this level's board WITHOUT reloading the game (checking a
@@ -1963,7 +1972,8 @@
       const mins = Math.max(1, Math.floor((end - now.getTime()) / 60000));
       const d = Math.floor(mins / 1440), h = Math.floor((mins % 1440) / 60), m = mins % 60;
       const dur = d > 0 ? d + "d " + h + "h" : h > 0 ? h + "h " + m + "m" : m + "m";
-      scoresReset.textContent = "board resets in " + dur;
+      scoresReset.textContent = (scoresPeriod === "week"
+        ? "This week's board resets in " : "Today's board resets in ") + dur;
     }
     setInterval(() => { if (overlay === "scr-scores") updateResetHint(); }, 30000);
     const scoresStatus = document.getElementById("scores-status");

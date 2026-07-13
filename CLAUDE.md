@@ -157,9 +157,10 @@ while the wasm loads):
   pre-selected highlight**. The per-row "best" is the level's **global
   all-time record** (the #1 from the board cache, refreshed by
   `prefetchGlobalBests` on every open); "—" offline/unknown. In **scores
-  mode** each row also shows "by <pilot>" under the record; fly mode
-  keeps the compact single line. Row-best updates go through
-  `setLevelBest` (in-place, per the rule below). **DOM-stability rule (hard-won)**: async results update the
+  mode** each row also shows "by <pilot>" under the record and a `›`
+  drill-down chevron (the row opens that level's board); fly mode keeps
+  the compact single line. Row-best updates go through `setLevelBest`
+  (in-place, per the rule below). **DOM-stability rule (hard-won)**: async results update the
   row text IN PLACE (`levelBestEls`) — rebuilding the rows under an
   in-flight tap retargeted the tap to whatever landed at those coordinates,
   including the Back button right below the list (= surprise exit to the
@@ -1086,8 +1087,9 @@ the real backend. All JS-side in `index.html`:
   cached board paints instantly on entry while a fresh fetch runs in the
   background; a neon ring spinner (in `#scores-wait`, a FIXED-HEIGHT slot so
   the list never shifts under a tap — shared with the **bucket-reset
-  countdown** `updateResetHint` shows on Today / This week: "board resets
-  in 1h 8m", UTC bucket ends, re-ticked every 30 s) shows during any
+  countdown** `updateResetHint` shows on Today / This week: "Today's
+  board resets in 1h 8m", UTC bucket ends, re-ticked every 30 s) shows
+  during any
   board/replay fetch,
   and the error line only shows when there's nothing cached to fall back
   on. **Refetched on every entry**
