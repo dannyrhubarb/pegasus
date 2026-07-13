@@ -182,7 +182,7 @@ while the wasm loads):
   default), **Debug HUD** (`#debug-toggle-row`, `pegasus_debug_hud`, **off by
   default** → `set_debug_hud` → `DEBUG_HUD`; shows the telemetry text line —
   see "HUD") as styled toggles; same localStorage → export → atomic plumbing.
-  Plus **Share returning-player id** (`#retid-toggle-row`) — JS-only, mirrors
+  Plus **Share anonymous returning-player id** (`#retid-toggle-row`) — JS-only, mirrors
   the analytics consent choice (see "Analytics"); no wasm export behind it —
   and the **Pilot name** row (`#name-row`, hidden offline) — opens the
   submit-score dialog in edit mode (see "Online high scores").

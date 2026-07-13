@@ -623,6 +623,9 @@
       user-select: none;
       -webkit-user-select: none;
     }
+    /* Labels sit left (the screen centres text, so a wrapped long label
+       would otherwise centre its lines). */
+    .setrow span:first-child { flex: 1; text-align: left; }
     .setrow input { display: none; }
     .setrow .tgl {
       flex: 0 0 auto;
@@ -956,7 +959,7 @@
         <input type="checkbox" id="debug-toggle"><span class="tgl"></span>
       </label>
       <label class="setrow" id="retid-toggle-row">
-        <span>Share returning-player id</span>
+        <span>Share anonymous returning-player id</span>
         <input type="checkbox" id="retid-toggle"><span class="tgl"></span>
       </label>
       <div class="setrow" id="name-row" style="display:none">
@@ -983,8 +986,9 @@
         Anonymous play stats (runs, distances, menu taps, errors) are sent to
         the developer to improve the game &mdash; no account, no ads, no third
         parties, no IP address stored. Optionally (Settings &rarr; &ldquo;Share
-        returning-player id&rdquo;) a random id is kept on this device so
-        returning players can be counted; switching it off deletes the id.
+        anonymous returning-player id&rdquo;) a random id is kept on this
+        device so returning players can be counted; switching it off deletes
+        the id.
       </div>
       <a class="mbtn" href="third-party-licenses.html" target="_blank" rel="noopener">Third-party licenses</a>
       <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
@@ -2679,8 +2683,8 @@
       };
     })();
 
-    // "Share returning-player id" toggle mirrors the consent choice; turning
-    // it off deletes the stored id.
+    // "Share anonymous returning-player id" toggle mirrors the consent
+    // choice; turning it off deletes the stored id.
     const retidToggle = document.getElementById("retid-toggle");
     retidToggle.checked =
       localStorage.getItem("pegasus_analytics_consent") === "1" &&
