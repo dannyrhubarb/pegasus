@@ -22,6 +22,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history — build-site generates whats-new.json from commit trailers
 
       - name: Resolve revision
         id: rev

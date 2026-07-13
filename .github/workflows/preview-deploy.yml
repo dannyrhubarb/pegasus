@@ -31,6 +31,8 @@ jobs:
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history — build-site generates whats-new.json from commit trailers
 
       # Label the build with the PR head sha (the merge-commit sha the
       # checkout sits on means nothing to a reviewer) plus the scope, so the

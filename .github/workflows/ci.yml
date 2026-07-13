@@ -11,6 +11,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so the whats-new check sees commit trailers
+
+      # Deploy-time site generation that would otherwise first break on
+      # main: the What's New data must generate and be valid JSON.
+      - name: Check whats-new generation
+        run: python3 tools/gen-whats-new.py | python3 -m json.tool > /dev/null
 
       - name: Install Rust wasm target
         run: rustup target add wasm32-unknown-unknown
