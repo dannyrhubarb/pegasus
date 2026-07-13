@@ -1,5 +1,10 @@
 [
  {
+  "rev": "ae8f74f",
+  "date": "2026-07-13T18:36:43Z",
+  "note": "A message from the management greets you when the game loads"
+ },
+ {
   "rev": "b5762fa",
   "date": "2026-07-13T15:43:31Z",
   "note": "High scores are now verified on the server - a submitted run must carry its replay, which is re-simulated before it reaches the boards"
