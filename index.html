@@ -1761,18 +1761,15 @@
     let levelPickerMode = "fly";  // "fly" -> pick & load & fly; "scores" -> pick & show board
 
     const levelBestEls = {}; // file -> the row's {d, by} spans, for in-place updates
-    // Fill a row's best cell: the global record over "by <pilot>" (the
-    // attribution shows in the scores-mode picker, where the row IS the
-    // record; fly mode keeps the compact single line). In-place only — see
-    // the DOM-stability rule in renderLevels.
+    // Fill a row's best cell: the global record over "by <pilot>" (both
+    // picker modes). In-place only — see the DOM-stability rule in
+    // renderLevels.
     function setLevelBest(file) {
       const els = levelBestEls[file];
       if (!els) return;
       const e = globalBestEntryFor(file);
       els.d.textContent = e && e.score > 0 ? "best " + Math.round(e.score) + " m" : "—";
-      els.by.textContent =
-        levelPickerMode === "scores" && e && e.name
-          ? "by " + e.name.toUpperCase() : "";
+      els.by.textContent = e && e.name ? "by " + e.name.toUpperCase() : "";
     }
     function renderLevels() {
       // A chooser, not a status view — no pre-selected highlight. The "best"
