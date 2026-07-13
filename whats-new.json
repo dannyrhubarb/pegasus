@@ -10,6 +10,11 @@
   "note": "High scores are now verified on the server - a submitted run must carry its replay, which is re-simulated before it reaches the boards"
  },
  {
+  "rev": "08ff66b",
+  "date": "2026-07-13T15:06:59Z",
+  "note": "While chasing the record, the HUD now keeps showing the previous best instead of mirroring your current score"
+ },
+ {
   "rev": "3f6e045",
   "date": "2026-07-13T11:41:10Z",
   "note": "See what changed — a What's New page in the About screen"
