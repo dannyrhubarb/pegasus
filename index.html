@@ -993,11 +993,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">ef900e2</div>
+        <div class="info-value" id="git-rev">a091191</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-13T13:01:23Z</div>
+        <div class="info-value" id="build-time">2026-07-13T14:30:24Z</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors, which site
@@ -1698,7 +1698,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "ef900e2";
+    const wasmRev = "a091191";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -2204,12 +2204,20 @@
       localStorage.setItem("pegasus_player_name", name);
       nameCur.textContent = name;
       if (pendingSubmit) {
+        pegAnalytics.enqueue("score_submit",
+          { action: "submitted", level: levelStem(pendingSubmit.file) });
         submitScore(pendingSubmit.file, pendingSubmit.entry);
         pendingSubmit = null;
       }
       showScreen(nameReturnTo);
     });
     document.getElementById("btn-name-skip").addEventListener("click", () => {
+      // Only the crash-flow ask counts as a skip — closing the Settings
+      // name editor (no pending run) is not a submit decision.
+      if (pendingSubmit) {
+        pegAnalytics.enqueue("score_submit",
+          { action: "skipped", level: levelStem(pendingSubmit.file) });
+      }
       pendingSubmit = null; // this run stays unsubmitted; asks again next crash
       showScreen(nameReturnTo);
     });
