@@ -407,7 +407,10 @@ the game stays on the compiled-in `Level::demo()`.
 restore) raises the `BEST_DIST` atomic live; JS polls `get_best_dist()`
 every 2 s into `localStorage` (`pegasus_best_<file>`, per level file) and
 pushes the stored value back via `set_best_dist()` after every level load
-(`load_level` zeroes it so bests never leak across levels).
+(`load_level` zeroes it so bests never leak across levels). When online,
+`applyGlobalRecord` then raises it to the level's **global all-time
+record** (see "Online high scores") — the HUD BEST is the world record,
+not just this device's.
 
 **Replays**: physics depends on the level, so the recording header carries
 `LevelParams` (scoring/shafts/obstacles/pad_spacing/seed — NOT the cosmetic
@@ -979,7 +982,9 @@ Live play and resim must perform IDENTICAL operation sequences:
 
 ### Ghost of the BEST run (re-sim driven)
 `ghost_rec` is the current level's **top-highscore** recording, pushed from
-JS (`load_ghost_blob`, see "High scores"): the game keeps the racing ghost
+JS (`load_ghost_blob` — the **global all-time record's replay** when
+online via `applyGlobalRecord`, else the local #1; see "High scores" /
+"Online high scores"): the game keeps the racing ghost
 recording, and a `ResimPlayer` re-simulates it in **LOCKSTEP** with live
 play — `while p.tick < recorder.ticks()` per live `sim.tick` (a `while`,
 not an `if`, so a ghost adopted a moment after the spawn catches up in one
@@ -1089,6 +1094,16 @@ config, so a PR preview talks to the real backend. All JS-side in
   base64 variant `pushBlobToWasm` now wraps it); the blob's header
   carries its level, so it re-sims in the right world regardless of the
   selected level.
+- **Global record → BEST + ghost** (`applyGlobalRecord`): after every
+  level load (and when config.json arrives, and after a successful
+  submit) the loaded level's **all-time board** is refreshed; the #1
+  score raises the in-game `BEST_DIST` (the HUD BEST = the world record)
+  and the best entry **with a replay** is fetched from CloudFront and
+  pushed via `load_ghost_blob` — the racing ghost is the global record
+  run. `ghostLoadedPath` dedupes the blob fetch; stale responses for a
+  since-switched level are dropped (and the game would reject a
+  wrong-level ghost anyway). Offline / empty board: silent no-op, the
+  local fallback (local best + local #1 ghost) stands.
 - E2E-tested headless (Playwright + a stub API server, scratch-only):
   crash → dialog → POST body → auto-post on second crash → global board →
   server replay playback. The submit threshold and dialog gating live in
