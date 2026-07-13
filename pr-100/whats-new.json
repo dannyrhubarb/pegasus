@@ -1,87 +1,102 @@
 [
  {
+  "rev": "37674f6",
+  "date": "2026-07-13T20:57:07Z",
+  "note": "Back-navigation previews now match where back actually takes you, and back on the crash screen flies again"
+ },
+ {
+  "rev": "b96c84a",
+  "date": "2026-07-13T22:44:28+02:00",
+  "note": "What's New entries are now ordered by when each change went live"
+ },
+ {
+  "rev": "08ff66b",
+  "date": "2026-07-13T21:44:37+02:00",
+  "note": "While chasing the record, the HUD now keeps showing the previous best instead of mirroring your current score"
+ },
+ {
   "rev": "7064408",
   "date": "2026-07-13T19:24:48Z",
   "note": "The phone/browser back button now steps back through the game's menus instead of leaving the game"
  },
  {
-  "rev": "ae8f74f",
-  "date": "2026-07-13T18:36:43Z",
-  "note": "A message from the management greets you when the game loads"
- },
- {
   "rev": "75dc06e",
-  "date": "2026-07-13T15:43:31Z",
+  "date": "2026-07-13T21:14:26+02:00",
   "note": "High scores are now verified on the server - a submitted run must carry its replay, which is re-simulated before it reaches the boards"
  },
  {
+  "rev": "ae8f74f",
+  "date": "2026-07-13T20:41:31+02:00",
+  "note": "A message from the management greets you when the game loads"
+ },
+ {
   "rev": "3f6e045",
-  "date": "2026-07-13T11:41:10Z",
+  "date": "2026-07-13T13:55:12+02:00",
   "note": "See what changed — a What's New page in the About screen"
  },
  {
   "rev": "6a4bcb8",
-  "date": "2026-07-13T10:32:45+00:00",
+  "date": "2026-07-13T12:46:15+02:00",
   "note": "Level picker shows the record holder in Fly mode too"
  },
  {
   "rev": "98535d7",
-  "date": "2026-07-13T10:31:17+00:00",
+  "date": "2026-07-13T12:46:15+02:00",
   "note": "The racing ghost stays hidden until your run actually starts"
  },
  {
   "rev": "586e0c1",
-  "date": "2026-07-13T10:30:56+00:00",
+  "date": "2026-07-13T12:46:15+02:00",
   "note": "The Caves is now distance-scored like the other levels"
  },
  {
   "rev": "fcfd33a",
-  "date": "2026-07-13T09:51:10+00:00",
+  "date": "2026-07-13T12:46:15+02:00",
   "note": "The racing ghost carries its pilot's callsign"
  },
  {
   "rev": "355aa7d",
-  "date": "2026-07-13T09:39:19+00:00",
+  "date": "2026-07-13T12:46:15+02:00",
   "note": "World records show who holds them — \"by <pilot>\" in the HUD and level picker"
  },
  {
   "rev": "f60d08b",
-  "date": "2026-07-13T08:27:42+00:00",
+  "date": "2026-07-13T12:46:15+02:00",
   "note": "The in-flight BEST and the racing ghost are the global world record"
  },
  {
   "rev": "3d74e7c",
-  "date": "2026-07-12T09:34:10+00:00",
+  "date": "2026-07-13T01:53:01+02:00",
   "note": "Anonymous play stats with an opt-in returning-player id (privacy note in About)"
  },
  {
   "rev": "e825716",
-  "date": "2026-07-11T22:51:35+00:00",
+  "date": "2026-07-12T00:57:22+02:00",
   "note": "Today / This week boards show a countdown to their reset"
  },
  {
   "rev": "16a9ecc",
-  "date": "2026-07-11T22:38:58+00:00",
+  "date": "2026-07-12T00:57:22+02:00",
   "note": "Dates and times are shown in your region's own format"
  },
  {
   "rev": "b708adc",
-  "date": "2026-07-11T20:49:29+00:00",
+  "date": "2026-07-12T00:57:22+02:00",
   "note": "Submitting a score is always an explicit choice — submit dialog on every crash"
  },
  {
   "rev": "227b215",
-  "date": "2026-07-11T20:34:44+00:00",
+  "date": "2026-07-12T00:57:22+02:00",
   "note": "Better boards: level records in the picker, timestamps, instant cached paint, scrolling"
  },
  {
   "rev": "0cb5f57",
-  "date": "2026-07-11T15:45:20+00:00",
+  "date": "2026-07-12T00:57:22+02:00",
   "note": "Simpler menu: level choice is a step inside Fly and High scores"
  },
  {
   "rev": "1e92987",
-  "date": "2026-07-11T15:29:11+00:00",
+  "date": "2026-07-11T17:31:40+02:00",
   "note": "Online high scores: global Today / This week / All time boards with pilot callsigns"
  },
  {
@@ -96,93 +111,93 @@
  },
  {
   "rev": "311057b",
-  "date": "2026-07-09T08:47:00+00:00",
+  "date": "2026-07-10T01:27:20+02:00",
   "note": "Runs start on your first input — take your time on the pad"
  },
  {
   "rev": "f91ed0f",
-  "date": "2026-07-09T08:26:50+00:00",
+  "date": "2026-07-09T10:27:45+02:00",
   "note": "HUD cleanup: big distance readout, fuel/hull icons, telemetry behind a Debug HUD setting"
  },
  {
   "rev": "c1d699e",
-  "date": "2026-07-09T06:38:18+00:00",
+  "date": "2026-07-09T08:40:11+02:00",
   "note": "New neon-arcade game menu with the animated ship"
  },
  {
   "rev": "f6793a0",
-  "date": "2026-07-09T06:25:42+00:00",
+  "date": "2026-07-09T08:40:11+02:00",
   "note": "The touch stick now spawns anywhere on screen"
  },
  {
   "rev": "d2a7933",
-  "date": "2026-07-09T06:01:33+00:00",
+  "date": "2026-07-09T08:40:11+02:00",
   "note": "Sound setting for the engine and crash audio (off by default)"
  },
  {
   "rev": "dbcac17",
-  "date": "2026-07-09T04:23:15+00:00",
+  "date": "2026-07-09T06:45:38+02:00",
   "note": "High scores with watchable replays, plus a race-the-best-run ghost"
  },
  {
   "rev": "30237d4",
-  "date": "2026-07-08T23:31:42+00:00",
+  "date": "2026-07-09T06:45:38+02:00",
   "note": "Three levels — The Expanse, The Glide and The Caves — with a level picker"
  },
  {
   "rev": "1fdaa77",
-  "date": "2026-07-08T21:40:19+00:00",
+  "date": "2026-07-08T23:43:11+02:00",
   "note": "The touch stick moved into the game canvas — smoother one-handed flight"
  },
  {
   "rev": "9049d5f",
-  "date": "2026-07-07T22:47:01+00:00",
+  "date": "2026-07-08T11:14:50+02:00",
   "note": "Race a translucent ghost of your previous run"
  },
  {
   "rev": "b1adf01",
-  "date": "2026-07-06T22:19:32+00:00",
+  "date": "2026-07-08T11:14:09+02:00",
   "note": "Crash dialog with an instant replay of the run"
  },
  {
   "rev": "1c9d104",
-  "date": "2026-07-06T19:08:33+00:00",
+  "date": "2026-07-06T21:14:07+02:00",
   "note": "Invert stick setting — pull back to pitch up, like a flight stick"
  },
  {
   "rev": "1c71d65",
-  "date": "2026-07-06T16:58:29+00:00",
+  "date": "2026-07-06T20:56:55+02:00",
   "note": "One-handed flight: holding the stick fires the main engine"
  },
  {
   "rev": "a8d30de",
-  "date": "2026-07-06T14:13:56+00:00",
+  "date": "2026-07-06T20:56:55+02:00",
   "note": "The stick commands nose direction — the ship rotates to where you push"
  },
  {
   "rev": "a7b6513",
-  "date": "2026-07-05T21:14:56+00:00",
+  "date": "2026-07-06T20:56:55+02:00",
   "note": "Gentler difficulty: graduated hull damage and softer handling"
  },
  {
-  "rev": "d69765e",
-  "date": "2026-07-05T12:38:00+00:00",
-  "note": "One zoom level across portrait and landscape on phones"
- },
- {
-  "rev": "cdeb3e6",
-  "date": "2026-07-05T09:53:36+00:00",
-  "note": "\"New build available\" reload toast when a fresh deploy lands"
- },
- {
   "rev": "9444be2",
-  "date": "2026-07-05T07:04:48+00:00",
+  "date": "2026-07-05T15:19:49+02:00",
   "note": "Landing pads: land to score and refuel"
  },
  {
+  "rev": "d69765e",
+  "date": "2026-07-05T15:19:22+02:00",
+  "note": "One zoom level across portrait and landscape on phones"
+ },
+ {
   "rev": "4ef1411",
-  "date": "2026-07-05T06:52:17+00:00",
+  "date": "2026-07-05T15:19:22+02:00",
   "note": "Sharp native-resolution rendering on high-DPI screens"
+ },
+ {
+  "rev": "cdeb3e6",
+  "date": "2026-07-05T14:35:19+02:00",
+  "note": "\"New build available\" reload toast when a fresh deploy lands"
  },
  {
   "rev": "e22d88d",
@@ -201,22 +216,22 @@
  },
  {
   "rev": "dc23bcc",
-  "date": "2026-07-04T21:54:25+00:00",
+  "date": "2026-07-04T23:57:26+02:00",
   "note": "Vertical shafts connect stacked cave layers — fly up and down forever"
  },
  {
   "rev": "ce687d7",
-  "date": "2026-06-22T20:28:38+00:00",
+  "date": "2026-06-22T22:34:43+02:00",
   "note": "Bluetooth/USB game controller support"
  },
  {
   "rev": "10c038e",
-  "date": "2026-06-17T14:40:21+00:00",
+  "date": "2026-06-17T16:57:36+02:00",
   "note": "The real ship from the original Flash game, extracted from the SWF"
  },
  {
   "rev": "78c19f7",
-  "date": "2026-06-16T22:50:35+00:00",
+  "date": "2026-06-17T11:57:32+02:00",
   "note": "Low-poly faceted crystal-rock look for walls and boulders"
  },
  {
