@@ -976,11 +976,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">2208eca-pr-91</div>
+        <div class="info-value" id="git-rev">7230423-pr-91</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-13T10:25:44Z</div>
+        <div class="info-value" id="build-time">2026-07-13T10:33:46Z</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors) are sent to
@@ -1619,7 +1619,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "2208eca-pr-91";
+    const wasmRev = "7230423-pr-91";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -1760,18 +1760,15 @@
     let levelPickerMode = "fly";  // "fly" -> pick & load & fly; "scores" -> pick & show board
 
     const levelBestEls = {}; // file -> the row's {d, by} spans, for in-place updates
-    // Fill a row's best cell: the global record over "by <pilot>" (the
-    // attribution shows in the scores-mode picker, where the row IS the
-    // record; fly mode keeps the compact single line). In-place only — see
-    // the DOM-stability rule in renderLevels.
+    // Fill a row's best cell: the global record over "by <pilot>" (both
+    // picker modes). In-place only — see the DOM-stability rule in
+    // renderLevels.
     function setLevelBest(file) {
       const els = levelBestEls[file];
       if (!els) return;
       const e = globalBestEntryFor(file);
       els.d.textContent = e && e.score > 0 ? "best " + Math.round(e.score) + " m" : "—";
-      els.by.textContent =
-        levelPickerMode === "scores" && e && e.name
-          ? "by " + e.name.toUpperCase() : "";
+      els.by.textContent = e && e.name ? "by " + e.name.toUpperCase() : "";
     }
     function renderLevels() {
       // A chooser, not a status view — no pre-selected highlight. The "best"
