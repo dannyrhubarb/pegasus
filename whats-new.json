@@ -5,6 +5,11 @@
   "note": "A message from the management greets you when the game loads"
  },
  {
+  "rev": "75dc06e",
+  "date": "2026-07-13T15:43:31Z",
+  "note": "High scores are now verified on the server - a submitted run must carry its replay, which is re-simulated before it reaches the boards"
+ },
+ {
   "rev": "3f6e045",
   "date": "2026-07-13T11:41:10Z",
   "note": "See what changed — a What's New page in the About screen"
