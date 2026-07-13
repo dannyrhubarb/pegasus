@@ -976,11 +976,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">eeddc2a-pr-92</div>
+        <div class="info-value" id="git-rev">6d4db0f-pr-92</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-13T11:14:36Z</div>
+        <div class="info-value" id="build-time">2026-07-13T11:23:28Z</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors) are sent to
@@ -1414,10 +1414,16 @@
       if (st === 2 && overlay === null && !uiCmdPending) {
         goDist.textContent = Math.round(wasm_exports.cur_dist()) + " m";
         goBest.textContent = "best " + Math.round(wasm_exports.get_best_dist()) + " m";
-        // Bank the just-ended run first (its run_end drives the play
-        // counter), then slot the one-time consent screen between the
+        // Collect the just-ended run SYNCHRONOUSLY before deciding which
+        // screen to open — an out-of-fuel game over publishes and enters
+        // state 2 in the same frame (no wreck-phase window like a crash),
+        // so waiting for the 500 ms collect poll could miss the submit
+        // dialog. Then bank the run for analytics (its run_end drives the
+        // play counter) and slot the one-time consent screen between the
         // score dialog and the game-over screen once the device has
-        // 3 plays: crash → [submit dialog] → [scr-consent] → scr-gameover.
+        // 3 plays: game over → [submit dialog] → [scr-consent] →
+        // scr-gameover.
+        collectEndedRun();
         pegAnalytics.pollRuns();
         const afterScore = pegAnalytics.consentDue() ? "scr-consent" : "scr-gameover";
         // Every crash-ended publishable run gets the submit/skip dialog in
@@ -1620,7 +1626,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "eeddc2a-pr-92";
+    const wasmRev = "6d4db0f-pr-92";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
