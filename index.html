@@ -1069,7 +1069,7 @@
       </div>
       <div class="mbtn primary" id="btn-again">Fly again</div>
       <div class="mbtn" id="btn-replay">Watch replay</div>
-      <div class="mbtn" id="btn-gomenu">Main menu</div>
+      <div class="mbtn back" id="btn-gomenu">&#8249; Back</div>
     </div>
 
     <!-- One-time analytics consent ask: its own full screen, slotted
@@ -1425,8 +1425,11 @@
       closeMenu(); // state flips to replay; the poll below brings us back
     });
     document.getElementById("btn-gomenu").addEventListener("click", () => {
+      // Back from the game-over screen: end the run (the fresh ship waits
+      // behind the menu) and return to the level picker — or home when
+      // there's no level list.
       call("ui_command", 1);
-      showScreen("scr-home");
+      levelFiles.length ? openLevelPicker("fly") : showScreen("scr-home");
     });
 
     // In-game corner buttons.
@@ -1512,7 +1515,9 @@
         case "scr-whatsnew": return ["scr-home", "scr-about", "scr-whatsnew"];
         case "game":         return ["scr-home", "game"];
         case "scr-pause":    return ["scr-home", "game", "scr-pause"];
-        case "scr-gameover": return ["scr-home", "game", "scr-gameover"];
+        case "scr-gameover": return levelFiles.length
+          ? ["scr-home", "scr-levels", "scr-gameover"] // back = level picker
+          : ["scr-home", "scr-gameover"];
         case "scr-consent":  return ["scr-home", "game", "scr-consent"];
         case "scr-name":     return nameReturnTo === "scr-settings"
           ? ["scr-home", "scr-settings", "scr-name"] // the Settings name editor
@@ -1589,10 +1594,6 @@
         (st === 3 ? exitReplayBtn : pauseBtn).click();
       } else if (overlay === "scr-pause") {
         document.getElementById("btn-resume").click();
-      } else if (overlay === "scr-gameover") {
-        // Fly again — the entry beneath the game-over screen is the run,
-        // so back drops you at the spawn (Main menu stays a button).
-        document.getElementById("btn-again").click();
       } else if (overlay === "scr-consent") {
         // The consent ask has no default answer — back just re-arms.
       } else {
