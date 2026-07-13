@@ -998,6 +998,10 @@ bounded burst), so both ships fly the same spawn clock and stay in sync
 through pauses (dialog/replay freeze live ticks → the ghost freezes too).
 The ghost renders as a translucent hull silhouette (`SHIP_TRIS`, no
 flame/details) at `lerped_pose(alpha)` with the live interpolation alpha,
+**with the ghost pilot's callsign floated just under it** (`GHOST_NAME` ←
+`set_ghost_name`, pushed with the blob by `applyGlobalRecord`; distinct
+from `BEST_NAME` — the ghost is the best run WITH a replay, which may not
+be the #1 score, and it keeps its pilot when BEST flips to "by you"),
 plus a pale-blue minimap dot; it vanishes at its own crash tick
 (`finished`). Hidden while the current ship is a wreck. Toggled by the
 **"Race best ghost"** Settings toggle (`set_ghost_enabled` → `GHOST_ON`,
@@ -1107,7 +1111,9 @@ the real backend. All JS-side in `index.html`:
   score raises the in-game `BEST_DIST` (the HUD BEST = the world record)
   and the best entry **with a replay** is fetched from CloudFront and
   pushed via `load_ghost_blob` — the racing ghost is the global record
-  run. The record holder's name rides along via `set_best_name` (the
+  run, its pilot's callsign following via `set_ghost_name` (drawn under
+  the in-game silhouette). The record holder's name rides along via
+  `set_best_name` (the
   `blob_in_ptr` buffer, UTF-8 text) and the HUD draws "by <pilot>" under
   the BEST line — flipped to "by you" by the game the moment the live run
   beats the record; skipped when the session's own best already exceeds

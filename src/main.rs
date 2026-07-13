@@ -388,6 +388,7 @@ pub extern "C" fn load_level(len: u32) {
         *PENDING_LEVEL.lock().unwrap() = Some(world::Level::parse(text));
         BEST_DIST.store(0, Ordering::Relaxed);
         BEST_NAME.lock().unwrap().clear();
+        GHOST_NAME.lock().unwrap().clear();
     }
 }
 
@@ -419,6 +420,20 @@ pub extern "C" fn set_best_name(len: u32) {
     let b = BLOB_IN.lock().unwrap();
     let end = (len as usize).min(b.len());
     *BEST_NAME.lock().unwrap() = String::from_utf8_lossy(&b[..end]).into_owned();
+}
+
+// The ghost pilot's callsign, floated under the racing silhouette. Pushed by
+// JS right after a successful load_ghost_blob — it can differ from BEST_NAME
+// (the ghost is the best run WITH a replay, which may not be the #1 score,
+// and BEST_NAME flips to "you" when the record falls while the ghost keeps
+// its pilot). Cleared on level load with the ghost itself.
+static GHOST_NAME: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_ghost_name(len: u32) {
+    let b = BLOB_IN.lock().unwrap();
+    let end = (len as usize).min(b.len());
+    *GHOST_NAME.lock().unwrap() = String::from_utf8_lossy(&b[..end]).into_owned();
 }
 
 // --- Highscores & best-run ghost (the global board is the store) ---
@@ -1990,6 +2005,16 @@ async fn main() {
                 let gc = Color::from_rgba(150, 190, 255, 70);
                 for t in SHIP_TRIS.iter() {
                     draw_triangle(g_rot(t[0], t[1]), g_rot(t[2], t[3]), g_rot(t[4], t[5]), gc);
+                }
+                // The ghost pilot's callsign floats just under the
+                // silhouette (unrotated; empty = no label, e.g. offline).
+                let name = GHOST_NAME.lock().unwrap();
+                if !name.is_empty() {
+                    let fs = 20.0 * ui;
+                    let dim = measure_text(&*name, None, fs as u16, 1.0);
+                    draw_text(&*name, gs.x - dim.width / 2.0,
+                        gs.y + 1.05 * view_scale + fs,
+                        fs, Color::from_rgba(150, 190, 255, 150));
                 }
             }
         }
