@@ -99,7 +99,9 @@ of the copyright holder.""",
 
 
 def wasm_dep_set():
-    """(name, version) pairs resolved for the wasm target, excluding pegasus."""
+    """(name, version) pairs resolved for the wasm target, excluding the
+    first-party workspace crates (pegasus + path members like pegasus-sim,
+    which cargo tree marks with an absolute path in parens)."""
     out = subprocess.run(
         ["cargo", "tree", "--target", "wasm32-unknown-unknown", "-e", "normal",
          "--prefix", "none"],
@@ -107,7 +109,7 @@ def wasm_dep_set():
     deps = set()
     for line in out.splitlines():
         m = re.match(r"^(\S+) v(\S+)", line.strip())
-        if m and m.group(1) != "pegasus":
+        if m and "(/" not in line:
             deps.add((m.group(1), m.group(2)))
     return deps
 

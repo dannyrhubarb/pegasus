@@ -1,0 +1,15 @@
+[package]
+name = "pegasus-sim"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "Pegasus deterministic simulation core: world generation, physics tick, hybrid replay format. Shared by the game (dannyrhubarb/pegasus) and the score-verification backend (dannyrhubarb/pegasus-backend)."
+
+[dependencies]
+rapier2d = { version = "0.23", features = ["default"] }
+# Pinned to the exact version macroquad 0.4.15 re-exports as its `Vec2` —
+# the game passes these types straight into rendering, so they must be the
+# SAME crate version or the two Vec2s won't unify.
+glam = "0.27"
+# Deflate for the shareable replay blob (pure Rust, wasm-friendly).
+miniz_oxide = "0.8"

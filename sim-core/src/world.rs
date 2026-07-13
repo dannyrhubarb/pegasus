@@ -4,7 +4,7 @@
 // is what lets the sliding collider windows load and evict freely. The
 // invariants are pinned by the tests at the bottom of main.rs.
 
-use macroquad::prelude::*;
+use glam::{vec2, Vec2};
 use rapier2d::prelude::*;
 
 use crate::replay::LevelParams;
@@ -203,6 +203,23 @@ impl Level {
     }
 }
 
+// The levels that ship with the game (levels/*.level, pinned via
+// include_str! so they compile into every consumer of this crate), keyed by
+// the level file STEM — the id the boards/backend key everything by. This is
+// what lets the server-side verifier check that a submitted replay's
+// LevelParams actually belong to the board it claims: an unknown stem (a
+// level added to levels/ after the backend was last built) can't be
+// params-checked, so verifiers should skip that check rather than reject.
+// EDITING a shipped .level file changes physics → redeploy the backend in
+// the same breath, or honest submissions on that level will be rejected.
+pub fn shipped_levels() -> Vec<(&'static str, Level)> {
+    vec![
+        ("caves", Level::parse(include_str!("../../levels/caves.level"))),
+        ("expanse", Level::parse(include_str!("../../levels/expanse.level"))),
+        ("glide", Level::parse(include_str!("../../levels/glide.level"))),
+    ]
+}
+
 // ---- Vertical shafts ------------------------------------------------------
 //
 // The world also repeats every V_PERIOD metres in y: identical copies of the
@@ -302,6 +319,9 @@ impl Rng {
     pub fn new(seed: u32) -> Self {
         Rng(hash_u32(seed ^ 0x9e37_79b9))
     }
+    // Not an Iterator: this can never end and must never be fused/adapted —
+    // world-gen call sites consume a fixed, order-sensitive number of draws.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> u32 {
         self.0 = hash_u32(self.0);
         self.0

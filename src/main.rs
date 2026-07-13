@@ -5,17 +5,14 @@ use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 
 mod audio;
 mod render;
-mod replay;
 mod ship_mesh;
-mod sim;
-mod world;
 
 use audio::*;
+use pegasus_sim::replay::{self, *};
+use pegasus_sim::sim::{self, *};
+use pegasus_sim::world::{self, *};
 use render::*;
-use replay::*;
 use ship_mesh::*;
-use sim::*;
-use world::*;
 
 struct Particle {
     x: f32, y: f32,
@@ -3336,6 +3333,28 @@ mod tests {
         assert_eq!(glide.scoring, Scoring::Distance);
         assert!(!glide.shafts);
         assert!(!glide.obstacles);
+    }
+
+    #[test]
+    fn shipped_levels_map_stays_in_sync_with_the_manifest() {
+        // The backend verifier params-checks submissions against
+        // world::shipped_levels() — a level listed in the manifest but
+        // missing there silently loses that check (unknown stems are
+        // accepted un-params-checked by design).
+        let manifest = include_str!("../levels/manifest.json");
+        let shipped = pegasus_sim::world::shipped_levels();
+        for (stem, lvl) in &shipped {
+            assert!(
+                manifest.contains(&format!("\"{stem}.level\"")),
+                "shipped_levels entry {stem} is not in levels/manifest.json"
+            );
+            assert!(!lvl.name.is_empty());
+        }
+        assert_eq!(
+            manifest.matches(".level").count(),
+            shipped.len(),
+            "levels/manifest.json and world::shipped_levels() are out of sync"
+        );
     }
 
     #[test]

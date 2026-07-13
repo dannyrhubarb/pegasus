@@ -21,7 +21,7 @@
 // `resim()` re-runs a hybrid Recording through a fresh Sim, which is what
 // makes recorded runs verifiable and shareable as pure input streams.
 
-use macroquad::prelude::Vec2;
+use glam::Vec2;
 use rapier2d::prelude::*;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
@@ -301,7 +301,6 @@ impl Sim {
     // the fresh sim a replay uses, and Rapier's contact solve is sensitive
     // to handle numbering (see the fresh-sim regression test). The game
     // creates a fresh Sim per run instead; this is for tests/tools.
-    #[allow(dead_code)]
     pub fn reset(&mut self, x: f32) {
         let kf = spawn_keyframe(&self.level, x);
         self.restore(&kf);
@@ -668,12 +667,12 @@ impl Sim {
     }
 }
 
-// The batch form of what main's ResimPlayer does incrementally for playback.
-// Not called by the game loop — it's the verification entry point for when
-// blobs leave the device (a server re-running a submitted run), and the
-// anchor of the determinism tests below.
+// The batch form of what the game's ResimPlayer does incrementally for
+// playback. Not called by the game loop — it's the verification entry point
+// for when blobs leave the device (the backend's submit lambda re-runs
+// submitted recordings through this crate), and the anchor of the
+// determinism tests below.
 
-#[allow(dead_code)]
 // Re-run a hybrid Recording through a fresh Sim: restore its first keyframe,
 // feed the input events tick by tick, and emit keyframes on the same cadence
 // the recorder used. With an unchanged binary and params this reproduces the

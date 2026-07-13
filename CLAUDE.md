@@ -6,8 +6,8 @@ Rust + macroquad 0.4.15 + Rapier 2D game compiled to WebAssembly and served via 
 
 ## Build & deploy
 ```bash
-cargo build          # native dev build (quick sanity check; silent — audio is wasm-only)
-cargo test           # unit tests for the deterministic world functions
+cargo build               # native dev build (quick sanity check; silent — audio is wasm-only)
+cargo test --workspace    # unit tests; --workspace is required or the sim-core crate's tests are skipped
 ```
 Deploy is automatic: any push to `main` triggers `.github/workflows/deploy.yml` which builds the WASM target and publishes to GitHub Pages. Build takes ~5–10 minutes.
 
@@ -46,8 +46,10 @@ push-retry loop for concurrent deploys):
 
 ## Project structure
 - `src/main.rs` — input exports/atomics, window conf, the frame loop (input gathering + stick gating, camera, drawing, HUD, minimap, crash dialog/replay/ghost cosmetics), and unit tests
-- `src/sim.rs` — **the deterministic simulation core**: `Sim` owns all Rapier state, the sliding collider windows (BTreeMaps) and ship systems (fuel/hull/score/landing/crash), advanced ONLY by `tick(InputState) -> TickReport` at `PHYSICS_DT`; plus `resim(&Recording)` and all physics constants. Same inputs + same start keyframe → bit-identical trajectory (unit-tested). **Any new gameplay force/effect must go through `tick`** — frame-level physics mutation would break replay determinism.
-- `src/world.rs` — deterministic world generation, parameterized by a **`Level`** (see "Levels"): cave curves, shafts, obstacles, pads and `stand_y` are all `Level` methods; plus `Rng`/`hash_u32` and the world constants (`SEG_LEN`, `RESET_X`, `PERIOD`, `V_PERIOD`, …)
+- `sim-core/` — the **`pegasus-sim` library crate** (workspace member): the whole deterministic half of the game, extracted 2026-07 so pegasus-backend can compile the IDENTICAL simulation for server-side score verification (it consumes this crate as a cargo **git dependency pinned to a `main` rev** — physics/level changes here need a backend re-pin + redeploy, see the backend repo's CLAUDE.md). **Nothing in it may depend on macroquad or any nondeterminism**; it uses `glam` (pinned to the version macroquad 0.4.15 re-exports, so `Vec2` unifies across the boundary) + `rapier2d` + `miniz_oxide`:
+  - `sim-core/src/sim.rs` — **the deterministic simulation core**: `Sim` owns all Rapier state, the sliding collider windows (BTreeMaps) and ship systems (fuel/hull/score/landing/crash), advanced ONLY by `tick(InputState) -> TickReport` at `PHYSICS_DT`; plus `resim(&Recording)` and all physics constants. Same inputs + same start keyframe → bit-identical trajectory (unit-tested). **Any new gameplay force/effect must go through `tick`** — frame-level physics mutation would break replay determinism.
+  - `sim-core/src/world.rs` — deterministic world generation, parameterized by a **`Level`** (see "Levels"): cave curves, shafts, obstacles, pads and `stand_y` are all `Level` methods; plus `Rng`/`hash_u32`, the world constants (`SEG_LEN`, `RESET_X`, `PERIOD`, `V_PERIOD`, …) and `shipped_levels()` — the stem → `Level` map of the compiled-in level files the backend verifier params-checks submissions against (kept in sync with `levels/manifest.json` by a unit test)
+  - `sim-core/src/replay.rs` — the hybrid `Recording` format + blob codec (see "Hybrid recording")
 - `src/render.rs` — radial light shader sources, faceted wall/shaft lattice (`lattice_point`, `shaft_lattice`, `facet_shade`), `draw_flat_mesh`
 - `src/ship_mesh.rs` — `SHIP_TRIS` / `SHIP_DETAILS` data tables extracted from the Flash SWF
 - `src/audio.rs` — in-memory WAV synthesis (`wav_from_samples`, `thruster_wav`, `boom_wav`)
@@ -1027,8 +1029,11 @@ for now:
   `resim_reproduces_a_scripted_flight_bit_exactly`; `glow` is render-side
   and excluded). Guarantee is per-binary — a build/params change is what the
   header fields + keyframe fallback are for. `resim` (the batch form of
-  `ResimPlayer`) and `Recording::deserialize` are `#[allow(dead_code)]`
-  until blobs leave the device (server-side verification).
+  `ResimPlayer`) and `Recording::deserialize` are the backend verifier's
+  entry points: pegasus-backend re-runs every submitted replay through this
+  crate (segment-wise between the 1 Hz keyframes, with drift tolerances for
+  cross-platform libm differences — see its CLAUDE.md) before a score reaches
+  a board.
 
 ### Determinism rules (the re-sim refactor, 2026-07)
 Live play and resim must perform IDENTICAL operation sequences:
@@ -1254,7 +1259,7 @@ commit the refreshed page.
 - **Always open a PR** after pushing a feature branch — standing instruction
   from the owner (no need to ask first). The PR also produces a phone-testable
   preview deployment at `pr-<n>/`.
-- Development branch: `claude/whats-new-about-button-yqbh2j` (current); previous: `claude/game-analytics-planning-verjk8`
+- Development branch: `claude/backend-score-validation-7fe6xo` (current); previous: `claude/whats-new-about-button-yqbh2j`
 - Merges to `main` via rebase PRs using the GitHub MCP tools (`mcp__github__create_pull_request`, `mcp__github__merge_pull_request`).
 - **Curate the branch before merging.** Rebase merges land every branch
   commit on `main` verbatim, so branch noise becomes permanent history.
