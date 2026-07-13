@@ -403,11 +403,28 @@ copies `levels/` verbatim (`build-site`). Selection persists in
 `localStorage` (`pegasus_level`); manifest fetch failure hides the row and
 the game stays on the compiled-in `Level::demo()`.
 
-**Distance high score**: `Sim.max_dist` (farthest \|x\| this run, reset by
-restore) raises the `BEST_DIST` atomic live; JS polls `get_best_dist()`
-every 2 s into `localStorage` (`pegasus_best_<file>`, per level file) and
-pushes the stored value back via `set_best_dist()` after every level load
-(`load_level` zeroes it so bests never leak across levels).
+**Distance high score / in-flight "BEST" HUD**: `Sim.max_dist` (farthest \|x\|
+this run, reset by restore) raises the `BEST_DIST` atomic live, but only once
+it's known — `BEST_DIST` starts (and `load_level` resets it to) the sentinel
+`BEST_UNKNOWN` (`(-1.0f32).to_bits()`; `best_dist() -> Option<f32>` is `None`
+for it), and the HUD's "BEST …" line is omitted entirely while unknown rather
+than showing a stale/wrong number. **Offline**, JS pushes this device's local
+best (`localStorage` `pegasus_best_<file>`, per level file) via
+`set_best_dist()` right after `load_level`, and a 2 s poll mirrors
+`get_best_dist()` back into that key so it survives reloads. **Online (a
+backend config exists)**: `localStorage` is ignored entirely for this
+readout — `push_level` calls `clear_best_dist()` instead, and
+`refreshInFlightBest(file)` (reuses the high-score board's `boardCache`)
+pushes the level's **global all-time record** in once it's cached (instantly
+if already warm, else after the `period=alltime` fetch resolves); the 2 s
+local-mirror poll is skipped while online too, so a global figure (possibly
+another player's run) never pollutes the offline fallback value. Both paths
+converge back on `set_best_dist()`/`clear_best_dist()`, so a live run that
+beats the shown best still updates it in real time either way (guarded
+server-side — a live max_dist can't clobber the *unknown* sentinel, only a
+*known* value). `config.json` can resolve after the boot level's already
+pushed its local best (the two fetches race) — the config handler detects
+that and re-clears + re-fetches for `currentLevelFile`.
 
 **Replays**: physics depends on the level, so the recording header carries
 `LevelParams` (scoring/shafts/obstacles/pad_spacing/seed — NOT the cosmetic

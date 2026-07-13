@@ -386,15 +386,20 @@ pub extern "C" fn load_level(len: u32) {
     let end = (len as usize).min(b.len());
     if let Ok(text) = std::str::from_utf8(&b[..end]) {
         *PENDING_LEVEL.lock().unwrap() = Some(world::Level::parse(text));
-        BEST_DIST.store(0, Ordering::Relaxed);
+        BEST_DIST.store(BEST_UNKNOWN, Ordering::Relaxed);
     }
 }
 
 // Best distance on the current level (the Distance-scoring high score).
-// The game raises it live; JS polls get_best_dist to mirror it into
-// localStorage (per level) and pushes the stored value back after each
-// level (re)load — load_level clears it so scores never leak across levels.
-static BEST_DIST: AtomicU32 = AtomicU32::new(0);
+// The game raises it live; JS pushes the value to show (local personal
+// best offline, or the global all-time record once online and cached — see
+// the frontend's "ignore localStorage while global config exists" rule)
+// after each level (re)load. `BEST_UNKNOWN` (negative — a real distance is
+// never < 0) means "not known yet": load_level resets to it, and JS calls
+// `clear_best_dist` to fall back into it when a cached global value isn't
+// available yet, so the HUD shows nothing rather than a stale/wrong number.
+const BEST_UNKNOWN: u32 = (-1.0f32).to_bits();
+static BEST_DIST: AtomicU32 = AtomicU32::new(BEST_UNKNOWN);
 
 #[unsafe(no_mangle)]
 pub extern "C" fn set_best_dist(v: f32) {
@@ -402,8 +407,20 @@ pub extern "C" fn set_best_dist(v: f32) {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn clear_best_dist() {
+    BEST_DIST.store(BEST_UNKNOWN, Ordering::Relaxed);
+}
+
+// None while unknown (see `BEST_UNKNOWN`) — callers must decide how to
+// render/compare an unknown best rather than silently treating it as 0.
+fn best_dist() -> Option<f32> {
+    let bits = BEST_DIST.load(Ordering::Relaxed);
+    if bits == BEST_UNKNOWN { None } else { Some(f32::from_bits(bits)) }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn get_best_dist() -> f32 {
-    f32::from_bits(BEST_DIST.load(Ordering::Relaxed))
+    best_dist().unwrap_or(-1.0)
 }
 
 // --- Highscores & best-run ghost (JS owns the localStorage store) ---
@@ -2071,9 +2088,12 @@ async fn main() {
         let cave_x = cam_x.rem_euclid(PERIOD);
         let debug_hud = DEBUG_HUD.load(Ordering::Relaxed) != 0;
         // Distance levels: the score IS the farthest |x| reached; raise the
-        // per-level best live (JS mirrors it into localStorage).
+        // per-level best live (JS mirrors/pushes it — see `best_dist`).
+        // Only once the best is actually known: bumping an UNKNOWN best to
+        // 0 (or whatever max_dist is on the very first tick) the moment the
+        // ship spawns would defeat "show nothing until cached".
         if sim.level.scoring == Scoring::Distance
-            && sim.max_dist > f32::from_bits(BEST_DIST.load(Ordering::Relaxed))
+            && best_dist().is_some_and(|b| sim.max_dist > b)
         {
             BEST_DIST.store(sim.max_dist.to_bits(), Ordering::Relaxed);
         }
@@ -2089,8 +2109,10 @@ async fn main() {
             let hud_y = safe_top + 252.0 * ui; // below the fuel + hull gauges
             let hud = match world_sim.level.scoring {
                 Scoring::Distance => format!(
-                    "dist={:.0}m  best={:.0}m  x={:.0}  lvl={}   [R] reset   FPS: {:.0}",
-                    world_sim.max_dist, get_best_dist(), cam_x, ship_layer, smooth_fps),
+                    "dist={:.0}m  best={}  x={:.0}  lvl={}   [R] reset   FPS: {:.0}",
+                    world_sim.max_dist,
+                    best_dist().map_or("?".to_string(), |b| format!("{b:.0}m")),
+                    cam_x, ship_layer, smooth_fps),
                 Scoring::Pads => format!(
                     "score={}  x={:.0}  lvl={}  {:.0}m/{}m   [R] reset   FPS: {:.0}",
                     world_sim.score, cam_x, ship_layer, cave_x, PERIOD as i32, smooth_fps),
@@ -2535,7 +2557,9 @@ async fn main() {
         let (big, small) = match world_sim.level.scoring {
             Scoring::Distance => (
                 format!("{:.0} m", world_sim.max_dist),
-                format!("BEST {:.0} m", get_best_dist()),
+                // Empty (not "BEST 0 m") while the best is still unknown —
+                // e.g. online and not yet cached from the server.
+                best_dist().map_or(String::new(), |b| format!("BEST {b:.0} m")),
             ),
             Scoring::Pads => (format!("{}", world_sim.score), "SCORE".to_string()),
         };
@@ -2653,8 +2677,10 @@ async fn main() {
         // left-aligned under the minimap column (see sizing above).
         let ro_y = hg_y + fg_h + 14.0 * ui + big_fs;
         draw_text(&big, ro_x, ro_y, big_fs, WHITE);
-        draw_text(&small, ro_x, ro_y + small_fs + 4.0 * ui,
-            small_fs, Color::from_rgba(150, 180, 220, 220));
+        if !small.is_empty() {
+            draw_text(&small, ro_x, ro_y + small_fs + 4.0 * ui,
+                small_fs, Color::from_rgba(150, 180, 220, 220));
+        }
 
         next_frame().await;
     }

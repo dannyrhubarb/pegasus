@@ -1751,6 +1751,40 @@
       return parseFloat(localStorage.getItem("pegasus_best_" + file) || "0");
     }
 
+    // In-flight "BEST" HUD readout. Offline it's this device's local best
+    // (as always); once a backend config exists, localStorage is IGNORED
+    // for this readout entirely — it shows the level's global all-time
+    // record instead, and shows NOTHING until that record has actually
+    // been cached (never a stale/wrong local number). Reuses the same
+    // boardCache as the level picker / high-score board (see
+    // globalBestFor/getBoard/putBoard below — hoisted, so the declaration
+    // order here doesn't matter).
+    function refreshInFlightBest(file) {
+      if (!backendCfg || !file) return;
+      const stem = levelStem(file);
+      const apply = (board) => {
+        if (typeof wasm_exports === "undefined" || !wasm_exports.set_best_dist) return false;
+        if (file !== currentLevelFile) return true; // level moved on — stop retrying
+        wasm_exports.set_best_dist(board.length ? board[0].score : 0);
+        return true;
+      };
+      const cached = getBoard(stem, "alltime");
+      if (cached) {
+        if (!apply(cached)) {
+          const t = setInterval(() => { if (apply(cached)) clearInterval(t); }, 200);
+        }
+      }
+      fetch(backendCfg.apiBaseUrl + "/v1/levels/" + encodeURIComponent(stem) + "/scores?period=alltime",
+            { cache: "no-store" })
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+          if (!data) return;
+          putBoard(stem, "alltime", data);
+          apply(data);
+        })
+        .catch(() => {});
+    }
+
     const levelBestEls = {}; // file -> the row's .lbest span, for in-place updates
     function levelBestText(file) {
       const b = backendCfg ? globalBestFor(file) : bestFor(file);
@@ -1806,13 +1840,17 @@
         const ptr = wasm_exports.level_buf_ptr(bytes.length);
         new Uint8Array(wasm_memory.buffer, ptr, bytes.length).set(bytes);
         wasm_exports.load_level(bytes.length); // also clears the in-game best
-        const best = bestFor(file);
-        if (best > 0) wasm_exports.set_best_dist(best);
         currentLevelFile = file;
+        // Local best offline; online, localStorage is ignored entirely —
+        // leave it unknown (load_level already did) until the global
+        // record is fetched/cached, below.
+        if (backendCfg) wasm_exports.clear_best_dist();
+        else wasm_exports.set_best_dist(bestFor(file));
         scoresFile = file; // the board defaults to the loaded level
         renderLevels();
         renderScores();
         pushGhost();
+        refreshInFlightBest(file); // no-op offline
         return true;
       };
       // Exports may not be ready yet (startup restore) — retry like the
@@ -1846,9 +1884,12 @@
       .catch(() => {}); // local dev without a server: keep the built-in level
 
     // Mirror the in-game best distance into localStorage (keyed per level
-    // file), so the Distance high score survives reloads.
+    // file), so the Distance high score survives reloads. Skipped while a
+    // backend config exists: the in-game "best" is then the GLOBAL record
+    // (possibly someone else's run, always >= the local one), and writing
+    // it into the local store would corrupt the offline fallback value.
     setInterval(() => {
-      if (!currentLevelFile) return;
+      if (!currentLevelFile || backendCfg) return;
       if (typeof wasm_exports === "undefined" || !wasm_exports.get_best_dist) return;
       const best = wasm_exports.get_best_dist();
       const key = "pegasus_best_" + currentLevelFile;
@@ -2112,6 +2153,15 @@
         nameRow.style.display = "";
         nameCur.textContent = playerName() || "—";
         if (overlay === "scr-scores") renderScores(); // config raced the open screen
+        // config.json can resolve after pushLevel already showed the local
+        // best for the boot level (this fetch and the manifest fetch race) —
+        // clear that local value and swap to the global one.
+        if (currentLevelFile) {
+          if (typeof wasm_exports !== "undefined" && wasm_exports.clear_best_dist) {
+            wasm_exports.clear_best_dist();
+          }
+          refreshInFlightBest(currentLevelFile);
+        }
       })
       .catch(() => {}); // offline build / no server: everything stays local
 
