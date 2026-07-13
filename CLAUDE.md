@@ -359,7 +359,15 @@ degrades to silence.
   without a visit** — a long-lapsed device loses the key and is legitimately
   re-asked; D30-style retention undercounts iOS/Safari.
 - **Events** (allowlisted backend-side; see pegasus-backend CLAUDE.md):
-  `session_start` (touch/viewport bucket/dpr), `session_end` (on every
+  `session_start` (touch/viewport bucket/dpr + **acquisition**: the
+  referrer ORIGIN — `new URL(document.referrer).origin`, same-origin and
+  app-opened/empty referrers skipped — plus `utm_source/medium/campaign`
+  from the page URL. Origin-only is all a cross-site referrer ever carries
+  now (`strict-origin-when-cross-origin` default; Safari ITP truncates
+  harder), and links opened from native apps/QR codes usually have NO
+  referrer — so utm-tagged links are the reliable attribution channel;
+  the About privacy note discloses "which site linked here"),
+  `session_end` (on every
   tab-hide via beacon — durationMs/activeMs/hiddenMs/bgCount/runs; analysis
   takes the max per session, no heartbeats), `screen_view` (in
   `showScreen`, consecutive-deduped), `ui_click` (ONE delegated listener on
