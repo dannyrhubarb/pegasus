@@ -35,8 +35,11 @@ jobs:
       - name: Check wasm target (what actually deploys)
         run: cargo check --target wasm32-unknown-unknown
 
+      # --workspace: the sim-core crate (pegasus-sim) carries its own tests
+      # and a plain `cargo test` in a workspace root only runs the root
+      # package's.
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Tests
-        run: cargo test
+        run: cargo test --workspace

@@ -4,7 +4,7 @@
 // decaying noise burst for crashes. Native builds link macroquad's dummy audio
 // backend (the "audio" feature is wasm-only, see Cargo.toml) and stay silent.
 
-use crate::world::Rng;
+use pegasus_sim::world::Rng;
 
 pub const AUDIO_RATE: u32 = 22050;
 
