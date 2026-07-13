@@ -465,7 +465,11 @@ copies `levels/` verbatim (`build-site`). Selection persists in
 the game stays on the compiled-in `Level::demo()`.
 
 **Distance high score**: `Sim.max_dist` (farthest \|x\| this run, reset by
-restore) raises the `BEST_DIST` atomic live; after every level load
+restore) raises the `BEST_DIST` atomic **only when the run ends**
+(`raise_best_dist` at the three run-end sites: destroying crash, fuel-out,
+alive reset — never live mid-flight, so a record-beating run keeps the
+PREVIOUS best on the HUD as the number to chase; the big readout already
+shows the current distance); after every level load
 `applyGlobalRecord` seeds it with the level's **global all-time record**
 via `set_best_dist()` (see "Online high scores"; `load_level` zeroes it so
 records never leak across levels). The HUD BEST is the world record — or
@@ -1204,9 +1208,10 @@ the real backend. All JS-side in `index.html`:
   the in-game silhouette). The record holder's name rides along via
   `set_best_name` (the
   `blob_in_ptr` buffer, UTF-8 text) and the HUD draws "by <pilot>" under
-  the BEST line — flipped to "by you" by the game the moment the live run
-  beats the record; skipped when the session's own best already exceeds
-  the board. `ghostLoadedPath` dedupes the blob fetch; stale responses
+  the BEST line — flipped to "by you" by the game when a record-beating
+  run ENDS (not mid-flight — the previous record + holder stay up as the
+  target while flying); skipped when the session's own best already
+  exceeds the board. `ghostLoadedPath` dedupes the blob fetch; stale responses
   for a since-switched level are dropped (and the game would reject a
   wrong-level ghost anyway). Offline / empty board: silent no-op — no
   ghost, session-only BEST.
