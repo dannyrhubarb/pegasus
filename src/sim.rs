@@ -56,6 +56,13 @@ pub const HULL_REPAIR_PER_S: f32 = 20.0;
 pub const FUEL_MAX: f32 = 100.0;
 pub const FUEL_BURN_MAIN: f32 = 3.5; // units/s at full throttle
 pub const FUEL_BURN_RCS: f32 = 1.2;  // units/s while an RCS nozzle fires
+// The run ends this long after the tank empties, moving or not
+// (`TickReport::fuel_out`; main turns it into the game-over flow so the
+// run reaches the submit dialog instead of stranding the player until a
+// manual reset). A pad catch inside the window refuels (fuel > 0 resets
+// the timer) and cancels it. Detection only: no force depends on it, so
+// it isn't part of SimParams.
+pub const FUEL_OUT_END_SECS: f32 = 2.5;
 
 // The exact simulation constants this build runs with, serialized into every
 // replay blob so a recording can be re-run under the rules it was flown with.
@@ -125,6 +132,7 @@ pub struct TickReport {
     pub landed: bool,         // settled on a pad past PAD_LAND_TIME
     pub scored: bool,         // first visit registered this tick
     pub heading_torque: f32,  // PD torque applied (for nozzle puffs)
+    pub fuel_out: bool,       // stranded dry past FUEL_OUT_END_SECS: run over
 }
 
 // An impact this tick (dv above CRASH_DV_SOFT). Carries the post-impact
@@ -182,6 +190,7 @@ pub struct Sim {
     pub visited_pads: BTreeSet<(i64, i64)>,
     pub crashed: bool,
     land_timer: f32,
+    fuel_out_timer: f32,
     prev_vel: (f32, f32),
 }
 
@@ -251,6 +260,7 @@ impl Sim {
             visited_pads: BTreeSet::new(),
             crashed: false,
             land_timer: 0.0,
+            fuel_out_timer: 0.0,
             prev_vel: (0.0, 0.0),
         };
         // Seed the collider window at the spawn so even the very first tick
@@ -280,6 +290,7 @@ impl Sim {
         self.hull = kf.hull;
         self.crashed = false;
         self.land_timer = kf.land_timer;
+        self.fuel_out_timer = 0.0;
         self.max_dist = kf.x.abs();
         self.prev_vel = (kf.vx, kf.vy);
         self.sync_window(Self::window_key(kf.x, kf.y));
@@ -491,6 +502,19 @@ impl Sim {
             } else {
                 self.land_timer = 0.0;
             }
+
+            // Out-of-fuel game over: the run ends FUEL_OUT_END_SECS after
+            // the tank empties — moving or not (the final coast still earns
+            // distance for that window). A pad catch refuels (the refuel
+            // block above runs first, so fuel > 0 clears the timer this
+            // same tick). Pure detection — nothing feeds back into the
+            // physics, so replay determinism is untouched.
+            if self.fuel <= 0.0 {
+                self.fuel_out_timer += PHYSICS_DT;
+            } else {
+                self.fuel_out_timer = 0.0;
+            }
+            report.fuel_out = self.fuel_out_timer >= FUEL_OUT_END_SECS;
         } else {
             self.land_timer = 0.0;
         }
@@ -731,6 +755,40 @@ mod tests {
         }
         let kfs = rec.keyframes.clone();
         (rec, kfs)
+    }
+
+    #[test]
+    fn out_of_fuel_at_rest_ends_the_run_but_a_pad_refuels() {
+        // Stranded dry away from any pad (RESET_X is the guaranteed
+        // obstacle-free stand spot): fuel_out must fire, exactly at the
+        // FUEL_OUT_END_SECS deadline (not sooner).
+        let level = Level::demo();
+        let mut sim = Sim::new(level.clone());
+        sim.restore(&spawn_keyframe(&level, crate::world::RESET_X));
+        sim.fuel = 0.0;
+        let mut fired_at = None;
+        for t in 0..(6.0 / PHYSICS_DT) as u32 {
+            if sim.tick(InputState::default()).fuel_out {
+                fired_at = Some(t);
+                break;
+            }
+        }
+        let fired_at = fired_at.expect("a dry ship must end the run");
+        assert!(
+            fired_at as f32 * PHYSICS_DT >= FUEL_OUT_END_SECS - 0.1,
+            "fired after {} ticks — before the deadline",
+            fired_at
+        );
+
+        // Parked dry ON a pad (the spawn stands on pad 0): the refuel wins
+        // — fuel_out must never fire.
+        let mut sim = Sim::new(level);
+        sim.fuel = 0.0;
+        for _ in 0..(6.0 / PHYSICS_DT) as u32 {
+            assert!(!sim.tick(InputState::default()).fuel_out,
+                "a pad-parked ship must refuel, not game-over");
+        }
+        assert!(sim.fuel > 0.0, "the pad must have refueled the parked ship");
     }
 
     fn assert_physics_eq(a: &Keyframe, b: &Keyframe) {
