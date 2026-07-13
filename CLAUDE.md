@@ -156,11 +156,10 @@ while the wasm loads):
   reset the flight waiting behind the menu). It's a chooser, so **no
   pre-selected highlight**. The per-row "best" is the level's **global
   all-time record** (the #1 from the board cache, refreshed by
-  `prefetchGlobalBests` on every open); "—" offline/unknown. In **scores
-  mode** each row also shows "by <pilot>" under the record and a `›`
-  drill-down chevron (the row opens that level's board); fly mode keeps
-  the compact single line. Row-best updates go through `setLevelBest`
-  (in-place, per the rule below). **DOM-stability rule (hard-won)**: async results update the
+  `prefetchGlobalBests` on every open); "—" offline/unknown. Each row
+  shows "by <pilot>" under the record (both modes); **scores mode** adds
+  a `›` drill-down chevron (the row opens that level's board). Row-best
+  updates go through `setLevelBest` (in-place, per the rule below). **DOM-stability rule (hard-won)**: async results update the
   row text IN PLACE (`levelBestEls`) — rebuilding the rows under an
   in-flight tap retargeted the tap to whatever landed at those coordinates,
   including the Back button right below the list (= surprise exit to the
