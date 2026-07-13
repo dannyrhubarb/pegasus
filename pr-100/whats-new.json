@@ -1,5 +1,10 @@
 [
  {
+  "rev": "1006722",
+  "date": "2026-07-13T22:03:58Z",
+  "note": "The crash screen's back button reads simply Back"
+ },
+ {
   "rev": "57d5d58",
   "date": "2026-07-13T21:41:53Z",
   "note": "The crash screen's menu button is now Back to level selection, and the phone back button goes there too"
