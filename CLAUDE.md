@@ -1138,8 +1138,13 @@ the real backend. All JS-side in `index.html`:
   run isn't kept anywhere). The callsign input arrives prefilled once a
   name is persisted (`pegasus_player_name`). Reset-ended runs (restart /
   exit-to-menu mid-flight) never pop UI and are therefore **not
-  submitted**. Replays over the server's 512 KiB decoded cap are submitted
-  score-only. The same screen doubles as the Settings "Pilot name" editor
+  submitted**. **The replay is mandatory** (2026-07): the backend
+  re-simulates it to verify the claimed score before the run reaches any
+  board, so a run with no blob or one over the server's 512 KiB decoded cap
+  (multi-hour runs only) gets no submit dialog at all (was: submitted
+  score-only). A server-side verification rejection (422) surfaces only as
+  the existing `console.warn` — an honest client shouldn't hit it. The same
+  screen doubles as the Settings "Pilot name" editor
   (`openNameDialog(returnTo)`). Its input `stopPropagation()`s keydown so
   typing never reaches the game.
 - **Global boards**: the High-scores screen IS the global board — with no
