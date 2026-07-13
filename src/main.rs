@@ -1590,10 +1590,13 @@ async fn main() {
         // Ghost of the last run: the lockstep re-sim's pose, lerped with the
         // SAME alpha as the live ship so both move in sync. None once the
         // ghost reaches its crash (it "dies" there), before a trimmed
-        // recording's first keyframe, or outside live flight.
+        // recording's first keyframe, outside live flight, or during the
+        // armed-but-idle wait (`run_started` — both ships would sit
+        // overlapped on the spawn until the first control command).
         let ghost_pose: Option<(f32, f32, f32)> = match (&ghost_player, mode) {
             (Some(p), Mode::Flying)
                 if GHOST_ON.load(Ordering::Relaxed) != 0
+                    && run_started
                     && !crashed
                     && !p.finished
                     && recorder.ticks() >= p.first_tick =>

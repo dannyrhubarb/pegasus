@@ -1005,7 +1005,10 @@ flame/details) at `lerped_pose(alpha)` with the live interpolation alpha,
 from `BEST_NAME` — the ghost is the best run WITH a replay, which may not
 be the #1 score, and it keeps its pilot when BEST flips to "by you"),
 plus a pale-blue minimap dot; it vanishes at its own crash tick
-(`finished`). Hidden while the current ship is a wreck. Toggled by the
+(`finished`). Hidden while the current ship is a wreck, and during the
+**armed-but-idle wait** (`run_started` gates `ghost_pose` — silhouette,
+callsign and minimap dot all appear at the first control command; both
+ships would otherwise sit overlapped on the spawn). Toggled by the
 **"Race best ghost"** Settings toggle (`set_ghost_enabled` → `GHOST_ON`,
 on by default): off drops `ghost_player` and skips `ghost_pose`. A
 mismatched-level recording is ignored (the ghost must race THIS world).
