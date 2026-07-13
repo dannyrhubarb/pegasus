@@ -220,7 +220,8 @@ screen on desktop.
   holds off until the game has actually left state 2.
 - `ui_state() -> i32` / `cur_dist() -> f32`: per-frame mirrors (`UI_STATE`,
   `CUR_DIST` — exports can't read loop locals) of the mode (0 flying /
-  1 wreck / 2 crash dialog / 3 replay) and `sim.max_dist`. JS polls at 200 ms:
+  1 wreck / 2 crash dialog or out-of-fuel game over / 3 replay) and
+  `sim.max_dist`. JS polls at 200 ms:
   state 2 with no screen open ⇒ show scr-gameover; a menu-launched replay
   (state 3) returns to scr-scores when it ends without a wreck waiting.
 - **Replay transport**: `set_replay_paused(i32)` / `replay_paused() -> i32`
@@ -699,8 +700,25 @@ is gameplay, not telemetry — it stays always-on.)
 throttle** (~28 s of continuous thrust; partial throttle burns proportionally),
 RCS burns `FUEL_BURN_RCS = 1.2/s`. `thrusting_now` and the
 RCS gates (`rcs_ok`) require `fuel > 0` — an empty tank kills engine, RCS,
-particles and glow, and shows "OUT OF FUEL — [R] RESET" (reset and respawn
-refill). HUD: slim always-on gauge bar with a **fuel-drop icon** to its left,
+particles and glow, and immediately shows "OUT OF FUEL". **Running dry
+ends the run**: `FUEL_OUT_END_SECS = 2.5 s` after the tank empties —
+moving or not, the final coast still earns distance for that window —
+`TickReport::fuel_out` fires (a `Sim` timer — pure detection, no physics
+feedback, not in `SimParams`) and main publishes the run and goes
+STRAIGHT to the game-over dialog (no `CRASH_DIALOG_DELAY` handover — that
+exists for the crash explosion; the banner has already been up for the
+whole window). Because publish and state 2 land in the same frame, the JS
+ui-state poll calls `collectEndedRun()` synchronously before opening a
+screen, so the submit dialog can't miss the run (analytics cause 2 =
+"fuel"). No wreck: the intact ship stays visible under the amber banner
+and behind the dialog, and there's no boom. A pad catch inside the window
+refuels (fuel > 0 resets the timer) and cancels the game over
+(unit-tested: `out_of_fuel_at_rest_ends_the_run_but_a_pad_refuels`). The
+`run_over` flag in main guards against double-publishing the run on the
+follow-up reset. The banner REPLAYS too — in `Mode::Replay` it's drawn
+from the scratch sim's fuel (up from the tick the tank empties until the
+replayed crash, and through a fuel-out ending's freeze frame; not part of
+the auto-hiding transport GUI). HUD: slim always-on gauge bar with a **fuel-drop icon** to its left,
 warm-amber identity (gold > 50%, amber > 25%, red below), and the **hull
 gauge** in a matching bar just beneath it (a **red heart icon** + red bar,
 brighter red when critically low ≤ 25%) — top-left, directly under the
@@ -1057,7 +1075,8 @@ whole online layer is invisible (local dev, forks — no boards, no ghost,
 session-only BEST). Previews get the same config, so a PR preview talks to
 the real backend. All JS-side in `index.html`:
 - **Submit is always an explicit choice**: `maybeSubmitOnline` hooks
-  `collectEndedRun` — every crash-ended publishable run (≥ 1 m; the game
+  `collectEndedRun` — every publishable run that ended in a game over
+  (destroying crash or out-of-fuel; ≥ 1 m; the game
   already drops runs < `GHOST_MIN_SECS`) is held in `pendingSubmit`, and
   the ui-state poll shows the SUBMIT SCORE dialog (`#scr-name`) **instead
   of** the game-over screen: submit → save name + POST

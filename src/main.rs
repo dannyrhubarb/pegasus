@@ -484,7 +484,7 @@ fn report_run_end(rec: &Recording, dist: f32) {
 // so a run that starts and ends within one JS poll window still counts.
 static RUN_START_SEQ: AtomicU32 = AtomicU32::new(0);
 static RUN_END_SEQ: AtomicU32 = AtomicU32::new(0);
-static RUN_END_CAUSE: AtomicU32 = AtomicU32::new(0); // 0 crash / 1 reset
+static RUN_END_CAUSE: AtomicU32 = AtomicU32::new(0); // 0 crash / 1 reset / 2 fuel
 static RUN_END_TICKS: AtomicU32 = AtomicU32::new(0);
 static RUN_END_DIST: AtomicU32 = AtomicU32::new(0); // f32 bits
 static RUN_END_FUEL: AtomicU32 = AtomicU32::new(0); // f32 bits
@@ -1004,6 +1004,10 @@ async fn main() {
     // not with the ship sitting at spawn. Keyframe 0 (pushed at recorder
     // creation) is the spawn state; tick 1 is the first commanded tick.
     let mut run_started = false;
+    // The current run already ended (out-of-fuel game over): its blob is
+    // published and the crash-dialog handover is pending/showing. Guards the
+    // reset block's ended-alive publish so the same run isn't reported twice.
+    let mut run_over = false;
     let mut mode = Mode::Flying;
     // Instant-replay ring buffer (one frame per physics step) and the
     // playback cursor, in fractional frame indices.
@@ -1076,6 +1080,7 @@ async fn main() {
             phys_accum = 0.0;
             mode = Mode::Flying;
             run_started = false;
+            run_over = false;
             recorder = Recording::new(sim_params(), sim.level.to_params(),
                 (HYBRID_MAX_SECS / PHYSICS_DT) as u32);
             recorder.push_keyframe(sim.keyframe(0, 0.0));
@@ -1256,6 +1261,7 @@ async fn main() {
         let mut frame_impact: Option<Impact> = None;
         let mut frame_landed = false;
         let mut frame_scored = false;
+        let mut frame_fuel_out = false;
         let mut frame_heading_torque = 0.0f32;
         // First input starts the run clock. The gate lives HERE, outside
         // Sim::tick — input gathering is frame-level, and the sim must stay
@@ -1298,6 +1304,7 @@ async fn main() {
                 frame_heading_torque = rep.heading_torque;
                 frame_landed = rep.landed;
                 frame_scored |= rep.scored;
+                frame_fuel_out |= rep.fuel_out;
                 if let Some(imp) = rep.impact {
                     let replace = frame_impact
                         .as_ref()
@@ -1334,9 +1341,14 @@ async fn main() {
                     land_timer: 0.0, // a destroying tick always zeroes it
                 });
                 // Publish for the online submit flow and the analytics
-                // channel (which also takes short runs).
-                report_run_end(&recorder, sim.max_dist);
-                report_run_analytics(0, recorder.ticks(), sim.max_dist, sim.fuel, sim.hull);
+                // channel (which also takes short runs) — unless the run
+                // already ended (a destroying impact during the out-of-fuel
+                // handover wait must not publish the same run twice).
+                if !run_over {
+                    run_over = true;
+                    report_run_end(&recorder, sim.max_dist);
+                    report_run_analytics(0, recorder.ticks(), sim.max_dist, sim.fuel, sim.hull);
+                }
             } else {
                 // Survivable scrape: a spray of sparks + a quiet thud,
                 // scaled to the damage taken. The ship keeps flying.
@@ -1356,6 +1368,21 @@ async fn main() {
                     play_sound(s, PlaySoundParams { looped: false, volume: 0.25 });
                 }
             }
+        }
+        // Out of fuel past the deadline: the run is over. Publish it and go
+        // STRAIGHT to the game-over dialog — the "OUT OF FUEL" banner has
+        // already been up since the tank emptied, so unlike a crash there's
+        // no explosion to play out and no handover delay (the JS ui-state
+        // poll collects the just-ended run synchronously when it sees
+        // state 2, so the submit dialog can't miss it). No wreck: the sim
+        // isn't crashed, the intact ship stays visible, and there's no boom.
+        if frame_fuel_out && mode == Mode::Flying && crash_timer <= 0.0
+            && !sim.crashed && !run_over
+        {
+            run_over = true;
+            report_run_end(&recorder, sim.max_dist);
+            report_run_analytics(2, recorder.ticks(), sim.max_dist, sim.fuel, sim.hull);
+            mode = Mode::CrashDialog;
         }
         // Wreck timer → once the explosion has played out, hand over to the
         // crash dialog (fly again / watch replay). Respawn happens from there.
@@ -2034,7 +2061,10 @@ async fn main() {
             // destroying tick; scrubbing back rebuilds a fresh sim, so the
             // ship reappears automatically).
             Mode::Replay => !replay_player.as_ref().is_some_and(|p| p.sim.crashed),
-            Mode::CrashDialog => false,
+            // An out-of-fuel game over has no wreck (sim.crashed is false):
+            // the intact ship stays visible behind the dialog. Only a real
+            // destruction hides it.
+            Mode::CrashDialog => !sim.crashed,
         };
 
         // Thruster flame drawn first (behind the hull), out of the engine base
@@ -2180,11 +2210,14 @@ async fn main() {
             // drives the choices via ui_command; what's drawn here is the
             // dim + keyboard fallback for native/dev builds.
             draw_rectangle(0.0, 0.0, sw, sh, Color::from_rgba(0, 0, 0, 130));
-            let msg = "CRASHED";
+            let (msg, col) = if sim.crashed {
+                ("CRASHED", Color::from_rgba(255, 90, 60, 255))
+            } else {
+                ("OUT OF FUEL", Color::from_rgba(255, 180, 60, 255))
+            };
             let fs = 96.0 * ui;
             let dims = measure_text(msg, None, fs as u16, 1.0);
-            draw_text(msg, (sw - dims.width) / 2.0, sh * 0.30, fs,
-                Color::from_rgba(255, 90, 60, 255));
+            draw_text(msg, (sw - dims.width) / 2.0, sh * 0.30, fs, col);
             let hint = "[R] fly again   ·   [ENTER] watch replay";
             let hfs = 26.0 * ui;
             let hd = measure_text(hint, None, hfs as u16, 1.0);
@@ -2213,6 +2246,18 @@ async fn main() {
             // longer displayed. Throttle meter: see #67.)
             let inp = replay_player.as_ref().map(|p| p.current_input()).unwrap_or_default();
             let (isx, isy) = inp.steer_f32();
+            // The OUT OF FUEL banner replays too — from the SCRATCH sim's
+            // fuel (the state the replay is showing), exactly like live
+            // play: up from the tick the tank empties until the (replayed)
+            // crash, and through a fuel-out ending's freeze frame. Not part
+            // of the auto-hiding transport GUI — it's game state.
+            if replay_player.as_ref().is_some_and(|p| p.sim.fuel <= 0.0 && !p.sim.crashed) {
+                let msg = "OUT OF FUEL";
+                let fs = 48.0 * ui;
+                let dims = measure_text(msg, None, fs as u16, 1.0);
+                draw_text(msg, (sw - dims.width) / 2.0, sh * 0.42, fs,
+                    Color::from_rgba(255, 180, 60, 255));
+            }
             if REPLAY_UI_VISIBLE.load(Ordering::Relaxed) != 0 {
                 // Half size, tucked into the corner with tighter margins
                 // than the full-size park spot, and clear of the HTML replay
@@ -2238,7 +2283,9 @@ async fn main() {
             draw_text(msg, (sw - dims.width) / 2.0, sh * 0.42, fs,
                 Color::from_rgba(255, 90, 60, 255));
         } else if sim.fuel <= 0.0 {
-            let msg = "OUT OF FUEL — [R] RESET";
+            // Shown the moment the tank empties; FUEL_OUT_END_SECS later the
+            // run ends (game over) — the last coast still counts.
+            let msg = "OUT OF FUEL";
             let fs = 48.0 * ui;
             let dims = measure_text(msg, None, fs as u16, 1.0);
             draw_text(msg, (sw - dims.width) / 2.0, sh * 0.42, fs,
@@ -2387,7 +2434,7 @@ async fn main() {
             // Runs ended by a manual reset while alive go to the highscore
             // store too ("longest flights", not "longest crashes") — a
             // crashed run was already published at the impact.
-            let ended_alive = !sim.crashed;
+            let ended_alive = !sim.crashed && !run_over;
             let ended_dist = sim.max_dist;
             let (ended_fuel, ended_hull) = (sim.fuel, sim.hull);
             sim = Sim::new(sim.level.clone());
@@ -2398,14 +2445,15 @@ async fn main() {
             shake = 0.0;
             mode = Mode::Flying;
             run_started = false;
+            run_over = false;
             let ended = std::mem::replace(
                 &mut recorder,
                 Recording::new(sim_params(), sim.level.to_params(),
                     (HYBRID_MAX_SECS / PHYSICS_DT) as u32),
             );
             if ended_alive {
-                // A crashed run was already published (both channels) at
-                // the impact — only alive resets report here.
+                // A crashed or fuel-out run was already published (both
+                // channels) when it ended — only alive resets report here.
                 report_run_end(&ended, ended_dist);
                 report_run_analytics(1, ended.ticks(), ended_dist, ended_fuel, ended_hull);
             }

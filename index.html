@@ -1414,10 +1414,16 @@
       if (st === 2 && overlay === null && !uiCmdPending) {
         goDist.textContent = Math.round(wasm_exports.cur_dist()) + " m";
         goBest.textContent = "best " + Math.round(wasm_exports.get_best_dist()) + " m";
-        // Bank the just-ended run first (its run_end drives the play
-        // counter), then slot the one-time consent screen between the
+        // Collect the just-ended run SYNCHRONOUSLY before deciding which
+        // screen to open — an out-of-fuel game over publishes and enters
+        // state 2 in the same frame (no wreck-phase window like a crash),
+        // so waiting for the 500 ms collect poll could miss the submit
+        // dialog. Then bank the run for analytics (its run_end drives the
+        // play counter) and slot the one-time consent screen between the
         // score dialog and the game-over screen once the device has
-        // 3 plays: crash → [submit dialog] → [scr-consent] → scr-gameover.
+        // 3 plays: game over → [submit dialog] → [scr-consent] →
+        // scr-gameover.
+        collectEndedRun();
         pegAnalytics.pollRuns();
         const afterScore = pegAnalytics.consentDue() ? "scr-consent" : "scr-gameover";
         // Every crash-ended publishable run gets the submit/skip dialog in
@@ -2571,7 +2577,7 @@
             const ticks = wasm_exports.run_end_ticks();
             enqueue("run_end", {
               level,
-              cause: wasm_exports.run_end_cause() === 0 ? "crash" : "reset",
+              cause: ["crash", "reset", "fuel"][wasm_exports.run_end_cause()] || "crash",
               distance: wasm_exports.run_end_dist(),
               durationMs: Math.round(ticks * TICK_MS),
               fuel: wasm_exports.run_end_fuel(),
