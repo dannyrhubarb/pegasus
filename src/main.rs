@@ -387,6 +387,7 @@ pub extern "C" fn load_level(len: u32) {
     if let Ok(text) = std::str::from_utf8(&b[..end]) {
         *PENDING_LEVEL.lock().unwrap() = Some(world::Level::parse(text));
         BEST_DIST.store(0, Ordering::Relaxed);
+        BEST_NAME.lock().unwrap().clear();
     }
 }
 
@@ -404,6 +405,20 @@ pub extern "C" fn set_best_dist(v: f32) {
 #[unsafe(no_mangle)]
 pub extern "C" fn get_best_dist() -> f32 {
     f32::from_bits(BEST_DIST.load(Ordering::Relaxed))
+}
+
+// The record holder shown under the HUD BEST line ("by <pilot>"). Pushed by
+// JS alongside set_best_dist (same blob_in_ptr buffer-write pattern as the
+// replay blobs, UTF-8 text instead of a blob); becomes "you" the moment the
+// live run beats the seeded record; cleared with BEST_DIST on level load.
+// Empty = no line drawn (offline, empty board, pads scoring).
+static BEST_NAME: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_best_name(len: u32) {
+    let b = BLOB_IN.lock().unwrap();
+    let end = (len as usize).min(b.len());
+    *BEST_NAME.lock().unwrap() = String::from_utf8_lossy(&b[..end]).into_owned();
 }
 
 // --- Highscores & best-run ghost (the global board is the store) ---
@@ -2077,6 +2092,11 @@ async fn main() {
             && sim.max_dist > f32::from_bits(BEST_DIST.load(Ordering::Relaxed))
         {
             BEST_DIST.store(sim.max_dist.to_bits(), Ordering::Relaxed);
+            // The seeded record just fell — the holder is now the pilot.
+            let mut name = BEST_NAME.lock().unwrap();
+            if name.as_str() != "you" {
+                *name = "you".to_string();
+            }
         }
 
         // The prominent distance / score readout is drawn LATER — below the
@@ -2657,6 +2677,21 @@ async fn main() {
         draw_text(&big, ro_x, ro_y, big_fs, WHITE);
         draw_text(&small, ro_x, ro_y + small_fs + 4.0 * ui,
             small_fs, Color::from_rgba(150, 180, 220, 220));
+        // Record attribution under the BEST line ("by <pilot>" — or "by you"
+        // once the record falls); empty name = no line (offline, pads).
+        if world_sim.level.scoring == Scoring::Distance {
+            let name = BEST_NAME.lock().unwrap();
+            if !name.is_empty() {
+                let by = format!("by {}", *name);
+                let mut by_fs = small_fs * 0.78;
+                let by_dim = measure_text(&by, None, by_fs as u16, 1.0);
+                if by_dim.width > mm_w - ro_margin {
+                    by_fs *= (mm_w - ro_margin) / by_dim.width;
+                }
+                draw_text(&by, ro_x, ro_y + small_fs + 4.0 * ui + by_fs + 4.0 * ui,
+                    by_fs, Color::from_rgba(130, 155, 190, 200));
+            }
+        }
 
         next_frame().await;
     }

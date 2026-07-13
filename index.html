@@ -483,7 +483,16 @@
     }
     .rowlist .row:hover { background: rgba(52, 231, 255, 0.12); }
     .rowlist .row .lname { flex: 1; text-align: left; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
-    .rowlist .row .lbest { color: var(--dim); font-size: 0.85em; }
+    .rowlist .row .lbest {
+      color: var(--dim);
+      font-size: 0.85em;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 2px;
+    }
+    .rowlist .row .lbest-by { color: var(--faint); font-size: 0.78em; white-space: nowrap; }
+    .rowlist .row .lbest-by:empty { display: none; }
     #scores-list .rank { color: var(--amber); width: 1.6em; text-align: left; }
     #scores-list .dist { font-weight: 700; min-width: 4.5em; text-align: right; color: var(--text); }
     /* Two-line global entry: pilot name over the localised date+time */
@@ -1745,10 +1754,18 @@
     let scoresFile = null;        // the level whose board scr-scores shows
     let levelPickerMode = "fly";  // "fly" -> pick & load & fly; "scores" -> pick & show board
 
-    const levelBestEls = {}; // file -> the row's .lbest span, for in-place updates
-    function levelBestText(file) {
-      const b = globalBestFor(file);
-      return b > 0 ? "best " + Math.round(b) + " m" : "—";
+    const levelBestEls = {}; // file -> the row's {d, by} spans, for in-place updates
+    // Fill a row's best cell: the global record over "by <pilot>" (the
+    // attribution shows in the scores-mode picker, where the row IS the
+    // record; fly mode keeps the compact single line). In-place only — see
+    // the DOM-stability rule in renderLevels.
+    function setLevelBest(file) {
+      const els = levelBestEls[file];
+      if (!els) return;
+      const e = globalBestEntryFor(file);
+      els.d.textContent = e && e.score > 0 ? "best " + Math.round(e.score) + " m" : "—";
+      els.by.textContent =
+        levelPickerMode === "scores" && e && e.name ? "by " + e.name : "";
     }
     function renderLevels() {
       // A chooser, not a status view — no pre-selected highlight. The "best"
@@ -1769,8 +1786,12 @@
         name.textContent = levelNames[file];
         const best = document.createElement("span");
         best.className = "lbest";
-        best.textContent = levelBestText(file);
-        levelBestEls[file] = best;
+        const bd = document.createElement("span");
+        const by = document.createElement("span");
+        by.className = "lbest-by";
+        best.append(bd, by);
+        levelBestEls[file] = { d: bd, by };
+        setLevelBest(file);
         row.append(name, best);
         row.addEventListener("click", () => {
           if (levelPickerMode === "scores") {
@@ -2127,10 +2148,11 @@
       try { localStorage.setItem(BOARD_CACHE_KEY, JSON.stringify(boardCache)); }
       catch (e) { /* quota — cache is best-effort */ }
     }
-    // Global all-time record for a level, for the picker rows (null if unknown).
-    function globalBestFor(file) {
+    // Global all-time record entry for a level, for the picker rows
+    // ({name, score, ...} — null if unknown).
+    function globalBestEntryFor(file) {
       const c = getBoard(levelStem(file), "alltime");
-      return c && c.length ? c[0].score : null;
+      return c && c.length ? c[0] : null;
     }
 
     // The global all-time record drives the in-flight BEST readout and the
@@ -2154,9 +2176,20 @@
           if (data) putBoard(stem, "alltime", data.scores || []);
           const scores = getBoard(stem, "alltime") || []; // fresh, else cached
           if (file !== currentLevelFile || !scores.length) return;
-          if (typeof wasm_exports !== "undefined" && wasm_exports.get_best_dist
-              && scores[0].score > wasm_exports.get_best_dist()) {
-            wasm_exports.set_best_dist(scores[0].score);
+          if (typeof wasm_exports !== "undefined" && wasm_exports.get_best_dist) {
+            if (scores[0].score > wasm_exports.get_best_dist()) {
+              wasm_exports.set_best_dist(scores[0].score);
+            }
+            // Attribute the record under the HUD BEST line — unless the
+            // session's own (unsubmitted) best already beats the board, in
+            // which case the game shows "by you" on its own.
+            if (wasm_exports.set_best_name
+                && scores[0].score >= wasm_exports.get_best_dist()) {
+              const nb = new TextEncoder().encode(scores[0].name || "");
+              const nptr = wasm_exports.blob_in_ptr(nb.length);
+              new Uint8Array(wasm_memory.buffer, nptr, nb.length).set(nb);
+              wasm_exports.set_best_name(nb.length);
+            }
           }
           // The ghost is the best run that still carries a replay blob
           // (over-long runs submit score-only).
@@ -2282,8 +2315,7 @@
             putBoard(stem, "alltime", data.scores || []);
             // In-place text update ONLY — never rebuild the rows from an
             // async callback (see renderLevels).
-            const el = levelBestEls[file];
-            if (el) el.textContent = levelBestText(file);
+            setLevelBest(file);
           })
           .catch(() => {});
       }
