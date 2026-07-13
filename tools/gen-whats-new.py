@@ -7,7 +7,9 @@ Merges two sources into one newest-first JSON array of
 - git history: every reachable commit carrying a `Whats-new:` trailer —
   the per-commit maintenance rule for user-facing changes (see CLAUDE.md
   "What's new page"). Revision, date and time come from git itself, so
-  they survive the rebase merges that rewrite branch shas.
+  they survive the rebase merges that rewrite branch shas. The date is
+  the COMMITTER date — when the change landed on main, not when the
+  branch work was started (see LOG_FORMAT below).
 - tools/whats-new-backfill.json: hand-curated entries for user-facing
   commits that predate the trailer convention. Their main shas are
   final, so pinning them in a file is safe — but never add NEW entries
@@ -30,7 +32,12 @@ BACKFILL = Path(__file__).with_name("whats-new-backfill.json")
 
 # \x1f between fields, \x1e between commits: commit subjects/trailers can
 # contain anything printable, so field-split on control characters.
-LOG_FORMAT = "%h%x1f%aI%x1f%(trailers:key=Whats-new,valueonly,separator=%x20,unfold)%x1e"
+# %cI = COMMITTER date: the rebase merge rewrites it to the moment the
+# commit landed on main, so entries order by when players actually got
+# the change. The author date (%aI) survives rebases and would sort a
+# long-lived branch by when the work was STARTED — a change merged today
+# could sink below entries authored hours after it (seen live 2026-07-13).
+LOG_FORMAT = "%h%x1f%cI%x1f%(trailers:key=Whats-new,valueonly,separator=%x20,unfold)%x1e"
 
 
 def trailer_entries():

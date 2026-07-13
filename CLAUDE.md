@@ -300,7 +300,14 @@ revision. The data is `whats-new.json`, **generated at deploy time** by
 `tools/gen-whats-new.py` in `build-site` — never hand-written, because
 rebase merges rewrite branch shas, so a sha pinned in a file at authoring
 time would be wrong on `main`; git itself is the only truthful source of
-rev/date/time. Two inputs, merged and sorted by author date:
+rev/date/time. Entries are dated and sorted by **COMMITTER date** (`%cI`)
+— the rebase merge stamps it with the moment the commit landed on `main`,
+so the page orders by when players actually GOT each change. **Not author
+date**: that survives rebases, so a long-lived branch would sort by when
+its work was STARTED and sink below entries authored after it (seen live
+on the first post-launch merge, 2026-07-13 — that's why this switched;
+the backfill dates were rewritten to committer dates at the same time).
+Two inputs, merged:
 - **`Whats-new:` commit trailers — THE RULE: every commit that changes
   something a player can see or feel MUST carry a `Whats-new: <short
   player-language summary>` trailer in its commit-message trailer block.**
