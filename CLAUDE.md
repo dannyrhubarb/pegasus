@@ -201,7 +201,9 @@ while the wasm loads):
   **⟳ Reload latest build** button (`#force-reload`, same `?fresh=<ts>`
   bypass as the toast below).
 - **scr-pause**: Resume / Exit to menu. **scr-gameover**: CRASHED + run
-  distance + best, Fly again / Watch replay / Main menu.
+  distance + best, Fly again / Watch replay / "‹ Back" (`#btn-gomenu` —
+  ends the run and opens the fly-mode level picker; home when there's no
+  level list).
 
 During flight the only HTML is two corner buttons (`#hud-btns`, top-right):
 **✕ menu** (opens scr-pause — an X, not a pause glyph, since it reads as
@@ -234,11 +236,12 @@ represents, so the preview always matches where back lands.
 On `popstate`, `uiBack()` performs the current state's own Back action by
 clicking the UI's real controls (analytics logs them like taps):
 generically **the screen's `.mbtn.back`** (levels / scores / settings /
-about / what's-new — and scr-name, whose Skip carries the class; any new
-screen with an `.mbtn.back` gets hardware back for free), pause → Resume,
-**game-over → Fly again** (the entry beneath is the run; Main menu stays
-a button), flight → pause screen (like Esc/✕), replay → exit replay (✕);
-scr-consent deliberately no-ops. Afterwards `syncHistory()` (also called
+about / what's-new — scr-name's Skip and **scr-gameover's "‹ Back"**
+carry the class too; any new screen with an
+`.mbtn.back` gets hardware back for free — so game-over's back ends the
+run and lands on the fly-mode picker, matching its `histPath`
+`[home, levels, gameover]`), pause → Resume, flight → pause screen (like
+Esc/✕), replay → exit replay (✕); scr-consent deliberately no-ops. Afterwards `syncHistory()` (also called
 at the end of `showScreen`/`closeMenu`) **reconciles** history to the new
 state's path: deeper → `pushState`, lateral (the crash flow's
 name → consent → game-over swaps at one depth) → `replaceState`, jumps
@@ -1329,7 +1332,7 @@ commit the refreshed page.
 - **Always open a PR** after pushing a feature branch — standing instruction
   from the owner (no need to ask first). The PR also produces a phone-testable
   preview deployment at `pr-<n>/`.
-- Development branch: `claude/backend-score-validation-7fe6xo` (current); previous: `claude/whats-new-about-button-yqbh2j`
+- Development branch: `claude/android-back-button-nav-0tgzdd` (current); previous: `claude/backend-score-validation-7fe6xo`
 - Merges to `main` via rebase PRs using the GitHub MCP tools (`mcp__github__create_pull_request`, `mcp__github__merge_pull_request`).
 - **Curate the branch before merging.** Rebase merges land every branch
   commit on `main` verbatim, so branch noise becomes permanent history.
