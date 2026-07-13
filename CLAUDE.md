@@ -156,7 +156,10 @@ while the wasm loads):
   reset the flight waiting behind the menu). It's a chooser, so **no
   pre-selected highlight**. The per-row "best" is the level's **global
   all-time record** (the #1 from the board cache, refreshed by
-  `prefetchGlobalBests` on every open); "—" offline/unknown. **DOM-stability rule (hard-won)**: async results update the
+  `prefetchGlobalBests` on every open); "—" offline/unknown. In **scores
+  mode** each row also shows "by <pilot>" under the record; fly mode
+  keeps the compact single line. Row-best updates go through
+  `setLevelBest` (in-place, per the rule below). **DOM-stability rule (hard-won)**: async results update the
   row text IN PLACE (`levelBestEls`) — rebuilding the rows under an
   in-flight tap retargeted the tap to whatever landed at those coordinates,
   including the Back button right below the list (= surprise exit to the
@@ -673,7 +676,9 @@ Cleaned up 2026-07. The top-left column, top to bottom: the **minimap**
 (480×160), the **fuel & hull gauges** just below it (big fuel-drop / heart
 icons; see "Fuel"), then the **primary readout** — the run **distance**
 (`{max_dist} m`, or the **score** on pads levels), **big** (`100*ui`, the
-best `0.36×` beneath), **left-aligned** to the column's left edge (`mm_ox`,
+best `0.36×` beneath, and under that the record attribution "by <pilot>"
+at `0.78×` of the BEST size — `BEST_NAME`, see "Online high scores";
+hidden when empty), **left-aligned** to the column's left edge (`mm_ox`,
 plus a `20*ui` margin) and **shrunk to the minimap width** so long numbers
 stay inside the column. (It's drawn in the gauge block, after the bars are
 laid out, so it can sit below them.) All HUD text/icon sizes are `× ui`, and
@@ -1100,8 +1105,12 @@ the real backend. All JS-side in `index.html`:
   score raises the in-game `BEST_DIST` (the HUD BEST = the world record)
   and the best entry **with a replay** is fetched from CloudFront and
   pushed via `load_ghost_blob` — the racing ghost is the global record
-  run. `ghostLoadedPath` dedupes the blob fetch; stale responses for a
-  since-switched level are dropped (and the game would reject a
+  run. The record holder's name rides along via `set_best_name` (the
+  `blob_in_ptr` buffer, UTF-8 text) and the HUD draws "by <pilot>" under
+  the BEST line — flipped to "by you" by the game the moment the live run
+  beats the record; skipped when the session's own best already exceeds
+  the board. `ghostLoadedPath` dedupes the blob fetch; stale responses
+  for a since-switched level are dropped (and the game would reject a
   wrong-level ghost anyway). Offline / empty board: silent no-op — no
   ghost, session-only BEST.
 - E2E-tested headless (Playwright + a stub API server, scratch-only):
