@@ -390,9 +390,10 @@ pub extern "C" fn load_level(len: u32) {
 }
 
 // Best distance on the current level (the Distance-scoring high score).
-// The game raises it live as the run passes it; JS seeds it with the
-// level's global all-time record after each level (re)load — load_level
-// clears it so records never leak across levels.
+// The game raises it when a run ENDS (never live mid-flight — see
+// raise_best_dist); JS seeds it with the level's global all-time record
+// after each level (re)load — load_level clears it so records never leak
+// across levels.
 static BEST_DIST: AtomicU32 = AtomicU32::new(0);
 
 #[unsafe(no_mangle)]
@@ -407,10 +408,31 @@ pub extern "C" fn get_best_dist() -> f32 {
 
 // The record holder shown under the HUD BEST line ("by <pilot>"). Pushed by
 // JS alongside set_best_dist (same blob_in_ptr buffer-write pattern as the
-// replay blobs, UTF-8 text instead of a blob); becomes "you" the moment the
-// live run beats the seeded record; cleared with BEST_DIST on level load.
+// replay blobs, UTF-8 text instead of a blob); becomes "you" when a run that
+// beat the seeded record ENDS (with the BEST raise — never mid-flight);
+// cleared with BEST_DIST on level load.
 // Empty = no line drawn (offline, empty board, pads scoring).
 static BEST_NAME: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+// Raise the per-level BEST once a run has ENDED (destroying crash, fuel-out,
+// or a manual reset while alive). Deliberately NOT called live during flight:
+// while a record-beating run is still going, the HUD keeps showing the
+// PREVIOUS best (and its holder) as the target to chase — the big readout
+// already shows the current distance, so mirroring it into BEST was pure
+// duplication (and it erased the number the pilot was trying to beat).
+fn raise_best_dist(level: &Level, dist: f32) {
+    if level.scoring != Scoring::Distance
+        || dist <= f32::from_bits(BEST_DIST.load(Ordering::Relaxed))
+    {
+        return;
+    }
+    BEST_DIST.store(dist.to_bits(), Ordering::Relaxed);
+    // The seeded record just fell — the holder is now the pilot.
+    let mut name = BEST_NAME.lock().unwrap();
+    if name.as_str() != "you" {
+        *name = "you".to_string();
+    }
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn set_best_name(len: u32) {
@@ -1343,6 +1365,7 @@ async fn main() {
                 // handover wait must not publish the same run twice).
                 if !run_over {
                     run_over = true;
+                    raise_best_dist(&sim.level, sim.max_dist);
                     report_run_end(&recorder, sim.max_dist);
                     report_run_analytics(0, recorder.ticks(), sim.max_dist, sim.fuel, sim.hull);
                 }
@@ -1377,6 +1400,7 @@ async fn main() {
             && !sim.crashed && !run_over
         {
             run_over = true;
+            raise_best_dist(&sim.level, sim.max_dist);
             report_run_end(&recorder, sim.max_dist);
             report_run_analytics(2, recorder.ticks(), sim.max_dist, sim.fuel, sim.hull);
             mode = Mode::CrashDialog;
@@ -2143,18 +2167,10 @@ async fn main() {
         smooth_fps += (get_fps() as f32 - smooth_fps) * 0.05;
         let cave_x = cam_x.rem_euclid(PERIOD);
         let debug_hud = DEBUG_HUD.load(Ordering::Relaxed) != 0;
-        // Distance levels: the score IS the farthest |x| reached; raise the
-        // per-level best live (seeded with the global record by JS).
-        if sim.level.scoring == Scoring::Distance
-            && sim.max_dist > f32::from_bits(BEST_DIST.load(Ordering::Relaxed))
-        {
-            BEST_DIST.store(sim.max_dist.to_bits(), Ordering::Relaxed);
-            // The seeded record just fell — the holder is now the pilot.
-            let mut name = BEST_NAME.lock().unwrap();
-            if name.as_str() != "you" {
-                *name = "you".to_string();
-            }
-        }
+        // Distance levels: the score IS the farthest |x| reached. BEST is
+        // deliberately NOT raised here — mid-flight the HUD keeps showing
+        // the previous best as the target; raise_best_dist runs at the
+        // run-end sites (crash / fuel-out / alive reset) instead.
 
         // The prominent distance / score readout is drawn LATER — below the
         // minimap + fuel + hull gauges (see the gauge block) — so it needs
@@ -2451,6 +2467,9 @@ async fn main() {
             if ended_alive {
                 // A crashed or fuel-out run was already published (both
                 // channels) when it ended — only alive resets report here.
+                // (The fresh sim carries the same level, so its clone is
+                // fine for the best-raise check.)
+                raise_best_dist(&sim.level, ended_dist);
                 report_run_end(&ended, ended_dist);
                 report_run_analytics(1, ended.ticks(), ended_dist, ended_fuel, ended_hull);
             }
