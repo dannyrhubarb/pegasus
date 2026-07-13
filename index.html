@@ -2189,10 +2189,13 @@
       .catch(() => {}); // offline build / no server: everything stays local
 
     function submitScore(file, entry) {
-      const body = { level: levelStem(file), name: playerName(), score: entry.d };
-      // The server caps decoded replays at 512 KiB (~699k base64 chars);
-      // an over-long run still submits its score, just without the replay.
-      if (entry.b && entry.b.length <= 699050) body.replay = entry.b;
+      // The replay is mandatory: the server re-simulates it to verify the
+      // claimed score before the run reaches any board (maybeSubmitOnline
+      // guarantees entry.b exists and fits the 512 KiB decoded cap).
+      const body = {
+        level: levelStem(file), name: playerName(), score: entry.d,
+        replay: entry.b,
+      };
       fetch(backendCfg.apiBaseUrl + "/v1/scores", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -2204,7 +2207,10 @@
     }
 
     function maybeSubmitOnline(file, entry) {
-      if (!backendCfg || entry.d < 1) return;
+      // No replay (or one over the server's 512 KiB decoded cap ≈ 699k
+      // base64 chars — multi-hour runs only) means the server can't verify
+      // the run, so it isn't submittable at all; don't offer the dialog.
+      if (!backendCfg || entry.d < 1 || !entry.b || entry.b.length > 699050) return;
       // Submission is always an EXPLICIT choice: every crash-ended run gets
       // the submit/skip dialog (name prefilled once persisted). The gate on
       // state 1 wreck / 2 dialog means reset-ended runs (restart / exit to
