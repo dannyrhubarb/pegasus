@@ -72,6 +72,11 @@ runs:
         # Version marker fetched with cache bypassed by index.html, to detect
         # a stale cached page and offer the "new build" reload toast.
         printf '{"revision":"%s"}\n' "${GIT_REV}" > site/version.json
+        # What's New data for the About screen: curated backfill + every
+        # commit carrying a `Whats-new:` trailer. Needs full git history —
+        # the workflows that use this action check out with fetch-depth: 0
+        # (a shallow clone silently drops every trailered commit below HEAD).
+        python3 tools/gen-whats-new.py > site/whats-new.json
         # Backend endpoints (online high scores). Comes from the
         # BACKEND_CONFIG_JSON repo variable so URLs rotate without a code
         # change; validated so a malformed variable fails the build here
