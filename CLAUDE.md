@@ -389,10 +389,12 @@ generator — all world generation is `Level` methods, so a level IS the world:
 
 `Level::parse` reads `key = value` lines (# comments; unknown keys ignored
 for forward compatibility; missing keys keep `Level::demo()` defaults — the
-legacy world). Shipped levels (pinned by `include_str!` tests): **The
-Expanse** (distance, no shafts, boulders) and **The Glide** (distance, no
-shafts, no boulders) — the two "fly far" levels — plus **The Caves** (the
-original, kept as demo/experimentation level).
+legacy world). Shipped levels (pinned by `include_str!` tests), **all
+distance-scored** since 2026-07: **The Expanse** (no shafts, boulders),
+**The Glide** (no shafts, no boulders) and **The Caves** (the original
+shafted world, kept as demo/experimentation level — was the one pads-scored
+level; the compiled-in `Level::demo()` default stays `pads` for the
+pad-scoring unit tests).
 
 **Decoupled from the wasm**: `index.html` fetches `levels/manifest.json` +
 each `.level` file (cache-bypassed), fills the `#level-select` in the info

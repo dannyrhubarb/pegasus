@@ -3265,7 +3265,13 @@ mod tests {
         // levels/*.level fails the suite instead of silently falling back to
         // demo defaults.
         let caves = Level::parse(include_str!("../levels/caves.level"));
-        assert_eq!(caves, Level { name: "The Caves".to_string(), ..Level::demo() });
+        // Distance-scored since 2026-07 like the other shipped levels (the
+        // compiled-in demo default stays pads for the pad-scoring tests).
+        assert_eq!(caves, Level {
+            name: "The Caves".to_string(),
+            scoring: Scoring::Distance,
+            ..Level::demo()
+        });
 
         let expanse = Level::parse(include_str!("../levels/expanse.level"));
         assert_eq!(expanse.name, "The Expanse");
