@@ -623,6 +623,9 @@
       user-select: none;
       -webkit-user-select: none;
     }
+    /* Labels sit left (the screen centres text, so a wrapped long label
+       would otherwise centre its lines). */
+    .setrow span:first-child { flex: 1; text-align: left; }
     .setrow input { display: none; }
     .setrow .tgl {
       flex: 0 0 auto;
@@ -956,7 +959,7 @@
         <input type="checkbox" id="debug-toggle"><span class="tgl"></span>
       </label>
       <label class="setrow" id="retid-toggle-row">
-        <span>Share returning-player id</span>
+        <span>Share anonymous returning player id</span>
         <input type="checkbox" id="retid-toggle"><span class="tgl"></span>
       </label>
       <div class="setrow" id="name-row" style="display:none">
@@ -973,11 +976,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">cbbac39-pr-91</div>
+        <div class="info-value" id="git-rev">3b150df-pr-91</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-13T09:52:44Z</div>
+        <div class="info-value" id="build-time">2026-07-13T10:20:17Z</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors) are sent to
@@ -1616,7 +1619,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "cbbac39-pr-91";
+    const wasmRev = "3b150df-pr-91";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
