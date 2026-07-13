@@ -374,9 +374,11 @@ degrades to silence.
   `#menu` — nearest ancestor with an id, containers skipped — plus the
   corner buttons via `onTap`, whose `preventDefault`ed touchstart never
   produces a click), `run_start`/`run_end` (wasm channel below),
-  `replay_watch`, `error` (drained from the boot guard's `window.__pegErrs`
-  buffer — the guard stays standalone, push-only, ≤10 entries),
-  `stale_cache` (toast shown / reload), `consent_choice`.
+  `replay_watch`, `score_submit` (the crash-flow submit dialog's outcome:
+  submitted / skipped + level stem; the Settings name editor — no pending
+  run — emits nothing), `error` (drained from the boot guard's
+  `window.__pegErrs` buffer — the guard stays standalone, push-only, ≤10
+  entries), `stale_cache` (toast shown / reload), `consent_choice`.
 - **Wasm run channel** (`src/main.rs`, next to the RUN_SEQ block):
   `run_start_seq()` bumps when the armed-idle gate flips;
   `report_run_analytics` publishes cause/ticks/dist/fuel/hull mirrors +

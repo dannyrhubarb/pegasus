@@ -2204,12 +2204,20 @@
       localStorage.setItem("pegasus_player_name", name);
       nameCur.textContent = name;
       if (pendingSubmit) {
+        pegAnalytics.enqueue("score_submit",
+          { action: "submitted", level: levelStem(pendingSubmit.file) });
         submitScore(pendingSubmit.file, pendingSubmit.entry);
         pendingSubmit = null;
       }
       showScreen(nameReturnTo);
     });
     document.getElementById("btn-name-skip").addEventListener("click", () => {
+      // Only the crash-flow ask counts as a skip — closing the Settings
+      // name editor (no pending run) is not a submit decision.
+      if (pendingSubmit) {
+        pegAnalytics.enqueue("score_submit",
+          { action: "skipped", level: levelStem(pendingSubmit.file) });
+      }
       pendingSubmit = null; // this run stays unsubmitted; asks again next crash
       showScreen(nameReturnTo);
     });
