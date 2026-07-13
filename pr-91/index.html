@@ -973,11 +973,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">a826317-pr-91</div>
+        <div class="info-value" id="git-rev">cbbac39-pr-91</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-13T09:42:07Z</div>
+        <div class="info-value" id="build-time">2026-07-13T09:52:44Z</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors) are sent to
@@ -1616,7 +1616,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "a826317-pr-91";
+    const wasmRev = "cbbac39-pr-91";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -1904,6 +1904,15 @@
       const ptr = wasm_exports.blob_in_ptr(bytes.length);
       new Uint8Array(wasm_memory.buffer, ptr, bytes.length).set(bytes);
       return wasm_exports[exportName](bytes.length) === 1;
+    }
+    // UTF-8 text through the same blob_in_ptr buffer (set_best_name /
+    // set_ghost_name — void consumers, so no return check).
+    function pushTextToWasm(text, exportName) {
+      if (typeof wasm_exports === "undefined" || !wasm_exports[exportName]) return;
+      const b = new TextEncoder().encode(text || "");
+      const ptr = wasm_exports.blob_in_ptr(b.length);
+      new Uint8Array(wasm_memory.buffer, ptr, b.length).set(b);
+      wasm_exports[exportName](b.length);
     }
 
     // The board shows `scoresFile` — the level picked for viewing, which
@@ -2193,12 +2202,8 @@
             // Attribute the record under the HUD BEST line — unless the
             // session's own (unsubmitted) best already beats the board, in
             // which case the game shows "by you" on its own.
-            if (wasm_exports.set_best_name
-                && scores[0].score >= wasm_exports.get_best_dist()) {
-              const nb = new TextEncoder().encode(scores[0].name || "");
-              const nptr = wasm_exports.blob_in_ptr(nb.length);
-              new Uint8Array(wasm_memory.buffer, nptr, nb.length).set(nb);
-              wasm_exports.set_best_name(nb.length);
+            if (scores[0].score >= wasm_exports.get_best_dist()) {
+              pushTextToWasm(scores[0].name, "set_best_name");
             }
           }
           // The ghost is the best run that still carries a replay blob
@@ -2211,6 +2216,8 @@
               if (!buf || file !== currentLevelFile) return;
               if (pushBytesToWasm(new Uint8Array(buf), "load_ghost_blob")) {
                 ghostLoadedPath = g.replayPath;
+                // The pilot's callsign floats under the ghost in-game.
+                pushTextToWasm(g.name, "set_ghost_name");
               }
             });
         })
