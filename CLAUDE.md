@@ -359,7 +359,13 @@ degrades to silence.
   without a visit** — a long-lapsed device loses the key and is legitimately
   re-asked; D30-style retention undercounts iOS/Safari.
 - **Events** (allowlisted backend-side; see pegasus-backend CLAUDE.md):
-  `session_start` (touch/viewport bucket/dpr + **acquisition**: the
+  `session_start` (touch/viewport bucket/dpr + the **device-mix enums**
+  `os`/`browser`/`display`/`formFactor` — parsed CLIENT-side in
+  `deviceInfo()`, the raw user-agent never leaves the device; handles the
+  iPadOS-pretends-to-be-macOS unmask (`MacIntel` + `maxTouchPoints > 1`),
+  in-app webviews (no `Safari/` token on iOS, `; wv` on Android) and
+  installed-PWA detection (`display-mode: standalone` media query or
+  Safari's legacy `navigator.standalone`) + **acquisition**: the
   referrer ORIGIN — `new URL(document.referrer).origin`, same-origin and
   app-opened/empty referrers skipped — plus `utm_source/medium/campaign`
   from the page URL. Origin-only is all a cross-site referrer ever carries
