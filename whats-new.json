@@ -1,5 +1,10 @@
 [
  {
+  "rev": "d7468e8",
+  "date": "2026-07-14T01:21:38+02:00",
+  "note": "The About screen's privacy note now spells out that rough device type (like iOS / Safari / phone) is part of the anonymous play stats"
+ },
+ {
   "rev": "11403c3",
   "date": "2026-07-14T00:11:56+02:00",
   "note": "The crash screen's menu button is now a Back button that returns to level selection, and the phone back button goes there too"

@@ -1024,17 +1024,18 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">11403c3</div>
+        <div class="info-value" id="git-rev">d7468e8</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-13T22:12:33Z</div>
+        <div class="info-value" id="build-time">2026-07-13T23:22:07Z</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors, which site
-        linked here &mdash; never the page) are sent to the developer to
-        improve the game &mdash; no account, no ads, no third parties, no IP
-        address stored. Optionally (Settings &rarr; &ldquo;Share
+        linked here &mdash; never the page &mdash; and rough device type
+        like &ldquo;iOS &middot; Safari &middot; phone&rdquo;) are sent to
+        the developer to improve the game &mdash; no account, no ads, no
+        third parties, no IP address stored. Optionally (Settings &rarr; &ldquo;Share
         anonymous returning-player id&rdquo;) a random id is kept on this
         device so returning players can be counted; switching it off deletes
         the id.
@@ -1897,7 +1898,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "11403c3";
+    const wasmRev = "d7468e8";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -2796,8 +2797,55 @@
             // Same 600 CSS px threshold the game's mobile zoom keys on.
             viewport: vp < 600 ? "small" : vp < 900 ? "medium" : "large",
             dpr: Math.round(devicePixelRatio || 1),
-          }, acquisition()));
+          }, acquisition(), deviceInfo()));
         } catch (_) {}
+      }
+
+      // Coarse device enums parsed HERE, client-side — only these bucket
+      // names are ever sent; the raw user-agent string never leaves the
+      // device (the backend allowlists exactly these values). Known lies
+      // handled: iPadOS 13+ reports a macOS UA in desktop-class mode
+      // (unmasked via Mac platform + real touch points); every iOS
+      // browser is WebKit, so "chrome" on ios is a shell, not an engine;
+      // token order matters because Chromium UAs embed Safari's tokens
+      // and Edge/Samsung embed Chrome's. "webview" = an in-app browser
+      // (iOS WKWebViews carry no Safari/ token; Android webviews carry
+      // "; wv"). "standalone" = installed PWA / home-screen app
+      // (display-mode media query, or Safari's legacy navigator.standalone).
+      function deviceInfo() {
+        const d = {};
+        try {
+          const ua = navigator.userAgent || "";
+          const iPadMasq = navigator.platform === "MacIntel" &&
+            (navigator.maxTouchPoints || 0) > 1;
+          const iPad = /iPad/.test(ua) || iPadMasq;
+          const ios = /iPhone|iPod/.test(ua) || iPad;
+          d.os = ios ? "ios"
+            : /Android/.test(ua) ? "android"
+            : /Mac/.test(ua) ? "mac"
+            : /Windows/.test(ua) ? "windows"
+            : /Linux|CrOS/.test(ua) ? "linux"
+            : "other";
+          d.browser =
+            /Edg|EdgiOS|EdgA/.test(ua) ? "edge"
+            : /SamsungBrowser/.test(ua) ? "samsung"
+            // A home-screen app also lacks the Safari/ token but is
+            // Safari's shell, not an in-app webview — the display enum
+            // already carries its installed-ness.
+            : ios && navigator.standalone === true ? "safari"
+            : /; wv\)/.test(ua) || (ios && !/Safari\//.test(ua)) ? "webview"
+            : /Firefox|FxiOS/.test(ua) ? "firefox"
+            : /Chrome|CriOS/.test(ua) ? "chrome" // Opera/Brave/etc land here — they are Chromium
+            : /Safari\//.test(ua) ? "safari"
+            : "other";
+          d.display = (window.matchMedia &&
+              matchMedia("(display-mode: standalone)").matches) ||
+            navigator.standalone === true ? "standalone" : "browser";
+          d.formFactor = ios ? (iPad ? "tablet" : "phone")
+            : /Android/.test(ua) ? (/Mobile/.test(ua) ? "phone" : "tablet")
+            : "desktop";
+        } catch (_) {}
+        return d;
       }
 
       // Where the player came from. The referrer is ORIGIN-only by
