@@ -1142,8 +1142,11 @@ the real backend. All JS-side in `index.html`:
   re-simulates it to verify the claimed score before the run reaches any
   board, so a run with no blob or one over the server's 512 KiB decoded cap
   (multi-hour runs only) gets no submit dialog at all (was: submitted
-  score-only). A server-side verification rejection (422) surfaces only as
-  the existing `console.warn` — an honest client shouldn't hit it. The same
+  score-only). A run that fails server-side verification is **silently
+  discarded**: the response is shaped like success so a forger gets no
+  oracle to iterate against — the run just never appears on any board.
+  Nothing surfaces client-side; an honest client shouldn't produce one. The
+  same
   screen doubles as the Settings "Pilot name" editor
   (`openNameDialog(returnTo)`). Its input `stopPropagation()`s keydown so
   typing never reaches the game.
