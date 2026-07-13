@@ -391,9 +391,9 @@ pub extern "C" fn load_level(len: u32) {
 }
 
 // Best distance on the current level (the Distance-scoring high score).
-// The game raises it live; JS polls get_best_dist to mirror it into
-// localStorage (per level) and pushes the stored value back after each
-// level (re)load — load_level clears it so scores never leak across levels.
+// The game raises it live as the run passes it; JS seeds it with the
+// level's global all-time record after each level (re)load — load_level
+// clears it so records never leak across levels.
 static BEST_DIST: AtomicU32 = AtomicU32::new(0);
 
 #[unsafe(no_mangle)]
@@ -406,13 +406,14 @@ pub extern "C" fn get_best_dist() -> f32 {
     f32::from_bits(BEST_DIST.load(Ordering::Relaxed))
 }
 
-// --- Highscores & best-run ghost (JS owns the localStorage store) ---
+// --- Highscores & best-run ghost (the global board is the store) ---
 // When a run ends (destroying crash, or a manual reset while alive), the
 // game publishes it here: deflated recording blob + final |x| distance + a
 // bumped sequence number. JS polls run_seq(), pulls the blob on change, and
-// maintains the top-5-per-level list (with timestamps) in localStorage —
-// the wasm has no wall clock or persistent storage, so dates and retention
-// live on the JS side.
+// offers it to the online submit flow (the pegasus-backend global board) —
+// the sole consumer since the local localStorage store was removed. The
+// board pushes back: the global record raises BEST_DIST (set_best_dist)
+// and its replay becomes the racing ghost (load_ghost_blob).
 static RUN_BLOB: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
 static RUN_DIST: AtomicU32 = AtomicU32::new(0);
 static RUN_SEQ: AtomicU32 = AtomicU32::new(0);
@@ -434,7 +435,7 @@ pub extern "C" fn run_blob_ptr() -> *const u8 {
     RUN_BLOB.lock().unwrap().as_ptr()
 }
 
-// Publish an ended run for the JS highscore store. Blink-and-gone attempts
+// Publish an ended run for the JS submit flow. Blink-and-gone attempts
 // (< GHOST_MIN_SECS) aren't worth a leaderboard slot.
 fn report_run_end(rec: &Recording, dist: f32) {
     if rec.ticks() < (GHOST_MIN_SECS / PHYSICS_DT) as u32 {
@@ -502,12 +503,12 @@ fn report_run_analytics(cause: u32, ticks: u32, dist: f32, fuel: f32, hull: f32)
     RUN_END_SEQ.fetch_add(1, Ordering::Relaxed);
 }
 
-// Blobs coming BACK from the JS store: watch a stored replay, or race its
-// best run as the ghost. Same buffer-write pattern as load_level: JS asks
-// for a buffer (blob_in_ptr), writes the deflated blob, then calls the
+// Blobs coming BACK from the global board: watch a fetched replay, or race
+// the record run as the ghost. Same buffer-write pattern as load_level: JS
+// asks for a buffer (blob_in_ptr), writes the deflated blob, then calls the
 // consumer; the main loop picks the decoded Recording up at the next frame
 // boundary. Both consumers return 1 on a successful decode, 0 otherwise (a
-// mangled localStorage entry must not panic the game).
+// corrupt download must not panic the game).
 static BLOB_IN: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
 static PENDING_WATCH: std::sync::Mutex<Option<Recording>> = std::sync::Mutex::new(None);
 static PENDING_GHOST: std::sync::Mutex<Option<Recording>> = std::sync::Mutex::new(None);
@@ -783,8 +784,8 @@ const CRASH_DIALOG_DELAY: f32 = 1.5;
 // its window is a memory safety net, not an expected limit — only a
 // parked-for-hours session ever hits it.
 const HYBRID_MAX_SECS: f32 = 3600.0;
-// A run shorter than this doesn't replace the ghost on reset — R-spam
-// shouldn't wipe a good previous run.
+// A run shorter than this isn't published to the highscore channel —
+// R-spam shouldn't reach the submit dialog.
 const GHOST_MIN_SECS: f32 = 2.0;
 // Stick-hold engine gating (one-handed scheme): a quick flick shorter than
 // DELAY never lights the engine, thrust then ramps to full over RAMP, and a
@@ -1055,7 +1056,7 @@ async fn main() {
             glow = 0.0;
         }
 
-        // Best-run ghost pushed from JS (the current level's top highscore).
+        // Best-run ghost pushed from JS (the level's global-record replay).
         // Wrong-level recordings are dropped — the ghost must race THIS
         // world. Adopted for future spawns; if the live run is still young
         // the player also starts now and the lockstep loop below catches it
@@ -1302,8 +1303,8 @@ async fn main() {
                     fuel: sim.fuel, hull: sim.hull, glow,
                     land_timer: 0.0, // a destroying tick always zeroes it
                 });
-                // Publish for the JS highscore store (top 5 per level)
-                // and the analytics channel (which also takes short runs).
+                // Publish for the online submit flow and the analytics
+                // channel (which also takes short runs).
                 report_run_end(&recorder, sim.max_dist);
                 report_run_analytics(0, recorder.ticks(), sim.max_dist, sim.fuel, sim.hull);
             } else {
@@ -2071,7 +2072,7 @@ async fn main() {
         let cave_x = cam_x.rem_euclid(PERIOD);
         let debug_hud = DEBUG_HUD.load(Ordering::Relaxed) != 0;
         // Distance levels: the score IS the farthest |x| reached; raise the
-        // per-level best live (JS mirrors it into localStorage).
+        // per-level best live (seeded with the global record by JS).
         if sim.level.scoring == Scoring::Distance
             && sim.max_dist > f32::from_bits(BEST_DIST.load(Ordering::Relaxed))
         {
@@ -2358,8 +2359,9 @@ async fn main() {
                 report_run_end(&ended, ended_dist);
                 report_run_analytics(1, ended.ticks(), ended_dist, ended_fuel, ended_hull);
             }
-            // The ghost re-simulates the BEST run (pushed from the JS store)
-            // from its first keyframe, in lockstep with the new run.
+            // The ghost re-simulates the BEST run (the global record,
+            // pushed from JS) from its first keyframe, in lockstep with
+            // the new run.
             ghost_player = if GHOST_ON.load(Ordering::Relaxed) != 0 {
                 ghost_rec.as_ref().and_then(ResimPlayer::new)
             } else {
@@ -3291,9 +3293,10 @@ mod tests {
     #[test]
     fn stored_highscore_blob_round_trips_into_a_watchable_replay() {
         // Fly a scripted run on The Glide, serialize + deflate it (exactly
-        // what the JS store keeps in localStorage), then decode it the way
-        // the watch_replay_blob export does and re-play it to the end — the
-        // decoded recording must carry its own level and be fully playable.
+        // the blob shape the backend stores and CloudFront serves), then
+        // decode it the way the watch_replay_blob export does and re-play
+        // it to the end — the decoded recording must carry its own level
+        // and be fully playable.
         let level = Level::parse(include_str!("../levels/glide.level"));
         let mut sim = Sim::new(level.clone());
         let mut rec = Recording::new(sim_params(), level.to_params(), u32::MAX);

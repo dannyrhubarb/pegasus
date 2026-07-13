@@ -486,7 +486,6 @@
     .rowlist .row .lbest { color: var(--dim); font-size: 0.85em; }
     #scores-list .rank { color: var(--amber); width: 1.6em; text-align: left; }
     #scores-list .dist { font-weight: 700; min-width: 4.5em; text-align: right; color: var(--text); }
-    #scores-list .when { color: var(--faint); flex: 1; text-align: right; font-size: 0.78em; }
     /* Two-line global entry: pilot name over the localised date+time */
     #scores-list .pcol {
       flex: 1;
@@ -1330,9 +1329,8 @@
     document.getElementById("btn-fly").addEventListener("click", () => openLevelPicker("fly"));
     document.getElementById("btn-resume").addEventListener("click", closeMenu);
     document.getElementById("btn-exit").addEventListener("click", () => {
-      // Abandoning the run ends it (a reset while alive also banks it in the
-      // high scores — "longest flights"); the fresh ship waits, paused,
-      // behind the menu.
+      // Abandoning the run ends it (reset-ended runs are never submitted
+      // online); the fresh ship waits, paused, behind the menu.
       call("ui_command", 1);
       showScreen("scr-home");
     });
@@ -1747,20 +1745,15 @@
     let scoresFile = null;        // the level whose board scr-scores shows
     let levelPickerMode = "fly";  // "fly" -> pick & load & fly; "scores" -> pick & show board
 
-    function bestFor(file) {
-      return parseFloat(localStorage.getItem("pegasus_best_" + file) || "0");
-    }
-
     const levelBestEls = {}; // file -> the row's .lbest span, for in-place updates
     function levelBestText(file) {
-      const b = backendCfg ? globalBestFor(file) : bestFor(file);
+      const b = globalBestFor(file);
       return b > 0 ? "best " + Math.round(b) + " m" : "—";
     }
     function renderLevels() {
       // A chooser, not a status view — no pre-selected highlight. The "best"
-      // shown per row is the level's GLOBAL all-time record when online
-      // (from the board cache, warmed by prefetchGlobalBests), falling back
-      // to this device's local best offline.
+      // shown per row is the level's GLOBAL all-time record (from the board
+      // cache, warmed by prefetchGlobalBests); "—" offline/unknown.
       //
       // Async results must NOT call back into this function: rebuilding the
       // rows under an in-flight tap made the tap land on whatever ended up
@@ -1800,20 +1793,17 @@
       if (text === undefined) return;
       const push = () => {
         if (typeof wasm_exports === "undefined" || !wasm_exports.load_level) return false;
-        collectEndedRun(); // bank any just-ended run under the OLD level first
+        collectEndedRun(); // collect any just-ended run under the OLD level first
         pegAnalytics.pollRuns(); // same: the run belongs to the OLD level
         const bytes = new TextEncoder().encode(text);
         const ptr = wasm_exports.level_buf_ptr(bytes.length);
         new Uint8Array(wasm_memory.buffer, ptr, bytes.length).set(bytes);
         wasm_exports.load_level(bytes.length); // also clears the in-game best
-        const best = bestFor(file);
-        if (best > 0) wasm_exports.set_best_dist(best);
         currentLevelFile = file;
         scoresFile = file; // the board defaults to the loaded level
         ghostLoadedPath = null; // the fresh start dropped the old ghost
         renderLevels();
         renderScores();
-        pushGhost();
         applyGlobalRecord(file); // global record -> BEST readout + ghost
         return true;
       };
@@ -1847,43 +1837,30 @@
       })
       .catch(() => {}); // local dev without a server: keep the built-in level
 
-    // Mirror the in-game best distance into localStorage (keyed per level
-    // file), so the Distance high score survives reloads.
-    setInterval(() => {
-      if (!currentLevelFile) return;
-      if (typeof wasm_exports === "undefined" || !wasm_exports.get_best_dist) return;
-      const best = wasm_exports.get_best_dist();
-      const key = "pegasus_best_" + currentLevelFile;
-      if (best > parseFloat(localStorage.getItem(key) || "0")) {
-        localStorage.setItem(key, String(best));
-      }
-    }, 2000);
-
-    // --- High scores (top 5 longest flights per level) ---
+    // --- High scores (global-only) ---
     // The game publishes every ended run (crash, or a manual reset while
     // alive) as a deflated recording blob + final distance + a bumped
-    // sequence number. We poll the sequence, keep the 5 best per level in
-    // localStorage (with a timestamp — the wasm has no wall clock), render
-    // them in the High scores screen, and push the #1 recording back into
-    // the game as the "best run" ghost. The ▶ button pushes a stored blob
-    // back through watch_replay_blob, which re-simulates it — in the level
-    // it was flown in, which the blob carries in its header.
+    // sequence number; the online submit flow is its only consumer. Scores,
+    // replays and the racing ghost all live on the global board — there is
+    // no local store any more (the old pegasus_best_<file> /
+    // pegasus_scores_<file> keys are cleared below).
     const scoresList = document.getElementById("scores-list");
     const scoresEmpty = document.getElementById("scores-empty");
 
-    function loadScores(file) {
-      try {
-        const raw = localStorage.getItem("pegasus_scores_" + file);
-        const arr = raw ? JSON.parse(raw) : [];
-        return Array.isArray(arr) ? arr : [];
-      } catch (e) { return []; }
-    }
-    function saveScores(file, arr) {
-      try { localStorage.setItem("pegasus_scores_" + file, JSON.stringify(arr)); }
-      catch (e) { /* quota — the game just keeps playing without the store */ }
-    }
-    // Uint8Array <-> base64 (chunked: String.fromCharCode has an argument
-    // limit, and replay blobs can reach hundreds of KB).
+    // Clear the dead local high-score layer left by earlier builds — the
+    // base64 replay blobs made it by far the biggest thing in localStorage.
+    try {
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i);
+        if (k && (k.startsWith("pegasus_best_") || k.startsWith("pegasus_scores_"))) {
+          localStorage.removeItem(k);
+        }
+      }
+    } catch (e) { /* storage unavailable — nothing to clean */ }
+
+    // Uint8Array -> base64 (chunked: String.fromCharCode has an argument
+    // limit, and replay blobs can reach hundreds of KB), for the submit
+    // POST body.
     function b64FromBytes(bytes) {
       let out = "";
       for (let i = 0; i < bytes.length; i += 0x8000) {
@@ -1891,30 +1868,12 @@
       }
       return btoa(out);
     }
-    function bytesFromB64(b64) {
-      const str = atob(b64);
-      const out = new Uint8Array(str.length);
-      for (let i = 0; i < str.length; i++) out[i] = str.charCodeAt(i);
-      return out;
-    }
 
     function pushBytesToWasm(bytes, exportName) {
       if (typeof wasm_exports === "undefined" || !wasm_exports[exportName]) return false;
       const ptr = wasm_exports.blob_in_ptr(bytes.length);
       new Uint8Array(wasm_memory.buffer, ptr, bytes.length).set(bytes);
       return wasm_exports[exportName](bytes.length) === 1;
-    }
-    function pushBlobToWasm(entry, exportName) {
-      return pushBytesToWasm(bytesFromB64(entry.b), exportName);
-    }
-
-    // The current level's best run becomes the in-game ghost (the game
-    // ignores it while the "Race best ghost" toggle is off, and drops
-    // recordings whose level doesn't match).
-    function pushGhost() {
-      if (!currentLevelFile) return;
-      const best = loadScores(currentLevelFile)[0];
-      if (best) pushBlobToWasm(best, "load_ghost_blob");
     }
 
     // The board shows `scoresFile` — the level picked for viewing, which
@@ -1924,41 +1883,12 @@
       const file = scoresFile || currentLevelFile;
       scoresLevelEl.textContent = file ? (levelNames[file] || "") : "";
       updateResetHint(); // clears itself on all-time / offline
-      if (scoresSrc === "global") { renderGlobalScores(); return; }
-      const scores = file ? loadScores(file) : [];
-      scoresStatus.style.display = "none";
-      scoresList.textContent = "";
-      scoresEmpty.style.display = scores.length ? "none" : "";
-      scores.forEach((entry, i) => {
-        const li = document.createElement("li");
-        const rank = document.createElement("span");
-        rank.className = "rank";
-        rank.textContent = (i + 1) + ".";
-        const dist = document.createElement("span");
-        dist.className = "dist";
-        dist.textContent = Math.round(entry.d) + " m";
-        const when = document.createElement("span");
-        when.className = "when";
-        when.textContent = fmtDateTime(entry.t);
-        const watch = document.createElement("button");
-        watch.className = "watch";
-        watch.textContent = "▶ watch";
-        watch.addEventListener("click", e => {
-          e.stopPropagation();
-          if (pushBlobToWasm(entry, "watch_replay_blob")) {
-            pegAnalytics.replayWatch("scores");
-            watchFromMenu = true;
-            closeMenu(); // the ui_state poll returns here when it ends
-          }
-        });
-        li.append(rank, dist, when, watch);
-        scoresList.appendChild(li);
-      });
+      renderGlobalScores();
     }
 
-    // Bank a newly ended run into the store. Called on a short poll and
-    // right before a level switch (so the run lands under the level it was
-    // actually flown on).
+    // Collect a newly ended run for the online submit flow. Called on a
+    // short poll and right before a level switch (so the run lands under
+    // the level it was actually flown on).
     let lastRunSeq = 0;
     function collectEndedRun() {
       if (!currentLevelFile) return;
@@ -1966,19 +1896,12 @@
       const seq = wasm_exports.run_seq();
       if (seq === lastRunSeq) return;
       lastRunSeq = seq;
+      if (!backendCfg) return; // offline: nowhere to submit
       const len = wasm_exports.run_blob_len();
       if (!len) return;
       const bytes = new Uint8Array(wasm_memory.buffer, wasm_exports.run_blob_ptr(), len).slice();
-      const entry = { d: wasm_exports.run_dist(), t: Date.now(), b: b64FromBytes(bytes) };
-      const scores = loadScores(currentLevelFile);
-      scores.push(entry);
-      scores.sort((a, b) => b.d - a.d);
-      const top = scores.slice(0, 5);
-      saveScores(currentLevelFile, top);
-      renderScores();
-      renderLevels(); // the per-level best shown in the list may have moved
-      if (top[0] === entry) pushGhost(); // a new record races next spawn
-      maybeSubmitOnline(currentLevelFile, entry);
+      maybeSubmitOnline(currentLevelFile,
+        { d: wasm_exports.run_dist(), b: b64FromBytes(bytes) });
     }
     setInterval(() => {
       collectEndedRun();
@@ -1988,14 +1911,12 @@
     // --- Online high scores (dannyrhubarb/pegasus-backend) -----------------
     // config.json ({apiBaseUrl, replayBaseUrl}) is written at deploy time
     // from the BACKEND_CONFIG_JSON repo variable (see build-site); no file =
-    // offline-only build (local dev, forks, variable unset) and none of this
-    // UI appears. With it: every banked run auto-POSTs under the persisted
-    // pilot name (`pegasus_player_name`); until a name exists, the first
-    // crash pops the submit-score dialog instead of the game-over screen.
-    // The High-scores screen gains Local/Global pickers — Global fetches the
-    // top-50 board (today / week / all time) and its ▶ buttons pull the
-    // replay blob from CloudFront into the same watch_replay_blob path the
-    // local entries use.
+    // offline build (local dev, forks, variable unset): no boards, no ghost,
+    // and the BEST readout is session-only. With it: every crash-ended run
+    // gets the submit/skip dialog (name prefilled once persisted as
+    // `pegasus_player_name`), the High-scores screen fetches the top-50
+    // board (today / week / all time), and its ▶ buttons pull the replay
+    // blob from CloudFront into the watch_replay_blob path.
     let backendCfg = null;
     let pendingSubmit = null; // {file, entry} awaiting the first-time dialog
     const scoresPeriodRow = document.getElementById("scores-period");
@@ -2008,7 +1929,7 @@
     // midnight, the ISO week at Monday 00:00 UTC. Re-rendered per board
     // render and on a slow tick while the screen is up.
     function updateResetHint() {
-      if (scoresSrc !== "global" || scoresPeriod === "alltime") {
+      if (!backendCfg || scoresPeriod === "alltime") {
         scoresReset.textContent = "";
         return;
       }
@@ -2030,7 +1951,6 @@
     const nameDistEl = document.getElementById("name-dist");
     const nameScoreEl = document.getElementById("name-score");
     const nameInput = document.getElementById("name-input");
-    let scoresSrc = "local";
     let scoresPeriod = "today";
 
     function playerName() {
@@ -2107,9 +2027,6 @@
         pegAnalytics.configure(c); // analytics needs only apiBaseUrl
         if (!c || !c.apiBaseUrl || !c.replayBaseUrl) return;
         backendCfg = c;
-        // Online build: the High-scores screen IS the global board (the
-        // local top-5 store stays alive underneath for the ghost).
-        scoresSrc = "global";
         scoresPeriodRow.style.display = "";
         nameRow.style.display = "";
         nameCur.textContent = playerName() || "—";
@@ -2305,9 +2222,13 @@
       if (overlay !== "scr-scores") return;
       const file = scoresFile || currentLevelFile;
       if (!backendCfg || !file) {
+        // Offline build (or the config fetch hasn't landed): scores are
+        // global-only, so there is nothing to show.
         scoresList.textContent = "";
         renderedBoardJson = null;
         scoresEmpty.style.display = "none";
+        scoresStatus.textContent = "Global scores need a connection";
+        scoresStatus.style.display = "";
         return;
       }
       const stem = levelStem(file);
@@ -2325,7 +2246,7 @@
       fetch(url, { cache: "no-store" })
         .then(r => (r.ok ? r.json() : null))
         .then(data => {
-          if (seq !== globalFetchSeq || scoresSrc !== "global") return;
+          if (seq !== globalFetchSeq) return;
           if (!data) throw new Error("bad response");
           setLoading(false);
           const scores = data.scores || [];
@@ -2335,7 +2256,7 @@
           if (JSON.stringify(scores) !== renderedBoardJson) renderBoardRows(scores);
         })
         .catch(() => {
-          if (seq !== globalFetchSeq || scoresSrc !== "global") return;
+          if (seq !== globalFetchSeq) return;
           setLoading(false);
           // Keep the cached board on screen if we have one; only surface the
           // error when there's nothing to show.
@@ -2387,6 +2308,7 @@
             throw new Error("replay rejected by the game (build mismatch?)");
           }
           setLoading(false);
+          pegAnalytics.replayWatch("scores");
           watchFromMenu = true;
           closeMenu(); // the ui_state poll returns here when it ends
         })
