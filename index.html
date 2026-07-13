@@ -993,16 +993,17 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">3f6e045</div>
+        <div class="info-value" id="git-rev">ef900e2</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-13T11:56:28Z</div>
+        <div class="info-value" id="build-time">2026-07-13T13:01:23Z</div>
       </div>
       <div class="hint" id="privacy-note">
-        Anonymous play stats (runs, distances, menu taps, errors) are sent to
-        the developer to improve the game &mdash; no account, no ads, no third
-        parties, no IP address stored. Optionally (Settings &rarr; &ldquo;Share
+        Anonymous play stats (runs, distances, menu taps, errors, which site
+        linked here &mdash; never the page) are sent to the developer to
+        improve the game &mdash; no account, no ads, no third parties, no IP
+        address stored. Optionally (Settings &rarr; &ldquo;Share
         anonymous returning-player id&rdquo;) a random id is kept on this
         device so returning players can be counted; switching it off deletes
         the id.
@@ -1697,7 +1698,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "3f6e045";
+    const wasmRev = "ef900e2";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -2577,13 +2578,45 @@
               localStorage.getItem("pegasus_analytics_debug") !== "1") return;
           apiBase = String(cfg.apiBaseUrl).replace(/\/+$/, "");
           const vp = Math.min(innerWidth, innerHeight);
-          enqueue("session_start", {
+          enqueue("session_start", Object.assign({
             touch: (navigator.maxTouchPoints || 0) > 0,
             // Same 600 CSS px threshold the game's mobile zoom keys on.
             viewport: vp < 600 ? "small" : vp < 900 ? "medium" : "large",
             dpr: Math.round(devicePixelRatio || 1),
+          }, acquisition()));
+        } catch (_) {}
+      }
+
+      // Where the player came from. The referrer is ORIGIN-only by
+      // construction: strict-origin-when-cross-origin is the web default
+      // and Safari ITP additionally truncates all cross-site referrers, so
+      // a path/query never reaches us anyway — and origin-only is also
+      // what the privacy note promises (content-free: "reddit.com sent
+      // someone", never which post). Links opened from native apps
+      // (iMessage, QR codes, most in-app browsers) carry NO referrer at
+      // all, so utm_* query tags on links we hand out ourselves are the
+      // reliable channel — they ride our own URL, unaffected by referrer
+      // policy. Same-origin referrers (the ?fresh= self-reload) are
+      // dropped as non-signal.
+      function acquisition() {
+        const a = {};
+        try {
+          if (document.referrer) {
+            const o = new URL(document.referrer).origin;
+            if (o && o !== "null" && o !== location.origin) {
+              a.referrer = o.slice(0, 100);
+            }
+          }
+        } catch (_) {}
+        try {
+          const q = new URLSearchParams(location.search);
+          [["utm_source", "utmSource"], ["utm_medium", "utmMedium"],
+           ["utm_campaign", "utmCampaign"]].forEach(([param, prop]) => {
+            const v = q.get(param);
+            if (v) a[prop] = v.slice(0, 50);
           });
         } catch (_) {}
+        return a;
       }
 
       setInterval(() => { drainErrors(); flush(false); }, FLUSH_MS);
