@@ -1,5 +1,10 @@
 [
  {
+  "rev": "ae8f74f",
+  "date": "2026-07-13T18:36:43Z",
+  "note": "A message from the management greets you when the game loads"
+ },
+ {
   "rev": "3f6e045",
   "date": "2026-07-13T11:41:10Z",
   "note": "See what changed — a What's New page in the About screen"

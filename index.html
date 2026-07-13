@@ -451,6 +451,21 @@
     .mbtn.back:hover { background: rgba(127, 180, 221, 0.12); box-shadow: none; }
     .hint { font-size: 13px; color: var(--faint); letter-spacing: 0.08em; }
 
+    /* TEMPORARY: the load-time announcement panel (see #scr-announce). */
+    .announce-msg {
+      width: min(520px, 88vw);
+      padding: 18px 20px;
+      border: 1.5px solid var(--amber);
+      border-radius: 10px;
+      background: var(--panel);
+      color: var(--amber);
+      font: 700 15px/1.65 var(--mono);
+      letter-spacing: 0.06em;
+      text-align: center;
+      text-shadow: 0 0 8px rgba(255, 194, 75, 0.5);
+      box-shadow: 0 0 12px rgba(255, 194, 75, 0.3), inset 0 0 12px rgba(255, 194, 75, 0.08);
+    }
+
     /* Rows shared by the level list and the high-score list */
     .rowlist {
       list-style: none;
@@ -807,7 +822,23 @@
   <!-- Game menu: open at boot (markup, not JS, so it shows while wasm loads) -->
   <div id="menu" class="open" role="dialog" aria-modal="true">
 
-    <div class="screen on" id="scr-home">
+    <!-- TEMPORARY load-time announcement: boots open (markup, like scr-home
+         used to, so it shows while the wasm loads); dismiss goes to the main
+         menu. Remove this screen (and its .announce-msg CSS + the `overlay`
+         boot value in the script) when the message has run its course. -->
+    <div class="screen on" id="scr-announce">
+      <div class="h2">INCOMING TRANSMISSION</div>
+      <div class="announce-msg">
+        Attention you floor scraping maggots!<br><br>
+        I respect the commitment to horizontal living but the anti-measures
+        have been researched, funded, and will be deployed. Your reign of
+        low-effort terror ends in a near future! Stay tuned and start
+        practicing real flying!
+      </div>
+      <div class="mbtn primary" id="btn-announce-ok" data-goto="scr-home">Roger that</div>
+    </div>
+
+    <div class="screen" id="scr-home">
       <div class="title">PEGASUS</div>
       <div class="subtitle">MOON LANDER</div>
       <!-- Ship hero: the real vector ship (same geometry as icon.svg /
@@ -993,11 +1024,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">a091191</div>
+        <div class="info-value" id="git-rev">ae8f74f</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-13T14:30:24Z</div>
+        <div class="info-value" id="build-time">2026-07-13T18:42:55Z</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors, which site
@@ -1298,7 +1329,9 @@
     // 3 replay) + cur_dist — see the bridge block in src/main.rs.
     const menuEl = document.getElementById("menu");
     const hudBtns = document.getElementById("hud-btns");
-    let overlay = "scr-home"; // matches the markup's boot state
+    let overlay = "scr-announce"; // matches the markup's boot state (the
+                                  // TEMPORARY announcement; scr-home once
+                                  // that screen is removed)
     let wantPause = 1;        // re-asserted once the exports load
 
     function setPause(on) {
@@ -1698,7 +1731,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "a091191";
+    const wasmRev = "ae8f74f";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
