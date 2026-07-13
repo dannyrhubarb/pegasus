@@ -1905,6 +1905,15 @@
       new Uint8Array(wasm_memory.buffer, ptr, bytes.length).set(bytes);
       return wasm_exports[exportName](bytes.length) === 1;
     }
+    // UTF-8 text through the same blob_in_ptr buffer (set_best_name /
+    // set_ghost_name — void consumers, so no return check).
+    function pushTextToWasm(text, exportName) {
+      if (typeof wasm_exports === "undefined" || !wasm_exports[exportName]) return;
+      const b = new TextEncoder().encode(text || "");
+      const ptr = wasm_exports.blob_in_ptr(b.length);
+      new Uint8Array(wasm_memory.buffer, ptr, b.length).set(b);
+      wasm_exports[exportName](b.length);
+    }
 
     // The board shows `scoresFile` — the level picked for viewing, which
     // defaults to the loaded level but can differ (browsing another level's
@@ -2193,12 +2202,8 @@
             // Attribute the record under the HUD BEST line — unless the
             // session's own (unsubmitted) best already beats the board, in
             // which case the game shows "by you" on its own.
-            if (wasm_exports.set_best_name
-                && scores[0].score >= wasm_exports.get_best_dist()) {
-              const nb = new TextEncoder().encode(scores[0].name || "");
-              const nptr = wasm_exports.blob_in_ptr(nb.length);
-              new Uint8Array(wasm_memory.buffer, nptr, nb.length).set(nb);
-              wasm_exports.set_best_name(nb.length);
+            if (scores[0].score >= wasm_exports.get_best_dist()) {
+              pushTextToWasm(scores[0].name, "set_best_name");
             }
           }
           // The ghost is the best run that still carries a replay blob
@@ -2211,6 +2216,8 @@
               if (!buf || file !== currentLevelFile) return;
               if (pushBytesToWasm(new Uint8Array(buf), "load_ghost_blob")) {
                 ghostLoadedPath = g.replayPath;
+                // The pilot's callsign floats under the ghost in-game.
+                pushTextToWasm(g.name, "set_ghost_name");
               }
             });
         })
