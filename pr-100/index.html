@@ -1024,11 +1024,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">37674f6-pr-100</div>
+        <div class="info-value" id="git-rev">57d5d58-pr-100</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-13T20:57:48Z</div>
+        <div class="info-value" id="build-time">2026-07-13T21:42:33Z</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors, which site
@@ -1069,7 +1069,7 @@
       </div>
       <div class="mbtn primary" id="btn-again">Fly again</div>
       <div class="mbtn" id="btn-replay">Watch replay</div>
-      <div class="mbtn" id="btn-gomenu">Main menu</div>
+      <div class="mbtn back" id="btn-gomenu">&#8249; Back (to level selection)</div>
     </div>
 
     <!-- One-time analytics consent ask: its own full screen, slotted
@@ -1425,8 +1425,11 @@
       closeMenu(); // state flips to replay; the poll below brings us back
     });
     document.getElementById("btn-gomenu").addEventListener("click", () => {
+      // Back from the game-over screen: end the run (the fresh ship waits
+      // behind the menu) and return to the level picker — or home when
+      // there's no level list.
       call("ui_command", 1);
-      showScreen("scr-home");
+      levelFiles.length ? openLevelPicker("fly") : showScreen("scr-home");
     });
 
     // In-game corner buttons.
@@ -1512,7 +1515,9 @@
         case "scr-whatsnew": return ["scr-home", "scr-about", "scr-whatsnew"];
         case "game":         return ["scr-home", "game"];
         case "scr-pause":    return ["scr-home", "game", "scr-pause"];
-        case "scr-gameover": return ["scr-home", "game", "scr-gameover"];
+        case "scr-gameover": return levelFiles.length
+          ? ["scr-home", "scr-levels", "scr-gameover"] // back = level picker
+          : ["scr-home", "scr-gameover"];
         case "scr-consent":  return ["scr-home", "game", "scr-consent"];
         case "scr-name":     return nameReturnTo === "scr-settings"
           ? ["scr-home", "scr-settings", "scr-name"] // the Settings name editor
@@ -1589,10 +1594,6 @@
         (st === 3 ? exitReplayBtn : pauseBtn).click();
       } else if (overlay === "scr-pause") {
         document.getElementById("btn-resume").click();
-      } else if (overlay === "scr-gameover") {
-        // Fly again — the entry beneath the game-over screen is the run,
-        // so back drops you at the spawn (Main menu stays a button).
-        document.getElementById("btn-again").click();
       } else if (overlay === "scr-consent") {
         // The consent ask has no default answer — back just re-arms.
       } else {
@@ -1896,7 +1897,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "37674f6-pr-100";
+    const wasmRev = "57d5d58-pr-100";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git

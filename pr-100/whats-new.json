@@ -1,5 +1,10 @@
 [
  {
+  "rev": "57d5d58",
+  "date": "2026-07-13T21:41:53Z",
+  "note": "The crash screen's menu button is now Back to level selection, and the phone back button goes there too"
+ },
+ {
   "rev": "37674f6",
   "date": "2026-07-13T20:57:07Z",
   "note": "Back-navigation previews now match where back actually takes you, and back on the crash screen flies again"
