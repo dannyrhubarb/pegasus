@@ -303,7 +303,12 @@ impl Recording {
         let ticks = r.u32()?;
         let n_events = r.u32()? as usize;
         let n_keyframes = r.u32()? as usize;
-        let mut events = Vec::with_capacity(n_events);
+        // Never trust header counts for allocation: blobs cross trust
+        // boundaries (the backend verifier parses player uploads), and a
+        // hostile count of 4 billion would OOM on with_capacity before the
+        // reads below ever failed with "truncated". Cap by what the
+        // remaining bytes could actually hold.
+        let mut events = Vec::with_capacity(n_events.min(r.remaining() / 9));
         for _ in 0..n_events {
             events.push(InputEvent {
                 tick: r.u32()?,
@@ -316,7 +321,7 @@ impl Recording {
                 },
             });
         }
-        let mut keyframes = Vec::with_capacity(n_keyframes);
+        let mut keyframes = Vec::with_capacity(n_keyframes.min(r.remaining() / 48));
         for _ in 0..n_keyframes {
             let tick = r.u32()?;
             let mut f = [0f32; 11];
@@ -347,6 +352,9 @@ impl<'a> Reader<'a> {
         let s = self.data.get(self.pos..self.pos + n).ok_or("truncated")?;
         self.pos += n;
         Ok(s)
+    }
+    fn remaining(&self) -> usize {
+        self.data.len().saturating_sub(self.pos)
     }
     fn u8(&mut self) -> Result<u8, &'static str> {
         Ok(self.bytes(1)?[0])
@@ -495,6 +503,21 @@ mod tests {
         assert_eq!(back.ticks(), rec.ticks());
         assert_eq!(back.events, rec.events);
         assert_eq!(back.keyframes, rec.keyframes);
+    }
+
+    #[test]
+    fn hostile_header_counts_fail_without_allocating() {
+        // A header claiming 4 billion events must fail with "truncated",
+        // not OOM in Vec::with_capacity before the reads can fail — the
+        // backend verifier feeds player uploads through this parser.
+        let mut rec = Recording::new(params(), lparams(), u32::MAX);
+        rec.push_keyframe(kf(0));
+        let mut blob = rec.serialize(0);
+        // n_events sits at header offset 85 (see the layout comment above
+        // serialize): magic 4 + version 2 + build 4 + params 60 + level 11
+        // + ticks 4.
+        blob[85..89].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(Recording::deserialize(&blob).err(), Some("truncated"));
     }
 
     #[test]
