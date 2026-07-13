@@ -53,6 +53,7 @@ push-retry loop for concurrent deploys):
 - `src/audio.rs` — in-memory WAV synthesis (`wav_from_samples`, `thruster_wav`, `boom_wav`)
 - `levels/` — **runtime level data**: `*.level` files (`key = value`) + `manifest.json` (menu order), fetched by `index.html` and pushed into the wasm — new levels deploy with no recompile (see "Levels")
 - `tools/gen-third-party-licenses.py` + `third-party-licenses.html` — the generated third-party attribution page served with the site and linked from the About screen; regenerate when `Cargo.lock` changes (see "License")
+- `tools/gen-whats-new.py` + `tools/whats-new-backfill.json` — deploy-time generator for `whats-new.json`, the About screen's What's New changelog (see "What's new page" — **every user-facing commit needs a `Whats-new:` trailer**)
 - `index.html` — web wrapper, safe-area insets, the **HTML game menu** (start / pause / game-over screens, level picker, settings, high scores, about — see "Game menu"), **gamepad polling**, and a **boot guard** (touch/stick input moved in-canvas — no touch handlers here any more): a small standalone `<script>` tag ahead of the bundle (script tags parse independently, so no error in the bundle/main script can kill it) that paints any script error on screen with file:line and offers a tap-to-reload if `wasm_exports` is missing 8 s after load. Keep it first and self-contained. It also pushes each reported error into a capped `window.__pegErrs` buffer (push-only — the guard never depends on anything) that the analytics module drains (see "Analytics"). It also wraps `console.error` (installed ahead of the bundle, so the wasm `console_error` import routes through it) and appends the last logged error to the banner when the error event is anonymous or attributed to the `.wasm` file — **a Rust panic reaches JS as an opaque trap** (`RuntimeError: unreachable`; iOS Safari mutes it further to a bare "Script error." with no filename, because wasm frames fail its same-origin check), and the only useful description is the panic-hook line logged just before the trap (`src/main.rs` installs `std::panic::set_hook` → `error!("{}", info)`; the *default* hook prints the useless Debug form `PanicHookInfo { payload: Any { .. }, … }`). Unhandled promise rejections get the same banner (skipped when `reason` is null). **Fully-anonymous errors (no filename AND no console.error trace) are deliberately ignored**: same-origin scripts always carry file:line and a wasm panic always logs via the hook first, so the only things that land there are Safari-injected third-party scripts — reproduced live on iOS: opening the **share sheet** runs share/action extensions' preprocessing JS in the page, and an error in any of them arrives as a muted "Script error." (this was the mystery banner of 2026-07-06, seen right after the Pegasus rename and initially blamed on it).
 - `mq_js_bundle.js` — **vendored** miniquad/quad-snd JS loader (from not-fl3/miniquad-samples). Pinned in-repo so deploys don't depend on a third-party host; includes the audio backend. Update it deliberately if macroquad is upgraded. **Gotcha**: it declares globals at top level (`const canvas`, `var gl`, `wasm_exports`, `function load`, …) that share the page's global scope — redeclaring any of them in `index.html`'s inline script is a SyntaxError that silently kills the *whole* inline script (no `load()` → no wasm, page shows only the HTML chrome). Pick distinct names and check the bundle before adding top-level identifiers.
 
@@ -187,7 +188,9 @@ while the wasm loads):
   submit-score dialog in edit mode (see "Online high scores").
 - **scr-about**: build **git revision** + **build time** (deploy-time `sed`
   of `__GIT_REVISION__` / `__BUILD_TIME__` placeholders by `build-site`;
-  local fallback "dev (local build)" via `startsWith("__")`) and the
+  local fallback "dev (local build)" via `startsWith("__")`), the
+  **What's new** button (`#btn-whatsnew` → **scr-whatsnew**, the changelog
+  screen — see "What's new page") and the
   **⟳ Reload latest build** button (`#force-reload`, same `?fresh=<ts>`
   bypass as the toast below).
 - **scr-pause**: Resume / Exit to menu. **scr-gameover**: CRASHED + run
@@ -280,6 +283,41 @@ over the menu and was "hidden" with `opacity: 0` only — an invisible
 so taps there "mysteriously" reloaded to the main menu whenever a newer
 build existed. Hidden overlays must be `pointer-events: none` (the `.show`
 state re-enables them).
+
+### What's new page (per-commit maintenance rule)
+The About screen's **What's new** button opens **scr-whatsnew**: a
+newest-first changelog of user-facing changes, each entry a short
+player-language summary + localized date/time (`fmtDateTime`) + git
+revision. The data is `whats-new.json`, **generated at deploy time** by
+`tools/gen-whats-new.py` in `build-site` — never hand-written, because
+rebase merges rewrite branch shas, so a sha pinned in a file at authoring
+time would be wrong on `main`; git itself is the only truthful source of
+rev/date/time. Two inputs, merged and sorted by author date:
+- **`Whats-new:` commit trailers — THE RULE: every commit that changes
+  something a player can see or feel MUST carry a `Whats-new: <short
+  player-language summary>` trailer in its commit-message trailer block.**
+  One line, written for players ("Replay controls auto-hide like a video
+  player"), not commit-ese; skip it for internal refactors, CI, docs,
+  test-only changes. When curating a branch before merge, keep the
+  trailers on the commits that survive. **Gotcha (hit on the very first
+  trailer)**: git parses only the LAST paragraph of a message as the
+  trailer block — `Whats-new:` must sit in the same block as the
+  `Co-Authored-By:` trailers with NO blank line between them; a blank
+  line above it silently drops the entry. Verify with
+  `git log -1 --format='%(trailers:key=Whats-new,valueonly)'`.
+- `tools/whats-new-backfill.json` — hand-curated entries for the
+  user-facing commits that predate the trailer convention (retro-fitted
+  2026-07 from the full history). **Frozen**: their `main` shas are final
+  so pinning them is safe, but never add NEW entries here — new changes
+  get a trailer.
+
+The deploy/preview/CI workflows check out with **`fetch-depth: 0` — this
+is load-bearing**: on a shallow clone `git log` silently loses every
+trailered commit below HEAD (the generator degrades to backfill-only
+rather than failing the deploy; CI validates generation + JSON on every
+PR). The screen fetches `whats-new.json` lazily on first open
+(`cache: no-store`); a local dev build has no deploy step, so a missing
+file shows an explanatory hint, never an error.
 
 ## Analytics (web only)
 
@@ -1187,7 +1225,7 @@ commit the refreshed page.
 - **Always open a PR** after pushing a feature branch — standing instruction
   from the owner (no need to ask first). The PR also produces a phone-testable
   preview deployment at `pr-<n>/`.
-- Development branch: `claude/game-analytics-planning-verjk8` (current); previous: `claude/highscores-api-dialog-btzwny`
+- Development branch: `claude/whats-new-about-button-yqbh2j` (current); previous: `claude/game-analytics-planning-verjk8`
 - Merges to `main` via rebase PRs using the GitHub MCP tools (`mcp__github__create_pull_request`, `mcp__github__merge_pull_request`).
 - **Curate the branch before merging.** Rebase merges land every branch
   commit on `main` verbatim, so branch noise becomes permanent history.

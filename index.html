@@ -495,6 +495,23 @@
     .rowlist .row .lbest-by:empty { display: none; }
     /* Drill-down chevron (scores-mode picker: a row opens that level's board) */
     .rowlist .row .chev { color: var(--cyan); font-size: 1.25em; line-height: 1; opacity: 0.65; }
+    /* What's New (About): read-only changelog rows — two lines, no tap
+       affordance; the list scrolls internally like the score board. */
+    #wn-list {
+      max-height: 54vh;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      padding-right: 4px;
+    }
+    #wn-list li {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 4px;
+      cursor: default;
+      font-size: clamp(13px, 3vw, 15px);
+    }
+    #wn-list .wn-note { text-align: left; }
+    #wn-list .wn-meta { color: var(--faint); font-size: 0.78em; white-space: nowrap; }
     #scores-list .rank { color: var(--amber); width: 1.6em; text-align: left; }
     #scores-list .dist { font-weight: 700; min-width: 4.5em; text-align: right; color: var(--text); }
     /* Two-line global entry: pilot name over the localised date+time */
@@ -990,9 +1007,20 @@
         device so returning players can be counted; switching it off deletes
         the id.
       </div>
+      <div class="mbtn" id="btn-whatsnew">What's new</div>
       <a class="mbtn" href="third-party-licenses.html" target="_blank" rel="noopener">Third-party licenses</a>
       <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
       <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
+    </div>
+
+    <!-- What's New: the deploy-generated changelog (whats-new.json =
+         curated backfill + `Whats-new:` commit trailers — see CLAUDE.md
+         "What's new page"). Fetched lazily on first open. -->
+    <div class="screen" id="scr-whatsnew">
+      <div class="h2">WHAT'S NEW</div>
+      <ul class="rowlist" id="wn-list"></ul>
+      <div class="hint" id="wn-status" style="display:none"></div>
+      <div class="mbtn back" data-goto="scr-about">&#8249; Back</div>
     </div>
 
     <div class="screen" id="scr-pause">
@@ -1616,6 +1644,49 @@
       const t = Date.parse(rawBuildTime);
       if (!isNaN(t)) buildTime.textContent = fmtDateTime(t);
     }
+
+    // --- What's New (About) ---
+    // whats-new.json is generated at deploy time (curated backfill +
+    // `Whats-new:` commit trailers). Fetched once per page load, lazily on
+    // first open; timestamps render via fmtDateTime like the boards. A
+    // local dev build has no deploy step, so a missing file just leaves
+    // the explanatory hint up — never an error.
+    const wnList = document.getElementById("wn-list");
+    const wnStatus = document.getElementById("wn-status");
+    let wnLoaded = false;
+    function renderWhatsNew(entries) {
+      wnList.textContent = "";
+      for (const e of entries) {
+        const li = document.createElement("li");
+        const note = document.createElement("div");
+        note.className = "wn-note";
+        note.textContent = e.note;
+        const meta = document.createElement("div");
+        meta.className = "wn-meta";
+        const t = Date.parse(e.date);
+        meta.textContent = (isNaN(t) ? e.date : fmtDateTime(t)) + " · " + e.rev;
+        li.append(note, meta);
+        wnList.appendChild(li);
+      }
+    }
+    document.getElementById("btn-whatsnew").addEventListener("click", () => {
+      showScreen("scr-whatsnew");
+      if (wnLoaded) return;
+      wnStatus.textContent = "Loading…";
+      wnStatus.style.display = "";
+      fetch("whats-new.json?nocache=" + Date.now(), { cache: "no-store" })
+        .then(r => (r.ok ? r.json() : null))
+        .then(list => {
+          if (!Array.isArray(list) || !list.length) throw new Error("no data");
+          wnLoaded = true;
+          wnStatus.style.display = "none";
+          renderWhatsNew(list);
+        })
+        .catch(() => {
+          wnStatus.textContent =
+            "What’s new is generated at deploy time — unavailable in this build";
+        });
+    });
 
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
