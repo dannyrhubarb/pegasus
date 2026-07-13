@@ -155,9 +155,8 @@ while the wasm loads):
   that level's board **without reloading the game** (viewing a board must not
   reset the flight waiting behind the menu). It's a chooser, so **no
   pre-selected highlight**. The per-row "best" is the level's **global
-  all-time record** when online (the #1 from the board cache, refreshed by
-  `prefetchGlobalBests` on every open), falling back to the device's local
-  best offline. **DOM-stability rule (hard-won)**: async results update the
+  all-time record** (the #1 from the board cache, refreshed by
+  `prefetchGlobalBests` on every open); "—" offline/unknown. **DOM-stability rule (hard-won)**: async results update the
   row text IN PLACE (`levelBestEls`) — rebuilding the rows under an
   in-flight tap retargeted the tap to whatever landed at those coordinates,
   including the Back button right below the list (= surprise exit to the
@@ -168,10 +167,10 @@ while the wasm loads):
   built-in level.
 - **scr-scores**: the board for **`scoresFile`** (the level picked for
   viewing — defaults to the loaded level, decoupled from `currentLevelFile`
-  so browsing another level's scores doesn't reload). Top 5 per level with
-  ▶ watch buttons (see "High scores"); with a backend config.json deployed
-  it becomes the **global board** with Today / This week / All time period
-  chips (see "Online high scores"). Back returns to the scores-mode picker.
+  so browsing another level's scores doesn't reload). The **global board**
+  with Today / This week / All time period chips and ▶ watch buttons (see
+  "Online high scores") — scores are global-only; offline builds show
+  "Global scores need a connection". Back returns to the scores-mode picker.
 - **scr-settings**: **Sound** (`#sound-toggle-row`, `pegasus_sound`, **off by
   default** → `set_sound_enabled` → `SOUND_ON`; off mutes the thruster loop
   and skips boom playback), **Velocity vector** (`#vel-toggle-row`), **Invert
@@ -250,9 +249,10 @@ screen on desktop.
   swallows mousedown/touchstart (a canvas tap skips the replay), and
   dedupes drag seeks per slider position (at most one seek per rendered
   frame reaches the sim — the atomic keeps only the latest).
-- **Exit to menu** ends the run via `ui_command(1)` (a reset while alive
-  banks it in the high scores — "longest flights"); the fresh ship waits,
-  paused, behind the menu; Fly unpauses.
+- **Exit to menu** ends the run via `ui_command(1)` (reset-ended runs are
+  published on the run channel but never submitted online — see "Online
+  high scores"); the fresh ship waits, paused, behind the menu; Fly
+  unpauses.
 The in-canvas crash dialog is now just a dim + "CRASHED" + keyboard hints
 (R / Enter still work — that's also the native/dev fallback); its tappable
 buttons and the blob-size hint moved into the HTML game-over screen (sizes
@@ -404,13 +404,13 @@ copies `levels/` verbatim (`build-site`). Selection persists in
 the game stays on the compiled-in `Level::demo()`.
 
 **Distance high score**: `Sim.max_dist` (farthest \|x\| this run, reset by
-restore) raises the `BEST_DIST` atomic live; JS polls `get_best_dist()`
-every 2 s into `localStorage` (`pegasus_best_<file>`, per level file) and
-pushes the stored value back via `set_best_dist()` after every level load
-(`load_level` zeroes it so bests never leak across levels). When online,
-`applyGlobalRecord` then raises it to the level's **global all-time
-record** (see "Online high scores") — the HUD BEST is the world record,
-not just this device's.
+restore) raises the `BEST_DIST` atomic live; after every level load
+`applyGlobalRecord` seeds it with the level's **global all-time record**
+via `set_best_dist()` (see "Online high scores"; `load_level` zeroes it so
+records never leak across levels). The HUD BEST is the world record — or
+the session's own best where that's higher / offline. There is **no local
+persistence** (the old `pegasus_best_<file>` mirror is gone; stale keys
+are cleared at boot).
 
 **Replays**: physics depends on the level, so the recording header carries
 `LevelParams` (scoring/shafts/obstacles/pad_spacing/seed — NOT the cosmetic
@@ -937,7 +937,7 @@ for now:
   (0 = local dev). Bump `REPLAY_FORMAT_VERSION` when the layout changes
   (v3: exact rotation + land_timer in keyframes). **No backward
   compatibility while iterating** — `deserialize` rejects other versions,
-  so pre-v3 localStorage blobs stop decoding (watch/ghost buttons no-op
+  so pre-v3 server blobs stop decoding (watch/ghost pushes no-op
   gracefully); add version-tolerant reads when the game is released.
 - Trimming keeps the retained window **starting at a keyframe** with the
   effective input re-seeded there, so it stays replayable after the cap.
@@ -981,10 +981,10 @@ Live play and resim must perform IDENTICAL operation sequences:
   cosmetics (particles, shake); nothing in `sim.rs` may use it.
 
 ### Ghost of the BEST run (re-sim driven)
-`ghost_rec` is the current level's **top-highscore** recording, pushed from
-JS (`load_ghost_blob` — the **global all-time record's replay** when
-online via `applyGlobalRecord`, else the local #1; see "High scores" /
-"Online high scores"): the game keeps the racing ghost
+`ghost_rec` is the current level's **global-record** recording, pushed from
+JS (`load_ghost_blob` — the all-time board's best replay, fetched from
+CloudFront by `applyGlobalRecord`; see "Online high scores"; no ghost
+offline): the game keeps the racing ghost
 recording, and a `ResimPlayer` re-simulates it in **LOCKSTEP** with live
 play — `while p.tick < recorder.ticks()` per live `sim.tick` (a `while`,
 not an `if`, so a ghost adopted a moment after the spawn catches up in one
@@ -1002,32 +1002,33 @@ still tiny next to rendering; the ghost sim maintains its own collider
 windows around the ghost's position).
 
 ### High scores & watching stored replays
-The top **5 longest flights per level** live in `localStorage`
-(`pegasus_scores_<file>`, JS-owned — the wasm has no wall clock or
-persistent storage), each entry `{d: distance, t: epoch-ms, b: base64
-deflated recording blob}`, listed in the menu's High-scores screen with a **▶ watch**
-button. The wasm↔JS contract:
+Scores, replays and the racing ghost are **global-only** — the local
+localStorage layer (`pegasus_scores_<file>` top-5, `pegasus_best_<file>`
+mirror) was removed 2026-07 (stale keys are cleared at boot; offline
+builds get no boards/ghost and a session-only BEST). The wasm↔JS contract:
 - **Publish**: every ended run worth keeping (destroying crash, OR a manual
   reset while still alive — "longest flights", not "longest crashes") calls
   `report_run_end` → serialize + deflate into `RUN_BLOB`, `RUN_DIST` =
   `max_dist`, and bumps `RUN_SEQ`. JS polls `run_seq()` every 500 ms
   (and once more right before a level switch, so the run banks under the
-  level it was flown on), pulls the blob on change, inserts into the sorted
-  top-5, and re-renders. Runs < `GHOST_MIN_SECS` aren't published.
-- **Watch**: the ▶ button base64-decodes a stored blob into the wasm buffer
-  (`blob_in_ptr` + `watch_replay_blob`), which `decompress` + `deserialize`
-  into `PENDING_WATCH`. The main loop plays it through the SAME `Replay`
-  mode / `ResimPlayer` as the crash-dialog replay, but sourced from
-  `watch_rec` instead of the live recorder — and since a stored blob
-  carries its own `LevelParams` header, the scratch sim rebuilds the world
-  it was flown in. Watching **pauses** the interrupted run (physics is
-  frozen in non-`Flying` modes) and returns to `watch_return` (dialog if a
-  wreck is waiting, else flight) on finish/skip, so a mid-flight "watch"
-  resumes untouched. A run that ended by reset (not a crash) skips the boom
-  at playback end.
-- **Ghost**: the #1 entry is pushed back via `load_ghost_blob` (see above).
+  level it was flown on) and hands the blob to the online submit flow
+  (`collectEndedRun` → `maybeSubmitOnline` — its only consumer now).
+  Runs < `GHOST_MIN_SECS` aren't published.
+- **Watch**: a board's ▶ button pushes the fetched blob into the wasm
+  buffer (`blob_in_ptr` + `watch_replay_blob`), which `decompress` +
+  `deserialize` into `PENDING_WATCH`. The main loop plays it through the
+  SAME `Replay` mode / `ResimPlayer` as the crash-dialog replay, but
+  sourced from `watch_rec` instead of the live recorder — and since a
+  stored blob carries its own `LevelParams` header, the scratch sim
+  rebuilds the world it was flown in. Watching **pauses** the interrupted
+  run (physics is frozen in non-`Flying` modes) and returns to
+  `watch_return` (dialog if a wreck is waiting, else flight) on
+  finish/skip, so a mid-flight "watch" resumes untouched. A run that ended
+  by reset (not a crash) skips the boom at playback end.
+- **Ghost**: the global record's replay is pushed back via
+  `load_ghost_blob` (see above and "Online high scores").
 - `decode_recording` (decompress → deserialize) rejects corrupt blobs
-  (returns None, never panics) — a mangled `localStorage` entry can't crash
+  (returns None, never panics) — a corrupt download can't crash
   the game. Unit-tested end-to-end
   (`stored_highscore_blob_round_trips_into_a_watchable_replay`): fly →
   serialize + deflate → decode → re-play to the end, drift 0.
@@ -1038,25 +1039,26 @@ The deployed site can carry a **`config.json`** next to `index.html`:
 **`BACKEND_CONFIG_JSON` repo variable** (the backend stack's
 `FrontendConfigJson` output, pasted once into Settings → Actions →
 Variables; validated at build time). No variable → no config.json → the
-whole online layer is invisible (local dev, forks). Previews get the same
-config, so a PR preview talks to the real backend. All JS-side in
-`index.html`, layered on the local high-score plumbing:
+whole online layer is invisible (local dev, forks — no boards, no ghost,
+session-only BEST). Previews get the same config, so a PR preview talks to
+the real backend. All JS-side in `index.html`:
 - **Submit is always an explicit choice**: `maybeSubmitOnline` hooks
   `collectEndedRun` — every crash-ended publishable run (≥ 1 m; the game
   already drops runs < `GHOST_MIN_SECS`) is held in `pendingSubmit`, and
   the ui-state poll shows the SUBMIT SCORE dialog (`#scr-name`) **instead
   of** the game-over screen: submit → save name + POST
   `{level: <file stem>, name, score, replay}` to `/v1/scores` → game-over;
-  skip → the run stays local. The callsign input arrives prefilled once a
+  skip → the run is discarded (scores are global-only — an unsubmitted
+  run isn't kept anywhere). The callsign input arrives prefilled once a
   name is persisted (`pegasus_player_name`). Reset-ended runs (restart /
   exit-to-menu mid-flight) never pop UI and are therefore **not
   submitted**. Replays over the server's 512 KiB decoded cap are submitted
   score-only. The same screen doubles as the Settings "Pilot name" editor
   (`openNameDialog(returnTo)`). Its input `stopPropagation()`s keydown so
   typing never reaches the game.
-- **Global boards**: when a config.json is present the High-scores screen
-  IS the global board (no local/global toggle — the local top-5 store
-  still lives underneath as the ghost source). Today / This week /
+- **Global boards**: the High-scores screen IS the global board — with no
+  config.json it just shows "Global scores need a connection". Today /
+  This week /
   All time period chips fetch `/v1/levels/<stem>/scores?period=…` (top 50,
   ranked server-side); each row is TWO LINES — rank / [pilot name over a
   timestamp (`fmtDateTime`, `.pcol` column)] / distance — plus a ▶ watch
@@ -1089,11 +1091,9 @@ config, so a PR preview talks to the real backend. All JS-side in
   fetches are dropped via a sequence counter. Replay blobs are **not**
   fetched here — only on a ▶ tap (`watchGlobalReplay`).
 - **Watching a server replay**: ▶ fetches `<replayBaseUrl>/<replayPath>`
-  (CloudFront) and pushes the bytes through the SAME
-  `watch_replay_blob` path as local entries (`pushBytesToWasm` — the
-  base64 variant `pushBlobToWasm` now wraps it); the blob's header
-  carries its level, so it re-sims in the right world regardless of the
-  selected level.
+  (CloudFront) and pushes the bytes into `watch_replay_blob`
+  (`pushBytesToWasm`); the blob's header carries its level, so it re-sims
+  in the right world regardless of the selected level.
 - **Global record → BEST + ghost** (`applyGlobalRecord`): after every
   level load (and when config.json arrives, and after a successful
   submit) the loaded level's **all-time board** is refreshed; the #1
@@ -1102,8 +1102,8 @@ config, so a PR preview talks to the real backend. All JS-side in
   pushed via `load_ghost_blob` — the racing ghost is the global record
   run. `ghostLoadedPath` dedupes the blob fetch; stale responses for a
   since-switched level are dropped (and the game would reject a
-  wrong-level ghost anyway). Offline / empty board: silent no-op, the
-  local fallback (local best + local #1 ghost) stands.
+  wrong-level ghost anyway). Offline / empty board: silent no-op — no
+  ghost, session-only BEST.
 - E2E-tested headless (Playwright + a stub API server, scratch-only):
   crash → dialog → POST body → auto-post on second crash → global board →
   server replay playback. The submit threshold and dialog gating live in

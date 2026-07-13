@@ -362,13 +362,13 @@ impl<'a> Reader<'a> {
     }
 }
 
-// Deflate, level 8 — the form replay blobs ship/store as (the JS highscore
-// store keeps them base64'd in localStorage).
+// Deflate, level 8 — the form replay blobs ship/store as (base64'd in the
+// submit POST body; raw bytes from CloudFront).
 pub fn compress(data: &[u8]) -> Vec<u8> {
     miniz_oxide::deflate::compress_to_vec(data, 8)
 }
 
-// Inverse of compress(); None on corrupt input (a mangled localStorage blob
+// Inverse of compress(); None on corrupt input (a mangled downloaded blob
 // must not panic the game).
 pub fn decompress(data: &[u8]) -> Option<Vec<u8>> {
     miniz_oxide::inflate::decompress_to_vec(data).ok()
