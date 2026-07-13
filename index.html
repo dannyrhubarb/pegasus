@@ -1810,9 +1810,11 @@
         if (best > 0) wasm_exports.set_best_dist(best);
         currentLevelFile = file;
         scoresFile = file; // the board defaults to the loaded level
+        ghostLoadedPath = null; // the fresh start dropped the old ghost
         renderLevels();
         renderScores();
         pushGhost();
+        applyGlobalRecord(file); // global record -> BEST readout + ghost
         return true;
       };
       // Exports may not be ready yet (startup restore) — retry like the
@@ -2112,6 +2114,7 @@
         nameRow.style.display = "";
         nameCur.textContent = playerName() || "—";
         if (overlay === "scr-scores") renderScores(); // config raced the open screen
+        applyGlobalRecord(currentLevelFile); // ...or raced the level load
       })
       .catch(() => {}); // offline build / no server: everything stays local
 
@@ -2125,7 +2128,8 @@
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
       }).then(r => {
-        if (!r.ok) console.warn("score submit failed:", r.status);
+        if (!r.ok) { console.warn("score submit failed:", r.status); return; }
+        applyGlobalRecord(file); // a new record should race the next spawn
       }).catch(e => console.warn("score submit failed:", e));
     }
 
@@ -2210,6 +2214,47 @@
     function globalBestFor(file) {
       const c = getBoard(levelStem(file), "alltime");
       return c && c.length ? c[0].score : null;
+    }
+
+    // The global all-time record drives the in-flight BEST readout and the
+    // racing ghost: refresh the loaded level's all-time board, raise the
+    // in-game best to the record, and push the record's replay blob in as
+    // the ghost. Called after every level load, when config.json arrives
+    // (it can race the startup level load), and after a successful submit
+    // (a new record should race the very next spawn). Everything is
+    // best-effort: offline or with an empty board the game just flies
+    // without a record. The `currentLevelFile` re-checks drop responses
+    // that arrive after the player switched levels (the game would also
+    // drop a wrong-level ghost itself, but skip the wasted push).
+    let ghostLoadedPath = null; // replayPath already in the game (skip refetch)
+    function applyGlobalRecord(file) {
+      if (!backendCfg || !file || file !== currentLevelFile) return;
+      const stem = levelStem(file);
+      fetch(backendCfg.apiBaseUrl + "/v1/levels/" + encodeURIComponent(stem)
+            + "/scores?period=alltime", { cache: "no-store" })
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+          if (data) putBoard(stem, "alltime", data.scores || []);
+          const scores = getBoard(stem, "alltime") || []; // fresh, else cached
+          if (file !== currentLevelFile || !scores.length) return;
+          if (typeof wasm_exports !== "undefined" && wasm_exports.get_best_dist
+              && scores[0].score > wasm_exports.get_best_dist()) {
+            wasm_exports.set_best_dist(scores[0].score);
+          }
+          // The ghost is the best run that still carries a replay blob
+          // (over-long runs submit score-only).
+          const g = scores.find(s => s.replayPath);
+          if (!g || g.replayPath === ghostLoadedPath) return;
+          return fetch(backendCfg.replayBaseUrl + "/" + g.replayPath)
+            .then(r => (r.ok ? r.arrayBuffer() : null))
+            .then(buf => {
+              if (!buf || file !== currentLevelFile) return;
+              if (pushBytesToWasm(new Uint8Array(buf), "load_ghost_blob")) {
+                ghostLoadedPath = g.replayPath;
+              }
+            });
+        })
+        .catch(() => {}); // offline / server down: fly without a record
     }
 
     // Build the board rows for one score list (shared by cached + fresh
