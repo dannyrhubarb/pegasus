@@ -976,18 +976,19 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">7230423-pr-91</div>
+        <div class="info-value" id="git-rev">e9f4e16-pr-91</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-13T10:33:46Z</div>
+        <div class="info-value" id="build-time">2026-07-13T10:35:48Z</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors) are sent to
         the developer to improve the game &mdash; no account, no ads, no third
         parties, no IP address stored. Optionally (Settings &rarr; &ldquo;Share
-        returning-player id&rdquo;) a random id is kept on this device so
-        returning players can be counted; switching it off deletes the id.
+        anonymous returning-player id&rdquo;) a random id is kept on this
+        device so returning players can be counted; switching it off deletes
+        the id.
       </div>
       <a class="mbtn" href="third-party-licenses.html" target="_blank" rel="noopener">Third-party licenses</a>
       <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
@@ -1619,7 +1620,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "7230423-pr-91";
+    const wasmRev = "e9f4e16-pr-91";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -2680,8 +2681,8 @@
       };
     })();
 
-    // "Share returning-player id" toggle mirrors the consent choice; turning
-    // it off deletes the stored id.
+    // "Share anonymous returning-player id" toggle mirrors the consent
+    // choice; turning it off deletes the stored id.
     const retidToggle = document.getElementById("retid-toggle");
     retidToggle.checked =
       localStorage.getItem("pegasus_analytics_consent") === "1" &&
