@@ -179,7 +179,8 @@ while the wasm loads):
 - **scr-scores**: the board for **`scoresFile`** (the level picked for
   viewing — defaults to the loaded level, decoupled from `currentLevelFile`
   so browsing another level's scores doesn't reload). The **global board**
-  with Today / This week / All time period chips and ▶ watch buttons (see
+  with Today / This week / All time period chips (**All time is the
+  default** on page load) and ▶ watch buttons (see
   "Online high scores") — scores are global-only; offline builds show
   "Global scores need a connection". Back returns to the scores-mode picker.
 - **scr-settings**: **Sound** (`#sound-toggle-row`, `pegasus_sound`, **off by

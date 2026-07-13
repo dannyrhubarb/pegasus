@@ -970,9 +970,9 @@
       <div class="h2">HIGH SCORES</div>
       <div class="hint" id="scores-level"></div>
       <div class="chiprow" id="scores-period" style="display:none">
-        <div class="chip sel" data-period="today">Today</div>
+        <div class="chip" data-period="today">Today</div>
         <div class="chip" data-period="week">This week</div>
-        <div class="chip" data-period="alltime">All time</div>
+        <div class="chip sel" data-period="alltime">All time</div>
       </div>
       <!-- Fixed-height slot (no layout shift when contents appear — a
            shifting list retargets in-flight taps): the board-reset
@@ -2270,7 +2270,7 @@
     const nameDistEl = document.getElementById("name-dist");
     const nameScoreEl = document.getElementById("name-score");
     const nameInput = document.getElementById("name-input");
-    let scoresPeriod = "today";
+    let scoresPeriod = "alltime";
 
     function playerName() {
       return localStorage.getItem("pegasus_player_name") || "";
