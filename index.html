@@ -970,9 +970,9 @@
       <div class="h2">HIGH SCORES</div>
       <div class="hint" id="scores-level"></div>
       <div class="chiprow" id="scores-period" style="display:none">
-        <div class="chip sel" data-period="today">Today</div>
+        <div class="chip" data-period="today">Today</div>
         <div class="chip" data-period="week">This week</div>
-        <div class="chip" data-period="alltime">All time</div>
+        <div class="chip sel" data-period="alltime">All time</div>
       </div>
       <!-- Fixed-height slot (no layout shift when contents appear — a
            shifting list retargets in-flight taps): the board-reset
@@ -1024,11 +1024,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">d7468e8</div>
+        <div class="info-value" id="git-rev">3878fcf</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-13T23:22:07Z</div>
+        <div class="info-value" id="build-time">2026-07-14T07:43:39Z</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors, which site
@@ -1898,7 +1898,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "d7468e8";
+    const wasmRev = "3878fcf";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -2271,7 +2271,7 @@
     const nameDistEl = document.getElementById("name-dist");
     const nameScoreEl = document.getElementById("name-score");
     const nameInput = document.getElementById("name-input");
-    let scoresPeriod = "today";
+    let scoresPeriod = "alltime";
 
     function playerName() {
       return localStorage.getItem("pegasus_player_name") || "";
