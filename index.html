@@ -1024,11 +1024,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">3878fcf</div>
+        <div class="info-value" id="git-rev">d1029fa</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-14T07:43:39Z</div>
+        <div class="info-value" id="build-time">2026-07-16T12:54:01Z</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors, which site
@@ -1898,7 +1898,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "3878fcf";
+    const wasmRev = "d1029fa";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -2789,6 +2789,18 @@
         try {
           if (apiBase || !cfg || !cfg.apiBaseUrl) return;
           if (env === "dev" &&
+              localStorage.getItem("pegasus_analytics_debug") !== "1") return;
+          // Drop automated browsers so headless bots don't inflate
+          // plays/sessions (a Playwright-style fleet was looping the game
+          // for hours). navigator.webdriver is the W3C flag
+          // Playwright/Puppeteer/Selenium all set; the HeadlessChrome UA
+          // token catches naive headless Chrome (which Playwright's normal
+          // UA wouldn't reveal). The pegasus_analytics_debug override lets
+          // the e2e suite — itself an automated browser — still exercise
+          // the pipeline. Bailing here leaves apiBase null, so nothing is
+          // ever sent (degrades to silence like every other off path).
+          if ((navigator.webdriver === true ||
+               /HeadlessChrome/.test(navigator.userAgent || "")) &&
               localStorage.getItem("pegasus_analytics_debug") !== "1") return;
           apiBase = String(cfg.apiBaseUrl).replace(/\/+$/, "");
           const vp = Math.min(innerWidth, innerHeight);
