@@ -2790,6 +2790,18 @@
           if (apiBase || !cfg || !cfg.apiBaseUrl) return;
           if (env === "dev" &&
               localStorage.getItem("pegasus_analytics_debug") !== "1") return;
+          // Drop automated browsers so headless bots don't inflate
+          // plays/sessions (a Playwright-style fleet was looping the game
+          // for hours). navigator.webdriver is the W3C flag
+          // Playwright/Puppeteer/Selenium all set; the HeadlessChrome UA
+          // token catches naive headless Chrome (which Playwright's normal
+          // UA wouldn't reveal). The pegasus_analytics_debug override lets
+          // the e2e suite — itself an automated browser — still exercise
+          // the pipeline. Bailing here leaves apiBase null, so nothing is
+          // ever sent (degrades to silence like every other off path).
+          if ((navigator.webdriver === true ||
+               /HeadlessChrome/.test(navigator.userAgent || "")) &&
+              localStorage.getItem("pegasus_analytics_debug") !== "1") return;
           apiBase = String(cfg.apiBaseUrl).replace(/\/+$/, "");
           const vp = Math.min(innerWidth, innerHeight);
           enqueue("session_start", Object.assign({
