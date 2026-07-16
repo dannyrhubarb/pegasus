@@ -1,5 +1,10 @@
 [
  {
+  "rev": "a2dfd98",
+  "date": "2026-07-17T00:23:03+02:00",
+  "note": "The game now opens straight to the main menu"
+ },
+ {
   "rev": "3878fcf",
   "date": "2026-07-14T09:43:01+02:00",
   "note": "High scores now open on the All time board"

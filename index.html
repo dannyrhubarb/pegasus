@@ -451,7 +451,8 @@
     .mbtn.back:hover { background: rgba(127, 180, 221, 0.12); box-shadow: none; }
     .hint { font-size: 13px; color: var(--faint); letter-spacing: 0.08em; }
 
-    /* TEMPORARY: the load-time announcement panel (see #scr-announce). */
+    /* Dormant load-time announcement panel, kept for future messages
+       (see #scr-announce). */
     .announce-msg {
       width: min(520px, 88vw);
       padding: 18px 20px;
@@ -822,11 +823,14 @@
   <!-- Game menu: open at boot (markup, not JS, so it shows while wasm loads) -->
   <div id="menu" class="open" role="dialog" aria-modal="true">
 
-    <!-- TEMPORARY load-time announcement: boots open (markup, like scr-home
-         used to, so it shows while the wasm loads); dismiss goes to the main
-         menu. Remove this screen (and its .announce-msg CSS + the `overlay`
-         boot value in the script) when the message has run its course. -->
-    <div class="screen on" id="scr-announce">
+    <!-- DORMANT load-time announcement kept for future messages. To show
+         one: put the text in .announce-msg, move the `on` class from
+         #scr-home to this screen, and set the boot state back to
+         "scr-announce" in the script (the `overlay` init + the history
+         boot root + histEntries[0]) — the "Roger that" button already
+         dismisses to the main menu. Currently the game boots straight to
+         #scr-home. -->
+    <div class="screen" id="scr-announce">
       <div class="h2">INCOMING TRANSMISSION</div>
       <div class="announce-msg">
         Attention you floor scraping maggots!<br><br>
@@ -838,7 +842,7 @@
       <div class="mbtn primary" id="btn-announce-ok" data-goto="scr-home">Roger that</div>
     </div>
 
-    <div class="screen" id="scr-home">
+    <div class="screen on" id="scr-home">
       <div class="title">PEGASUS</div>
       <div class="subtitle">MOON LANDER</div>
       <!-- Ship hero: the real vector ship (same geometry as icon.svg /
@@ -1024,11 +1028,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">d1029fa</div>
+        <div class="info-value" id="git-rev">a2dfd98</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-16T12:54:01Z</div>
+        <div class="info-value" id="build-time">2026-07-16T22:24:01Z</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors, which site
@@ -1330,9 +1334,9 @@
     // 3 replay) + cur_dist — see the bridge block in src/main.rs.
     const menuEl = document.getElementById("menu");
     const hudBtns = document.getElementById("hud-btns");
-    let overlay = "scr-announce"; // matches the markup's boot state (the
-                                  // TEMPORARY announcement; scr-home once
-                                  // that screen is removed)
+    let overlay = "scr-home"; // matches the markup's boot state (scr-home;
+                              // the dormant scr-announce is opt-in — see its
+                              // markup comment to run a future message)
     let wantPause = 1;        // re-asserted once the exports load
 
     function setPause(on) {
@@ -1493,12 +1497,12 @@
     const hs0 = history.state;
     if (hs0 && hs0.pegasus && typeof hs0.d === "number") {
       // Reload landed mid-stack (history.state survives reloads): adopt
-      // the depth; the boot reconcile below unwinds to the announce root.
+      // the depth; the boot reconcile below unwinds to the home root.
       histDepth = hs0.d;
       histEntries[histDepth] = hs0.s;
     } else {
-      history.replaceState({ pegasus: 1, s: "scr-announce", d: 0 }, "");
-      histEntries[0] = "scr-announce";
+      history.replaceState({ pegasus: 1, s: "scr-home", d: 0 }, "");
+      histEntries[0] = "scr-home";
     }
 
     // The canonical entry chain (root -> state) for every UI state.
@@ -1898,7 +1902,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "d1029fa";
+    const wasmRev = "a2dfd98";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
