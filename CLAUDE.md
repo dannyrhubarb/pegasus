@@ -398,7 +398,13 @@ degrades to silence.
   `prod` / `preview` (`/pr-<n>/` path) / `dev` (placeholder revision); dev
   additionally requires `localStorage.pegasus_analytics_debug = "1"`.
   Previews DO send (tagged) — every PR exercises the pipeline; queries
-  filter `env='prod'`.
+  filter `env='prod'`. **Automated browsers are dropped** (`configure`
+  bails, `apiBase` stays null): `navigator.webdriver` (the W3C flag
+  Playwright/Puppeteer/Selenium set) OR a `HeadlessChrome` UA token —
+  added 2026-07 after automated headless-Chrome traffic looping the game
+  inflated plays/sessions (`linux/chrome/desktop`, always-skip submits).
+  The `pegasus_analytics_debug` override keeps the e2e suite (itself
+  automated) able to exercise the pipeline.
 - **Privacy**: anonymous by default — a per-page-load `sessionId` in memory,
   no cookies, no IP/UA stored (backend contract). Payloads are content-free:
   enums, element ids, numbers; the only free text is error messages. The
