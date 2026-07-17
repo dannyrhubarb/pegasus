@@ -507,6 +507,7 @@ generator — all world generation is `Level` methods, so a level IS the world:
 |-----|--------|--------|
 | `name` | text | Cosmetic (picker label, not in replay headers) |
 | `scoring` | `pads` / `distance` / `time` | Pads: +100 per first landing. Distance: score = max \|x\| reached (`Sim::max_dist`; big HUD readout, `best` beneath). Time: visit EVERY pad — the run ENDS the tick the last pad's landing registers (`Sim.completed`, `TickReport::completed`); score = completion time in seconds (`Sim.run_ticks × PHYSICS_DT`, **lower is better**), HUD shows `visited/total` + a running `TIME m:ss.t` clock at near-headline size (the clock IS the score; frozen at completion). A crash/fuel-out is a DNF — no board entry. Time levels are hand-drawn (finite pad set); `terrain.pads.len()` is the total |
+| `endless` | on/off | On: the cave's periodic harmonics (`cave_center`/`cave_half_width`) are replaced by hash-based **value noise** (`Level::vnoise`, smoothstep-interpolated lattice hashes) with the SAME amplitude bounds — the tunnel never wraps in x, every stretch is unique rock in both directions. The no-pinch / no-blowout guarantee carries over (unit-tested over ±34 km); C1-continuous so colliders/lattice stay seamless. Procedural only (ignored under `terrain`) |
 | `shafts` | on/off | Off: `seg_in_opening` is always false (sealed cave), no shaft colliders load, minimap skips the carve |
 | `obstacles` | on/off | Off: `obstacle_spec` returns None everywhere (pads then skip the boulder-overlap check) |
 | `pad_spacing` | 40–2000 (clamped) | Metres between pad slots (`PAD_SPACING = 130` is the default) |
@@ -519,8 +520,10 @@ generator — all world generation is `Level` methods, so a level IS the world:
 `Level::parse` reads `key = value` lines (# comments; unknown keys ignored
 for forward compatibility; missing keys keep `Level::demo()` defaults — the
 legacy world). Shipped levels (pinned by `include_str!` tests): **The
-Expanse** (no shafts, boulders) and **The Glide** (no shafts, no
-boulders) — both distance-scored — plus **The
+Expanse** (no shafts, boulders), **The Glide** (no shafts, no boulders),
+**The Rift** (2026-07: an **endless** procedural cave — `endless = on`
+value-noise cave that never wraps, no shafts, boulders, `seed =
+20260717`, pads every ~150 m) — both distance-scored — plus **The
 Hollows** (2026-07: the first HAND-DRAWN level — five chambers joined by
 tunnels, five pads scattered through them (incl. a perch on the west
 tunnel's sill) plus a neutral `start` platform in the spawn chamber,
@@ -573,11 +576,12 @@ are cleared at boot).
 name; added in format v2) and `resim`/`ResimPlayer` rebuild the level from
 the header (`Level::from_params`) — a replay re-runs in the world it was
 flown in, unit-tested bit-exact on a non-demo level too
-(`resim_reproduces_on_a_custom_level_bit_exactly`). New-feature levels
+(`resim_reproduces_on_a_custom_level_bit_exactly`) and on an endless cave
+(`resim_reproduces_on_an_endless_level_bit_exactly`). New-feature levels
 carry a **flags byte + optional Terrain** in the header (**format v4** —
-flag bit 0 reserved, bit 1 = terrain present, then the Terrain block incl.
-the optional start platform; written only when the level is
-hand-drawn OR time-scored; legacy procedural recordings still serialize
+flag bit 0 = endless, bit 1 = terrain present, then the Terrain block incl.
+the optional start platform; written only when the level is endless,
+hand-drawn, OR time-scored; legacy procedural recordings still serialize
 byte-identical v3 and `deserialize` accepts both, so every pre-existing
 blob keeps decoding). v4 keyframes additionally append **`visited` (u64
 terrain-pad bitmask) + `run_ticks`** (60 B vs v3's 48 B): `Sim::restore`
@@ -588,7 +592,7 @@ levels keep their old session-state semantics — mask 0).
 Hand-drawn replays are thereby self-contained
 (`resim_reproduces_on_a_hand_drawn_level_bit_exactly` round-trips through
 serialize/deserialize). **Backend caveat**: the deployed verifier's pinned
-sim-core rejects v4 until re-pinned — submissions on the
+sim-core rejects v4 until re-pinned — submissions on the endless /
 hand-drawn / time-scored levels are silently discarded server-side until
 the backend re-pin + redeploy; the legacy procedural levels are
 unaffected.
@@ -1130,7 +1134,7 @@ for now:
   (0 = local dev). Bump `REPLAY_FORMAT_VERSION` when the layout changes
   (v3: exact rotation + land_timer in keyframes; v4 = v3 + the flags
   byte/Terrain block in LevelParams and visited+run_ticks per keyframe,
-  chosen PER RECORDING — only hand-drawn / time-scored levels
+  chosen PER RECORDING — only endless / hand-drawn / time-scored levels
   write v4, so v3 blobs stay valid and keep decoding). **No backward
   compatibility while iterating** — `deserialize` rejects pre-v3
   versions, so older server blobs stop decoding (watch/ghost pushes

@@ -27,12 +27,12 @@ pub const REPLAY_MAGIC: [u8; 4] = *b"PGRP";
 // No backward compatibility while the game is iterating: deserialize rejects
 // pre-v3 versions, so old stored blobs simply stop decoding (decode returns
 // None — high-score watch/ghost buttons no-op, nothing crashes).
-// v4: the LevelParams block gains a flags byte (bit 0 reserved, bit 1 =
-// hand-drawn Terrain present) followed by the Terrain block (rock
+// v4: the LevelParams block gains a flags byte (bit 0 = endless cave,
+// bit 1 = hand-drawn Terrain present) followed by the Terrain block (rock
 // polygons, pads, optional start platform, spawn ground) when bit 1 is set,
 // and every keyframe appends visited(u64) + run_ticks(u32) — see the
 // Keyframe doc. Written ONLY when the
-// level uses a post-v3 feature (terrain or time scoring) — a
+// level uses a post-v3 feature (endless, terrain, or time scoring) — a
 // legacy procedural recording still serializes as byte-identical v3, so
 // every existing blob keeps decoding and the backend keeps verifying legacy
 // submissions without a re-pin. (Runs on the NEW levels DO need the backend
@@ -156,13 +156,14 @@ pub struct LevelParams {
     pub obstacles: u8,
     pub pad_spacing: f32,
     pub seed: u32,
+    pub endless: u8, // no x-wrap: value-noise cave (format v4)
     pub terrain: Option<crate::world::Terrain>, // Some = hand-drawn world (format v4)
 }
 
 impl LevelParams {
     // Does this level use any capability the v3 layout can't express?
     fn needs_ext_format(&self) -> bool {
-        self.terrain.is_some() || self.scoring >= 2
+        self.endless != 0 || self.terrain.is_some() || self.scoring >= 2
     }
 }
 
@@ -271,7 +272,7 @@ impl Recording {
     // --- Serialization (little-endian) ---
     // Header: magic(4) version(2) build_id(4) params(15×4)
     //         level: scoring(1) shafts(1) obstacles(1) pad_spacing(4) seed(4)
-    //         [v4 only, right after seed: flags(1) — bit 0 reserved,
+    //         [v4 only, right after seed: flags(1) — bit 0 endless,
     //          bit 1 terrain present; if bit 1: terrain — n_polys(2),
     //          per poly n_verts(2) + verts(2×4 each); n_pads(2) +
     //          pads(2×4 each); has_start(1) [+ start 2×4]; spawn_y(4)]
@@ -280,7 +281,8 @@ impl Recording {
     // Keyframe: tick(4) + 11×f32                          = 48 B (v3)
     //           v4 appends visited(8) + run_ticks(4)      = 60 B
     // The version is picked per recording: a legacy procedural level writes
-    // the byte-identical v3 layout; terrain / time-scored levels write v4.
+    // the byte-identical v3 layout; endless / terrain / time-scored levels
+    // write v4.
 
     pub fn serialize(&self, build_id: u32) -> Vec<u8> {
         let mut out = Vec::with_capacity(93 + self.events.len() * 9 + self.keyframes.len() * 48);
@@ -301,7 +303,8 @@ impl Recording {
         out.extend_from_slice(&self.level.pad_spacing.to_le_bytes());
         out.extend_from_slice(&self.level.seed.to_le_bytes());
         if version == REPLAY_FORMAT_VERSION_EXT {
-            let flags = if self.level.terrain.is_some() { 2 } else { 0 };
+            let flags = (self.level.endless & 1)
+                | if self.level.terrain.is_some() { 2 } else { 0 };
             out.push(flags);
         }
         if let Some(t) = &self.level.terrain {
@@ -371,10 +374,12 @@ impl Recording {
             obstacles: r.u8()?,
             pad_spacing: r.f32()?,
             seed: r.u32()?,
+            endless: 0,
             terrain: None,
         };
         if version == REPLAY_FORMAT_VERSION_EXT {
             let flags = r.u8()?;
+            level.endless = flags & 1;
             if flags & 2 != 0 {
                 // Same hostile-count rule as events/keyframes below: cap
                 // every Vec::with_capacity by what the remaining bytes
@@ -511,7 +516,7 @@ mod tests {
     fn lparams() -> LevelParams {
         LevelParams {
             scoring: 0, shafts: 1, obstacles: 1, pad_spacing: 130.0, seed: 0,
-            terrain: None,
+            endless: 0, terrain: None,
         }
     }
 
@@ -624,10 +629,10 @@ mod tests {
     }
 
     #[test]
-    fn time_levels_roundtrip_as_v4() {
-        // A time-scored level must force the extended format (its scoring
-        // value is a post-v3 feature) and round-trip exactly.
-        let lp = LevelParams { scoring: 2, ..lparams() };
+    fn endless_and_time_levels_roundtrip_as_v4() {
+        // The v4 flags byte: an endless (no-wrap) cave and a time-scored
+        // level must both force the extended format and round-trip exactly.
+        let lp = LevelParams { endless: 1, scoring: 2, ..lparams() };
         let mut rec = Recording::new(params(), lp.clone(), u32::MAX);
         rec.push_keyframe(kf(0));
         let blob = rec.serialize(3);

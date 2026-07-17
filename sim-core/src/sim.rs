@@ -1039,6 +1039,26 @@ mod tests {
     }
 
     #[test]
+    fn resim_reproduces_on_an_endless_level_bit_exactly() {
+        // The endless (no-wrap) value-noise cave is physics: the flag rides
+        // in the v4 header and resim must rebuild the identical world — via
+        // a serialize → deserialize round trip like a server-side blob.
+        let level = Level::parse(
+            "name = E\nscoring = distance\nshafts = off\nobstacles = on\nendless = on\nseed = 20260717",
+        );
+        assert!(level.endless);
+        let (rec, live_kfs) = record_scripted_flight(level, 12 * KEYFRAME_EVERY);
+        assert!(live_kfs.len() >= 3, "flight too short to be a meaningful test");
+        let blob = rec.serialize(0);
+        let (back, _) = Recording::deserialize(&blob).expect("v4 blob decodes");
+        let resimmed = resim(&back);
+        assert_eq!(resimmed.len(), live_kfs.len());
+        for (a, b) in live_kfs.iter().zip(&resimmed) {
+            assert_physics_eq(a, b);
+        }
+    }
+
+    #[test]
     fn visiting_every_hollows_pad_completes_the_run_and_freezes_it() {
         // Time scoring: the run ends at the moment the LAST pad's landing
         // registers — completed fires once, the run clock freezes, and the
