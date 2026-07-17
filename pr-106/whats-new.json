@@ -1,28 +1,13 @@
 [
  {
-  "rev": "f9fad9f",
-  "date": "2026-07-17T11:25:33Z",
-  "note": "The Hollows' tunnel perch moved to the west passage, and the start platform lost its lights"
+  "rev": "f308ad9",
+  "date": "2026-07-17T11:40:27Z",
+  "note": "New level The Rift — an endless cave that never repeats, in either direction, boulders all the way down"
  },
  {
-  "rev": "30fe49e",
-  "date": "2026-07-17T10:34:59Z",
-  "note": "The Hollows now launches from its own start platform, its clock reads big, and replay scrubbing tracks your pad count exactly"
- },
- {
-  "rev": "d93dbd7",
-  "date": "2026-07-17T08:37:19Z",
-  "note": "The Hollows is now a timed challenge — visit all five pads as fast as you can The Rift is now truly endless — its cave never repeats, in either direction"
- },
- {
-  "rev": "a24b18b",
-  "date": "2026-07-17T01:25:10Z",
-  "note": "New level The Rift — a brand-new endless cave with shafts and boulders, reshaped top to bottom by a fresh seed"
- },
- {
-  "rev": "f31f5e1",
-  "date": "2026-07-17T01:23:54Z",
-  "note": "New level The Hollows — a hand-drawn cavern of five chambers to explore, with a landing pad to find in each"
+  "rev": "b193eb5",
+  "date": "2026-07-17T11:40:12Z",
+  "note": "New level The Hollows — a hand-drawn cavern of five chambers: race the clock to land on all five pads"
  },
  {
   "rev": "a2dfd98",
