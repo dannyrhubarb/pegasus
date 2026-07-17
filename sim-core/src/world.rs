@@ -90,6 +90,13 @@ pub struct Level {
     pub seed: u32,
     pub endless: bool, // no x-wrap: value-noise cave that never repeats
     pub terrain: Option<Terrain>, // Some = hand-drawn world, procedural gen off
+    // `seed = random` in the level file: the frontend rolls a FRESH concrete
+    // `seed` at every load/reset, so each attempt flies brand-new rock.
+    // Metadata only — world generation reads `seed`, never this flag, and it
+    // does NOT ride the replay header (LevelParams): a recording always
+    // carries the concrete seed it was flown on, so resim/verification
+    // rebuild that exact world (`from_params` yields `random_seed: false`).
+    pub random_seed: bool,
 }
 
 impl Level {
@@ -104,6 +111,7 @@ impl Level {
             seed: 0,
             endless: false,
             terrain: None,
+            random_seed: false,
         }
     }
 
@@ -153,7 +161,12 @@ impl Level {
                     }
                 }
                 "seed" => {
-                    if let Ok(s) = v.parse::<u32>() {
+                    if v.eq_ignore_ascii_case("random") {
+                        // The frontend rolls a concrete seed at every
+                        // load/reset (see Level::random_seed); until then the
+                        // demo default stays as a harmless placeholder.
+                        lvl.random_seed = true;
+                    } else if let Ok(s) = v.parse::<u32>() {
                         lvl.seed = s;
                     }
                 }
@@ -199,6 +212,20 @@ impl Level {
             lvl.obstacles = false;
         }
         lvl
+    }
+
+    // Is `self` (a freshly parsed level file) the same FILE as the currently
+    // loaded level? The frontend uses this to keep an identical re-push a
+    // no-op (re-picking the running level must not reset the flight). A
+    // random-seed level's loaded copy carries a rolled concrete seed the
+    // file doesn't have, so the comparison neutralizes the seed for those.
+    pub fn same_file_as(&self, loaded: &Level) -> bool {
+        if self == loaded {
+            return true;
+        }
+        self.random_seed
+            && loaded.random_seed
+            && Level { seed: loaded.seed, ..self.clone() } == *loaded
     }
 
     // Per-harmonic phase offset derived from the seed. seed 0 = the original
@@ -252,6 +279,9 @@ impl Level {
             seed: p.seed,
             endless: p.endless != 0,
             terrain: p.terrain.clone(),
+            // A replay is always of ONE concrete world — the rolled seed
+            // above is that world; re-rolling would break resim.
+            random_seed: false,
         }
     }
 }
@@ -378,6 +408,7 @@ pub fn shipped_levels() -> Vec<(&'static str, Level)> {
         ("expanse", Level::parse(include_str!("../../levels/expanse.level"))),
         ("glide", Level::parse(include_str!("../../levels/glide.level"))),
         ("rift", Level::parse(include_str!("../../levels/rift.level"))),
+        ("flux", Level::parse(include_str!("../../levels/flux.level"))),
         ("hollows", Level::parse(include_str!("../../levels/hollows.level"))),
     ]
 }

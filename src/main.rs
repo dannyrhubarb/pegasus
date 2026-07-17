@@ -369,6 +369,25 @@ pub extern "C" fn set_invert_stick(on: i32) {
 static LEVEL_BUF: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
 static PENDING_LEVEL: std::sync::Mutex<Option<world::Level>> = std::sync::Mutex::new(None);
 
+// A `seed = random` level (Level::random_seed) gets a FRESH concrete world
+// seed at every load and every reset, so each attempt flies brand-new rock.
+// Rolled FRAME-side (the sim must stay a pure function of its inputs —
+// nondeterminism never enters sim.rs): wall clock mixed with a monotonic
+// counter, so two resets inside the same clock tick still differ. The rolled
+// seed then rides the recording header like any hand-authored seed —
+// replays, ghosts and server-side verification re-sim the exact world that
+// run was flown in. Never rolls 0 (the legacy-phases special case).
+static SEED_ROLLS: AtomicU32 = AtomicU32::new(0);
+fn with_rolled_seed(level: world::Level) -> world::Level {
+    if !level.random_seed {
+        return level;
+    }
+    let t = macroquad::miniquad::date::now().to_bits();
+    let n = SEED_ROLLS.fetch_add(1, Ordering::Relaxed);
+    let seed = world::hash_u32(t as u32 ^ world::hash_u32((t >> 32) as u32) ^ n.wrapping_mul(0x9e37_79b9));
+    world::Level { seed: seed.max(1), ..level }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn level_buf_ptr(len: u32) -> *const u8 {
     let mut b = LEVEL_BUF.lock().unwrap();
@@ -1130,11 +1149,13 @@ async fn main() {
     loop {
         // Apply a level pushed from JS (startup restore or the overlay
         // picker): a full fresh start in the new world. The ghost is
-        // dropped — it was flown on a different level.
+        // dropped — it was flown on a different level. same_file_as (not
+        // ==) keeps the identical-re-push no-op for random-seed levels,
+        // whose loaded copy carries a rolled seed the file doesn't have.
         if let Some(lvl) = PENDING_LEVEL.lock().unwrap().take()
-            && lvl != sim.level
+            && !lvl.same_file_as(&sim.level)
         {
-            sim = Sim::new(lvl);
+            sim = Sim::new(with_rolled_seed(lvl));
             prev_ship = (SPAWN_X, sim.level.stand_y(SPAWN_X), 0.0);
             crash_timer = 0.0;
             complete_timer = 0.0;
@@ -2707,7 +2728,9 @@ async fn main() {
             let ended_alive = !sim.crashed && !run_over;
             let ended_dist = sim.max_dist;
             let (ended_fuel, ended_hull) = (sim.fuel, sim.hull);
-            sim = Sim::new(sim.level.clone());
+            // A random-seed level re-rolls its world here too: every restart
+            // is a brand-new cave (the recorder below picks up the new seed).
+            sim = Sim::new(with_rolled_seed(sim.level.clone()));
             // Snap the interpolation too, or the camera lerps across the
             // teleport for a frame.
             prev_ship = (SPAWN_X, sim.level.stand_y(SPAWN_X), 0.0);
@@ -3681,6 +3704,42 @@ mod tests {
         assert_eq!(glide.scoring, Scoring::Distance);
         assert!(!glide.shafts);
         assert!(!glide.obstacles);
+
+        // The Flux is The Rift with a random seed: same knobs, every field
+        // but the seed identical, and the random flag set.
+        let rift = Level::parse(include_str!("../levels/rift.level"));
+        let flux = Level::parse(include_str!("../levels/flux.level"));
+        assert_eq!(flux.name, "The Flux");
+        assert!(flux.random_seed && !rift.random_seed);
+        assert_eq!(
+            Level { name: rift.name.clone(), seed: rift.seed, random_seed: false, ..flux.clone() },
+            rift,
+            "The Flux must stay The Rift's twin apart from the seed"
+        );
+    }
+
+    #[test]
+    fn random_seed_levels_roll_a_fresh_world_per_attempt() {
+        let flux = Level::parse(include_str!("../levels/flux.level"));
+        // Every roll yields a usable non-legacy seed, and consecutive rolls
+        // differ (the counter guarantees it even within one clock tick).
+        let a = with_rolled_seed(flux.clone());
+        let b = with_rolled_seed(flux.clone());
+        assert!(a.seed != 0 && b.seed != 0, "0 is the legacy-phases special case");
+        assert_ne!(a.seed, b.seed, "restarts must land in different worlds");
+        // Fixed-seed levels pass through untouched.
+        let rift = Level::parse(include_str!("../levels/rift.level"));
+        assert_eq!(with_rolled_seed(rift.clone()), rift);
+        // The re-push guard: the freshly parsed file still counts as the
+        // loaded level (identical re-push stays a no-op)…
+        assert!(flux.same_file_as(&a));
+        // …but a genuinely different file does not.
+        assert!(!rift.same_file_as(&a));
+        // A recording of a rolled world round-trips to that EXACT world:
+        // the concrete seed rides the header, the random flag does not.
+        let back = Level::from_params(&a.to_params());
+        assert_eq!(back.seed, a.seed);
+        assert!(!back.random_seed);
     }
 
     #[test]
