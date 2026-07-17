@@ -404,7 +404,6 @@ impl Level {
 // the same breath, or honest submissions on that level will be rejected.
 pub fn shipped_levels() -> Vec<(&'static str, Level)> {
     vec![
-        ("caves", Level::parse(include_str!("../../levels/caves.level"))),
         ("expanse", Level::parse(include_str!("../../levels/expanse.level"))),
         ("glide", Level::parse(include_str!("../../levels/glide.level"))),
         ("flux", Level::parse(include_str!("../../levels/flux.level"))),
