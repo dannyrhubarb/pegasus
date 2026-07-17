@@ -523,12 +523,12 @@ generator — all world generation is `Level` methods, so a level IS the world:
 for forward compatibility; missing keys keep `Level::demo()` defaults — the
 legacy world). Shipped levels (pinned by `include_str!` tests): **The
 Expanse** (no shafts, boulders), **The Glide** (no shafts, no boulders),
-**The Rift** (2026-07: an **endless** procedural cave — `endless = on`
-value-noise cave that never wraps, no shafts, boulders, `seed =
-20260717`, pads every ~150 m), **The Flux** (2026-07: The Rift's
-shapeshifting twin — identical knobs but `seed = random`, so every load
-and every restart rolls a brand-new endless cave; no racing ghost by
-nature, but full replays/boards — see the `seed` row above) — all
+**The Flux** (2026-07: an **endless** procedural cave — `endless = on`
+value-noise cave that never wraps, no shafts, boulders, pads every
+~150 m — with `seed = random`, so every load and every restart rolls a
+brand-new endless cave; no racing ghost by nature, but full
+replays/boards — see the `seed` row above; it absorbed **The Rift**, the
+same level with a fixed seed, retired 2026-07 as too similar) — all
 distance-scored — plus **The
 Hollows** (2026-07: the first HAND-DRAWN level — five chambers joined by
 tunnels, five pads scattered through them (incl. a perch on the west
@@ -552,17 +552,22 @@ space with the triangulated rock drawn on top; pad legs use a short fixed
 drop (no floor curve to reach for).
 
 **Decoupled from the wasm**: `index.html` fetches `levels/manifest.json` +
-each `.level` file (cache-bypassed), fills the `#level-select` in the info
-overlay (labels = the files' `name =` line), and pushes the selected level's
+each `.level` file (cache-bypassed), feeds the level picker (scr-levels —
+labels = the files' `name =` line), and pushes the picked level's
 raw text into the game: `level_buf_ptr(len)` returns a wasm-side buffer, JS
 writes the UTF-8 bytes via `wasm_memory.buffer`, `load_level(len)` parses it
 into `PENDING_LEVEL`. The main loop applies a pending level at the next frame
 boundary as a **full fresh start** (new `Sim`, new recorder, ghost dropped —
 it was flown on a different world; a re-push of the identical level is a
-no-op). Adding a level = add the file + list it in the manifest; the deploy
-copies `levels/` verbatim (`build-site`). Selection persists in
-`localStorage` (`pegasus_level`); manifest fetch failure hides the row and
-the game stays on the compiled-in `Level::demo()`.
+no-op). Adding a level = add the file + list it in the manifest (removing
+one is the reverse — also drop it from `shipped_levels()`, the sync test
+pins the two together); the deploy copies `levels/` verbatim
+(`build-site`). Selection persists in `localStorage` (`pegasus_level`).
+**There is no "default level"** — Fly always goes through the picker; boot
+just pre-loads the saved selection (else the first manifest level — also
+the recovery path when a saved level was retired from the manifest) behind
+the menu to keep its record/ghost warm. Manifest fetch failure skips the
+picker and the game stays on the compiled-in `Level::demo()`.
 
 **Distance high score**: `Sim.max_dist` (farthest \|x\| this run, reset by
 restore) raises the `BEST_DIST` atomic **only when the run ends**

@@ -2196,6 +2196,12 @@
         }
         if (!levelFiles.length) return;
         levelNone.style.display = "none";
+        // Pre-load a world behind the menu: the saved selection, else the
+        // first manifest level. There is no "default level" the player can
+        // fly unpicked — Fly always goes through the picker — this just
+        // keeps a real level (record, ghost) warm behind the menu, and the
+        // levelFiles[0] fallback recovers anyone whose saved level left the
+        // manifest (e.g. a retired level).
         const saved = localStorage.getItem("pegasus_level");
         const start = levelTexts[saved] !== undefined ? saved : levelFiles[0];
         pushLevel(start);

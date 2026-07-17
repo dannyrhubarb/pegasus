@@ -3730,17 +3730,15 @@ mod tests {
         assert!(!glide.shafts);
         assert!(!glide.obstacles);
 
-        // The Flux is The Rift with a random seed: same knobs, every field
-        // but the seed identical, and the random flag set.
-        let rift = Level::parse(include_str!("../levels/rift.level"));
+        // The Flux: the endless no-wrap cave with a fresh random seed per
+        // attempt (it absorbed the fixed-seed Rift, retired 2026-07).
         let flux = Level::parse(include_str!("../levels/flux.level"));
         assert_eq!(flux.name, "The Flux");
-        assert!(flux.random_seed && !rift.random_seed);
-        assert_eq!(
-            Level { name: rift.name.clone(), seed: rift.seed, random_seed: false, ..flux.clone() },
-            rift,
-            "The Flux must stay The Rift's twin apart from the seed"
-        );
+        assert_eq!(flux.scoring, Scoring::Distance);
+        assert!(flux.endless, "The Flux is the endless value-noise cave");
+        assert!(!flux.shafts);
+        assert!(flux.obstacles);
+        assert!(flux.random_seed, "The Flux must roll a fresh world per attempt");
     }
 
     #[test]
@@ -3753,13 +3751,13 @@ mod tests {
         assert!(a.seed != 0 && b.seed != 0, "0 is the legacy-phases special case");
         assert_ne!(a.seed, b.seed, "restarts must land in different worlds");
         // Fixed-seed levels pass through untouched.
-        let rift = Level::parse(include_str!("../levels/rift.level"));
-        assert_eq!(with_rolled_seed(rift.clone()), rift);
+        let expanse = Level::parse(include_str!("../levels/expanse.level"));
+        assert_eq!(with_rolled_seed(expanse.clone()), expanse);
         // The re-push guard: the freshly parsed file still counts as the
         // loaded level (identical re-push stays a no-op)…
         assert!(flux.same_file_as(&a));
         // …but a genuinely different file does not.
-        assert!(!rift.same_file_as(&a));
+        assert!(!expanse.same_file_as(&a));
         // A recording of a rolled world round-trips to that EXACT world:
         // the concrete seed rides the header, the random flag does not.
         let back = Level::from_params(&a.to_params());
