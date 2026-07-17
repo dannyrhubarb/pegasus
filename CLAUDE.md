@@ -535,9 +535,11 @@ tunnels, five pads scattered through them (incl. a perch on the west
 tunnel's sill) plus a neutral `start` platform in the spawn chamber,
 **time-scored**: visit all five as fast as you can, the run ends on the
 last pad; its geometry-lint unit test asserts every chamber / tunnel /
-pad / start waypoint is open space via `Terrain::point_in_rock`) and **The Caves** (the original shafted world,
-kept as demo/experimentation level; the compiled-in `Level::demo()`
-default stays `pads` for the pad-scoring unit tests).
+pad / start waypoint is open space via `Terrain::point_in_rock`).
+**The Caves** (the original shafted world) was retired 2026-07 with The
+Rift — its world survives as the compiled-in `Level::demo()` (`pads`
+scoring), which remains the no-manifest fallback and the fixture for the
+pad-scoring / world-geometry unit tests.
 
 **Hand-drawn rendering** (`terrain` levels): each rock polygon draws as an
 ear-clip-triangulated `rock_dark` fill (`render::triangulate`, cached in
