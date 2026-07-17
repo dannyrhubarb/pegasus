@@ -1,5 +1,10 @@
 [
  {
+  "rev": "400b4be",
+  "date": "2026-07-17T22:24:35Z",
+  "note": "The Hollows time trial now leads the level list"
+ },
+ {
   "rev": "d09fea2",
   "date": "2026-07-17T21:45:33Z",
   "note": "The level picker now describes each level under its name"

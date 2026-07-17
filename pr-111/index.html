@@ -1035,11 +1035,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">d09fea2-pr-111</div>
+        <div class="info-value" id="git-rev">400b4be-pr-111</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-17T21:47:00Z</div>
+        <div class="info-value" id="build-time">2026-07-17T22:26:12Z</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors, which site
@@ -1924,7 +1924,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "d09fea2-pr-111";
+    const wasmRev = "400b4be-pr-111";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
