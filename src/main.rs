@@ -455,10 +455,16 @@ fn raise_best_dist(level: &Level, dist: f32) {
 }
 
 // Best completion time on the current Time-scoring level, f32 seconds bits
-// (0 = no completion yet). Session-only, like the pre-board BEST; lower is
-// better, raised (well, lowered) only when a completed run ends. Cleared on
-// level load with BEST_DIST.
+// (0 = no completion yet). Lower is better: JS seeds it with the level's
+// global all-time record (the fastest board entry) via set_best_time — the
+// time-level counterpart of set_best_dist — and a completed run lowers it
+// only when the run ends. Cleared on level load with BEST_DIST.
 static BEST_TIME: AtomicU32 = AtomicU32::new(0);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_best_time(v: f32) {
+    BEST_TIME.store(v.max(0.0).to_bits(), Ordering::Relaxed);
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn get_best_time() -> f32 {
@@ -469,6 +475,11 @@ fn raise_best_time(secs: f32) {
     let cur = f32::from_bits(BEST_TIME.load(Ordering::Relaxed));
     if cur <= 0.0 || secs < cur {
         BEST_TIME.store(secs.to_bits(), Ordering::Relaxed);
+        // The seeded record just fell — the holder is now the pilot.
+        let mut name = BEST_NAME.lock().unwrap();
+        if name.as_str() != "you" {
+            *name = "you".to_string();
+        }
     }
 }
 
@@ -3128,13 +3139,27 @@ async fn main() {
                     by_fs, Color::from_rgba(130, 155, 190, 200));
             }
         } else if world_sim.level.scoring == Scoring::Time {
-            // Session-best completion time in the attribution line's slot.
+            // Best completion time (the global record once seeded, else the
+            // session best) in the attribution line's slot, with the record
+            // holder beneath — the same "by <pilot>" treatment as distance.
             let best = get_best_time();
             if best > 0.0 {
                 let bt = format!("BEST {}", fmt_run_time((best / PHYSICS_DT).round() as u32));
                 let bt_fs = small_fs;
-                draw_text(&bt, ro_x, ro_y + small_draw_fs + 4.0 * ui + bt_fs + 4.0 * ui,
-                    bt_fs, Color::from_rgba(130, 155, 190, 200));
+                let bt_y = ro_y + small_draw_fs + 4.0 * ui + bt_fs + 4.0 * ui;
+                draw_text(&bt, ro_x, bt_y, bt_fs, Color::from_rgba(130, 155, 190, 200));
+                let name = BEST_NAME.lock().unwrap();
+                if !name.is_empty() {
+                    // Names render uppercase everywhere (boards, picker, ghost).
+                    let by = format!("by {}", name.to_uppercase());
+                    let mut by_fs = bt_fs * 0.78;
+                    let by_dim = measure_text(&by, None, by_fs as u16, 1.0);
+                    if by_dim.width > mm_w - ro_margin {
+                        by_fs *= (mm_w - ro_margin) / by_dim.width;
+                    }
+                    draw_text(&by, ro_x, bt_y + by_fs + 4.0 * ui,
+                        by_fs, Color::from_rgba(130, 155, 190, 200));
+                }
             }
         }
 
