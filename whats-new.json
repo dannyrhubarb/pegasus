@@ -1,5 +1,10 @@
 [
  {
+  "rev": "e08c504",
+  "date": "2026-07-17T16:07:45+02:00",
+  "note": "Fixed: finishing The Hollows now offers the submit-score dialog"
+ },
+ {
   "rev": "84f48f5",
   "date": "2026-07-17T13:41:41+02:00",
   "note": "New level The Rift — an endless cave that never repeats, in either direction, boulders all the way down"
