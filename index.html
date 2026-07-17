@@ -2420,9 +2420,16 @@
       // the submit/skip dialog (name prefilled once persisted). The gate on
       // state 1 wreck / 2 dialog means reset-ended runs (restart / exit to
       // menu mid-flight) never pop UI over the new flight — and therefore
-      // are not submitted at all.
+      // are not submitted at all. A COMPLETED time level publishes during
+      // the "LEVEL COMPLETE" grace while the mode is still flying (state
+      // 0 — the game-over dialog follows 1.6 s later), so the state gate
+      // alone dropped it: the 500 ms collect poll consumes run_seq before
+      // state 2 ever shows. Cause 3 on the analytics mirror (set in the
+      // same frame as the publish) identifies it; reset-ended runs
+      // (cause 1) stay excluded.
       const st = wasm_exports.ui_state ? wasm_exports.ui_state() : 0;
-      if (st === 1 || st === 2) pendingSubmit = { file, entry };
+      const complete = wasm_exports.run_end_cause && wasm_exports.run_end_cause() === 3;
+      if (st === 1 || st === 2 || complete) pendingSubmit = { file, entry };
     }
 
     // The submit-score dialog doubles as the Settings name editor: with a
