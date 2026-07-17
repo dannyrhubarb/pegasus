@@ -3,6 +3,7 @@
 # flying through the shafted caves, boulders and all. seed 0 reproduces
 # the legacy cave bit-for-bit.
 name = The Caves
+description = The original world: shafted caves, boulders, and pads to hop between
 scoring = distance
 shafts = on
 obstacles = on

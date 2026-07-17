@@ -15,6 +15,7 @@
 # Rock polygons may overlap (buried edges are unreachable); the outer frame
 # is four fat slabs. Tunnels are kept ≥ 6.5 m tall — the ship is ~1.5 m.
 name = The Hollows
+description = Five chambers, five pads. Visit them all against the clock
 scoring = time
 shafts = off
 obstacles = off
