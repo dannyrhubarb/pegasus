@@ -102,6 +102,8 @@ pub fn spawn_keyframe(level: &Level, x: f32) -> Keyframe {
         hull: HULL_MAX,
         glow: 0.0,
         land_timer: 0.0,
+        visited: 0,
+        run_ticks: 0,
     }
 }
 
@@ -133,6 +135,7 @@ pub struct TickReport {
     pub scored: bool,         // first visit registered this tick
     pub heading_torque: f32,  // PD torque applied (for nozzle puffs)
     pub fuel_out: bool,       // stranded dry past FUEL_OUT_END_SECS: run over
+    pub completed: bool,      // time level: LAST pad visited this tick — run over
 }
 
 // An impact this tick (dv above CRASH_DV_SOFT). Carries the post-impact
@@ -177,6 +180,7 @@ pub struct Sim {
     pub obstacles: BTreeMap<(i64, i64), Obstacle>,
     pub pads: BTreeMap<(i64, i64), Pad>,
     synced_at: Option<(i64, i64)>, // (segment, layer) of the last window sync
+    terrain_loaded: bool, // hand-drawn worlds load all colliders exactly once
 
     // The world this sim generates around the ship. Immutable for the sim's
     // lifetime — switching level means a fresh Sim (same rule as a new run).
@@ -187,8 +191,10 @@ pub struct Sim {
     pub hull: f32,
     pub score: u32,
     pub max_dist: f32, // farthest |x| this run (the Distance-scoring metric)
+    pub run_ticks: u32, // ticks flown this run (the Time-scoring metric)
     pub visited_pads: BTreeSet<(i64, i64)>,
     pub crashed: bool,
+    pub completed: bool, // time level: every pad visited — controls are dead
     land_timer: f32,
     fuel_out_timer: f32,
     prev_vel: (f32, f32),
@@ -252,13 +258,16 @@ impl Sim {
             obstacles: BTreeMap::new(),
             pads: BTreeMap::new(),
             synced_at: None,
+            terrain_loaded: false,
             level,
             fuel: FUEL_MAX,
             hull: HULL_MAX,
             score: 0,
             max_dist: 0.0,
+            run_ticks: 0,
             visited_pads: BTreeSet::new(),
             crashed: false,
+            completed: false,
             land_timer: 0.0,
             fuel_out_timer: 0.0,
             prev_vel: (0.0, 0.0),
@@ -289,6 +298,24 @@ impl Sim {
         self.fuel = kf.fuel;
         self.hull = kf.hull;
         self.crashed = false;
+        self.completed = false;
+        // The run clock rides in v4 keyframes (it freezes at completion, so
+        // it can lag the tick index); v3 reads seed it with the tick.
+        self.run_ticks = kf.run_ticks;
+        // Hand-drawn pad visits ride in the keyframe bitmask, so a replay
+        // seek restores the x/5 counter, beacon colors and the completed
+        // flag with the physical state. Procedural levels keep their
+        // session-state semantics (mask is always 0 there).
+        if let Some(t) = &self.level.terrain {
+            let n = t.pads.len().min(64);
+            self.visited_pads = (0..n)
+                .filter(|i| kf.visited & (1u64 << i) != 0)
+                .map(|i| (i as i64, 0))
+                .collect();
+            self.completed = self.level.scoring == Scoring::Time
+                && !t.pads.is_empty()
+                && self.visited_pads.len() == t.pads.len();
+        }
         self.land_timer = kf.land_timer;
         self.fuel_out_timer = 0.0;
         self.max_dist = kf.x.abs();
@@ -336,7 +363,18 @@ impl Sim {
             hull: self.hull,
             glow,
             land_timer: self.land_timer,
+            visited: self.visited_mask(),
+            run_ticks: self.run_ticks,
         }
+    }
+
+    // The hand-drawn pad-visit bitmask for keyframes (bit i = terrain pad i
+    // visited; 0 on procedural levels — see the Keyframe doc in replay.rs).
+    pub fn visited_mask(&self) -> u64 {
+        let Some(t) = &self.level.terrain else { return 0 };
+        (0..t.pads.len().min(64))
+            .filter(|&i| self.visited_pads.contains(&(i as i64, 0)))
+            .fold(0u64, |m, i| m | (1 << i))
     }
 
     // Advance the world by one PHYSICS_DT under `input`.
@@ -354,9 +392,18 @@ impl Sim {
 
         let mut report = TickReport::default();
 
-        if !self.crashed {
-            // Inputs are COMMANDS; the fuel gate lives here so an empty tank
-            // behaves identically in live play and resim.
+        // The run clock (Time-scoring metric): counts every tick flown, and
+        // freezes at the crash or the completing landing. Ticks only happen
+        // once the armed-idle gate opens, so this matches the recorder's
+        // tick count.
+        if !self.crashed && !self.completed {
+            self.run_ticks += 1;
+        }
+
+        if !self.crashed && !self.completed {
+            // Inputs are COMMANDS (dead once the run is over — a completed
+            // ship sits parked on its final pad); the fuel gate lives here
+            // so an empty tank behaves identically in live play and resim.
             let rcs_ok = self.fuel > 0.0;
             let throttle = if rcs_ok { input.throttle_f32() } else { 0.0 };
             let rot = if rcs_ok { input.rot } else { 0 };
@@ -490,9 +537,28 @@ impl Sim {
                     // First visits always register (beacons turn blue), but
                     // they only pay points on Pads-scoring levels — on
                     // Distance levels the score IS max |x|.
-                    if self.visited_pads.insert(key) && self.level.scoring == Scoring::Pads {
-                        self.score += PAD_POINTS;
-                        report.scored = true;
+                    if self.visited_pads.insert(key) {
+                        match self.level.scoring {
+                            Scoring::Pads => {
+                                self.score += PAD_POINTS;
+                                report.scored = true;
+                            }
+                            // Time level: the visit flashes on the HUD, and
+                            // the LAST pad completes the level — run over,
+                            // run_ticks (frozen above from the next tick) is
+                            // the score.
+                            Scoring::Time => {
+                                report.scored = true;
+                                if self.level.terrain.as_ref().is_some_and(|t| {
+                                    !t.pads.is_empty()
+                                        && self.visited_pads.len() == t.pads.len()
+                                }) {
+                                    self.completed = true;
+                                    report.completed = true;
+                                }
+                            }
+                            Scoring::Distance => {}
+                        }
                     }
                     self.fuel = (self.fuel + PAD_REFUEL_PER_S * PHYSICS_DT).min(FUEL_MAX);
                     self.hull = (self.hull + HULL_REPAIR_PER_S * PHYSICS_DT).min(HULL_MAX);
@@ -530,6 +596,52 @@ impl Sim {
     // loop below iterates in key order (BTreeMap / ordered ranges), so the
     // sequence of Rapier insert/remove ops is deterministic.
     fn sync_window(&mut self, key: (i64, i64)) {
+        // Hand-drawn worlds are finite: every polygon edge and pad loads
+        // exactly once (fixed file order → deterministic Rapier handle
+        // numbering, same as the BTreeMap rule below) and nothing ever
+        // slides or evicts. The procedural windows never run — shafts,
+        // obstacles and pad slots are generator features.
+        if let Some(t) = &self.level.terrain {
+            if !self.terrain_loaded {
+                self.terrain_loaded = true;
+                for poly in &t.polys {
+                    for i in 0..poly.len() {
+                        let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+                        self.colliders.insert(
+                            ColliderBuilder::segment(point![a.x, a.y], point![b.x, b.y])
+                                .friction(0.0)
+                                .build(),
+                        );
+                    }
+                }
+                // Neutral start platform: a plain high-friction deck, NOT
+                // in self.pads — no landing/refuel/visit logic fires there.
+                if let Some(sp) = &t.start {
+                    self.colliders.insert(
+                        ColliderBuilder::segment(
+                            point![sp.x - PAD_HALF_W, sp.y],
+                            point![sp.x + PAD_HALF_W, sp.y],
+                        )
+                        .friction(0.9)
+                        .build(),
+                    );
+                }
+                for (i, p) in t.pads.iter().enumerate() {
+                    let handle = self.colliders.insert(
+                        ColliderBuilder::segment(
+                            point![p.x - PAD_HALF_W, p.y],
+                            point![p.x + PAD_HALF_W, p.y],
+                        )
+                        .friction(0.9)
+                        .build(),
+                    );
+                    self.pads.insert((i as i64, 0), Pad { handle, cx: p.x, y: p.y });
+                }
+            }
+            self.synced_at = Some(key);
+            return;
+        }
+
         let (ship_seg, ship_layer) = key;
         let want_left = ship_seg - HALF_WINDOW;
         let want_right = ship_seg + HALF_WINDOW;
@@ -699,6 +811,8 @@ pub fn resim(rec: &Recording) -> Vec<Keyframe> {
                 fuel: sim.fuel, hull: sim.hull,
                 glow: input.throttle_f32(),
                 land_timer: 0.0, // a destroying tick always zeroes it
+                visited: sim.visited_mask(),
+                run_ticks: sim.run_ticks,
             });
             break;
         }
@@ -745,6 +859,8 @@ mod tests {
                     fuel: sim.fuel, hull: sim.hull,
                     glow: input.throttle_f32(),
                     land_timer: 0.0,
+                    visited: sim.visited_mask(),
+                    run_ticks: sim.run_ticks,
                 });
                 break;
             }
@@ -806,6 +922,8 @@ mod tests {
             a.land_timer.to_bits(), b.land_timer.to_bits(),
             "land_timer differs at tick {}", a.tick
         );
+        assert_eq!(a.visited, b.visited, "visited differs at tick {}", a.tick);
+        assert_eq!(a.run_ticks, b.run_ticks, "run_ticks differs at tick {}", a.tick);
     }
 
     // Regression test for the replay-drift bug (2026-07). Rapier's contact
@@ -846,6 +964,8 @@ mod tests {
                     vx: imp.vx, vy: imp.vy, angvel: imp.angvel,
                     fuel: sim.fuel, hull: sim.hull, glow: input.throttle_f32(),
                     land_timer: 0.0,
+                    visited: sim.visited_mask(),
+                    run_ticks: sim.run_ticks,
                 });
                 break;
             }
@@ -897,6 +1017,138 @@ mod tests {
         for (a, b) in live_kfs.iter().zip(&resimmed) {
             assert_physics_eq(a, b);
         }
+    }
+
+    #[test]
+    fn resim_reproduces_on_a_hand_drawn_level_bit_exactly() {
+        // The determinism contract must hold for hand-drawn terrain too: the
+        // whole Terrain rides in the recording header (format v4), so resim
+        // rebuilds the identical polygon world — via a full serialize →
+        // deserialize round trip, exactly like a blob arriving server-side.
+        let level = Level::parse(include_str!("../../levels/hollows.level"));
+        assert!(level.terrain.is_some(), "hollows must be a terrain level");
+        let (rec, live_kfs) = record_scripted_flight(level, 12 * KEYFRAME_EVERY);
+        assert!(live_kfs.len() >= 3, "flight too short to be a meaningful test");
+        let blob = rec.serialize(0);
+        let (back, _) = Recording::deserialize(&blob).expect("v4 blob decodes");
+        let resimmed = resim(&back);
+        assert_eq!(resimmed.len(), live_kfs.len());
+        for (a, b) in live_kfs.iter().zip(&resimmed) {
+            assert_physics_eq(a, b);
+        }
+    }
+
+    #[test]
+    fn visiting_every_hollows_pad_completes_the_run_and_freezes_it() {
+        // Time scoring: the run ends at the moment the LAST pad's landing
+        // registers — completed fires once, the run clock freezes, and the
+        // controls go dead (the ship is parked; only reset revives it).
+        let level = Level::parse(include_str!("../../levels/hollows.level"));
+        assert_eq!(level.scoring, Scoring::Time);
+        let t = level.terrain.as_ref().unwrap();
+        let n_pads = t.pads.len();
+        let pad0 = t.pads[0]; // the west-chamber pad
+        let mut sim = Sim::new(level.clone());
+        // Park the ship on pad 0 with every OTHER pad already visited, via
+        // a keyframe whose bitmask seeds them — the same path a replay seek
+        // takes, so this also pins the restore-side of the mask.
+        let mut kf = spawn_keyframe(&level, 0.0);
+        kf.x = pad0.x;
+        kf.y = pad0.y + 0.78;
+        kf.visited = ((1u64 << n_pads) - 1) & !1; // all but bit 0
+        sim.restore(&kf);
+        assert_eq!(sim.visited_pads.len(), n_pads - 1, "mask restore seeded the visits");
+        assert!(!sim.completed);
+        let mut completed_at = None;
+        for t in 0..(3.0 / PHYSICS_DT) as u32 {
+            let rep = sim.tick(InputState::default());
+            if rep.completed {
+                completed_at = Some(t);
+                break;
+            }
+        }
+        let at = completed_at.expect("the last pad visit must complete the run");
+        assert!(sim.completed);
+        assert_eq!(sim.visited_pads.len(), n_pads);
+        // Clock froze at the completing tick (it counted that tick itself).
+        let final_ticks = sim.run_ticks;
+        assert_eq!(final_ticks, at + 1);
+        // Controls are dead: a full burn neither spends fuel nor lifts off.
+        let fuel_before = sim.fuel;
+        for _ in 0..120 {
+            let rep = sim.tick(InputState::from_controls(1.0, 0, 0.0, 0.0, false));
+            assert!(!rep.completed, "completed must fire exactly once");
+        }
+        assert_eq!(sim.run_ticks, final_ticks, "run clock must stay frozen");
+        assert!(sim.fuel >= fuel_before, "a dead engine must not burn fuel");
+        let (_, vy) = sim.ship_vel();
+        assert!(vy.abs() < 0.2, "completed ship must stay parked: vy={vy}");
+        // A keyframe taken now carries the full mask + frozen clock — what a
+        // replay seek needs to land on the finished state.
+        let kf2 = sim.keyframe(final_ticks + 120, 0.0);
+        assert_eq!(kf2.visited, (1u64 << n_pads) - 1);
+        assert_eq!(kf2.run_ticks, final_ticks);
+    }
+
+    #[test]
+    fn hand_drawn_spawn_stands_on_the_neutral_start_platform() {
+        // The Hollows spawn parks the ship on the NEUTRAL start platform:
+        // it must stand (not fall through), but nothing registers there —
+        // no visit, no refuel, no head start on the x/5 count.
+        let level = Level::parse(include_str!("../../levels/hollows.level"));
+        assert!(level.terrain.as_ref().unwrap().start.is_some());
+        let mut sim = Sim::new(level.clone());
+        sim.fuel = 50.0;
+        for _ in 0..(2.0 / PHYSICS_DT) as u32 {
+            let rep = sim.tick(InputState::default());
+            assert!(!rep.scored && !rep.landed, "the start platform must be neutral");
+        }
+        let (_, y, _) = sim.ship_pose();
+        assert!((y - level.stand_y(0.0)).abs() < 0.5, "ship sank or bounced: y={y}");
+        assert!(!sim.crashed);
+        assert!(sim.visited_pads.is_empty(), "no pad visit at the neutral spawn");
+        assert_eq!(sim.fuel, 50.0, "the start platform must not refuel");
+    }
+
+    #[test]
+    fn hollows_geometry_keeps_chambers_tunnels_and_pads_open() {
+        // Geometry lint for the hand-drawn map: the spawn, every chamber,
+        // every tunnel midpoint and every pad deck must be open space (not
+        // inside any rock polygon). Catches an authoring slip — a polygon
+        // accidentally covering a passage — at unit-test time.
+        let level = Level::parse(include_str!("../../levels/hollows.level"));
+        let t = level.terrain.as_ref().expect("hollows must be a terrain level");
+        assert_eq!(t.pads.len(), 5, "The Hollows ships with five pads");
+        // The neutral start platform's deck must be open space too.
+        let sp = t.start.expect("The Hollows spawns on a start platform");
+        for dx in [-PAD_HALF_W, 0.0, PAD_HALF_W] {
+            assert!(!t.point_in_rock(glam::vec2(sp.x + dx, sp.y + 0.4)),
+                "start platform deck is buried in rock");
+        }
+        let waypoints = [
+            (0.0, 5.0, "spawn chamber"),
+            (-22.0, 5.5, "west tunnel"),
+            (-45.0, 6.0, "west chamber"),
+            (22.0, 6.5, "east tunnel"),
+            (45.0, 7.0, "east chamber"),
+            (0.0, 22.0, "central passage"),
+            (0.0, 40.0, "upper chamber"),
+            (25.0, 41.5, "upper tunnel"),
+            (44.0, 25.0, "east passage"),
+            (53.0, 43.0, "attic"),
+        ];
+        for (x, y, what) in waypoints {
+            assert!(!t.point_in_rock(glam::vec2(x, y)), "{what} at ({x},{y}) is inside rock");
+        }
+        for p in &t.pads {
+            // The whole deck span, just above the collider line, must be open.
+            for dx in [-PAD_HALF_W, 0.0, PAD_HALF_W] {
+                let q = glam::vec2(p.x + dx, p.y + 0.4);
+                assert!(!t.point_in_rock(q), "pad at ({},{}) deck is buried in rock", p.x, p.y);
+            }
+        }
+        // The spawn stand position itself.
+        assert!(!t.point_in_rock(glam::vec2(0.0, level.stand_y(0.0))));
     }
 
     #[test]

@@ -132,6 +132,57 @@ pub fn facet_shade(base: Color, col: i64, row: usize, side: u8, salt: u32) -> Co
     )
 }
 
+// --- Hand-drawn terrain (polygon worlds) -----------------------------------
+
+// Ear-clip triangulation for a simple polygon (concave allowed, CCW winding —
+// Level::parse normalizes). Cosmetic only: the colliders are the polygon
+// edges themselves, this just fills the rock for drawing (cached per level in
+// the main loop, not recomputed per frame). O(n²), fine for hand-drawn maps.
+pub fn triangulate(poly: &[Vec2]) -> Vec<[Vec2; 3]> {
+    let n = poly.len();
+    if n < 3 {
+        return Vec::new();
+    }
+    let cross = |a: Vec2, b: Vec2, c: Vec2| (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    let mut idx: Vec<usize> = (0..n).collect();
+    let mut tris = Vec::with_capacity(n - 2);
+    while idx.len() > 3 {
+        let m = idx.len();
+        let mut clipped = false;
+        for i in 0..m {
+            let (pa, pb, pc) = (poly[idx[(i + m - 1) % m]], poly[idx[i]], poly[idx[(i + 1) % m]]);
+            // Convex corner (CCW) …
+            if cross(pa, pb, pc) <= 1e-6 {
+                continue;
+            }
+            // … containing no other remaining vertex = an ear.
+            let ear = idx.iter().all(|&j| {
+                let q = poly[j];
+                q == pa || q == pb || q == pc
+                    || cross(pa, pb, q) < 0.0
+                    || cross(pb, pc, q) < 0.0
+                    || cross(pc, pa, q) < 0.0
+            });
+            if ear {
+                tris.push([pa, pb, pc]);
+                idx.remove(i);
+                clipped = true;
+                break;
+            }
+        }
+        if !clipped {
+            // Degenerate input (self-touching / collinear run): fall back to
+            // a fan so we always terminate — worst case some overdraw.
+            for i in 1..idx.len() - 1 {
+                tris.push([poly[idx[0]], poly[idx[i]], poly[idx[i + 1]]]);
+            }
+            return tris;
+        }
+    }
+    tris.push([poly[idx[0]], poly[idx[1]], poly[idx[2]]]);
+    tris
+}
+
 // Facet lattice point for shaft walls (vertical analogue of lattice_point):
 // depth col 0 sits exactly on the wall polyline (collider-aligned); deeper
 // cols recede horizontally into the rock with deterministic jitter. Near the

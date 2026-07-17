@@ -48,9 +48,9 @@ push-retry loop for concurrent deploys):
 - `src/main.rs` — input exports/atomics, window conf, the frame loop (input gathering + stick gating, camera, drawing, HUD, minimap, crash dialog/replay/ghost cosmetics), and unit tests
 - `sim-core/` — the **`pegasus-sim` library crate** (workspace member): the whole deterministic half of the game, extracted 2026-07 so pegasus-backend can compile the IDENTICAL simulation for server-side score verification (it consumes this crate as a cargo **git dependency pinned to a `main` rev** — physics/level changes here need a backend re-pin + redeploy, see the backend repo's CLAUDE.md). **Nothing in it may depend on macroquad or any nondeterminism**; it uses `glam` (pinned to the version macroquad 0.4.15 re-exports, so `Vec2` unifies across the boundary) + `rapier2d` + `miniz_oxide`:
   - `sim-core/src/sim.rs` — **the deterministic simulation core**: `Sim` owns all Rapier state, the sliding collider windows (BTreeMaps) and ship systems (fuel/hull/score/landing/crash), advanced ONLY by `tick(InputState) -> TickReport` at `PHYSICS_DT`; plus `resim(&Recording)` and all physics constants. Same inputs + same start keyframe → bit-identical trajectory (unit-tested). **Any new gameplay force/effect must go through `tick`** — frame-level physics mutation would break replay determinism.
-  - `sim-core/src/world.rs` — deterministic world generation, parameterized by a **`Level`** (see "Levels"): cave curves, shafts, obstacles, pads and `stand_y` are all `Level` methods; plus `Rng`/`hash_u32`, the world constants (`SEG_LEN`, `RESET_X`, `PERIOD`, `V_PERIOD`, …) and `shipped_levels()` — the stem → `Level` map of the compiled-in level files the backend verifier params-checks submissions against (kept in sync with `levels/manifest.json` by a unit test)
+  - `sim-core/src/world.rs` — deterministic world generation, parameterized by a **`Level`** (see "Levels"): cave curves, shafts, obstacles, pads and `stand_y` are all `Level` methods; plus **`Terrain`** (hand-drawn polygon worlds — see "Levels"), `Rng`/`hash_u32`, the world constants (`SEG_LEN`, `RESET_X`, `PERIOD`, `V_PERIOD`, …) and `shipped_levels()` — the stem → `Level` map of the compiled-in level files the backend verifier params-checks submissions against (kept in sync with `levels/manifest.json` by a unit test)
   - `sim-core/src/replay.rs` — the hybrid `Recording` format + blob codec (see "Hybrid recording")
-- `src/render.rs` — radial light shader sources, faceted wall/shaft lattice (`lattice_point`, `shaft_lattice`, `facet_shade`), `draw_flat_mesh`
+- `src/render.rs` — radial light shader sources, faceted wall/shaft lattice (`lattice_point`, `shaft_lattice`, `facet_shade`), `draw_flat_mesh`, and `triangulate` (ear-clip fill for hand-drawn terrain polygons)
 - `src/ship_mesh.rs` — `SHIP_TRIS` / `SHIP_DETAILS` data tables extracted from the Flash SWF
 - `src/audio.rs` — in-memory WAV synthesis (`wav_from_samples`, `thruster_wav`, `boom_wav`)
 - `levels/` — **runtime level data**: `*.level` files (`key = value`) + `manifest.json` (menu order), fetched by `index.html` and pushed into the wasm — new levels deploy with no recompile (see "Levels")
@@ -450,7 +450,7 @@ degrades to silence.
   `showScreen`, consecutive-deduped), `ui_click` (ONE delegated listener on
   `#menu` — nearest ancestor with an id, containers skipped — plus the
   corner buttons via `onTap`, whose `preventDefault`ed touchstart never
-  produces a click), `run_start`/`run_end` (wasm channel below),
+  produces a click), `run_start`/`run_end` (wasm channel below; cause 3 = a time level completed),
   `replay_watch`, `score_submit` (the crash-flow submit dialog's outcome:
   submitted / skipped + level stem; the Settings name editor — no pending
   run — emits nothing), `error` (drained from the boot guard's
@@ -506,20 +506,41 @@ generator — all world generation is `Level` methods, so a level IS the world:
 | Key | Values | Effect |
 |-----|--------|--------|
 | `name` | text | Cosmetic (picker label, not in replay headers) |
-| `scoring` | `pads` / `distance` | Pads: +100 per first landing. Distance: score = max \|x\| reached (`Sim::max_dist`; the big HUD readout shows it, `best` beneath) |
+| `scoring` | `pads` / `distance` / `time` | Pads: +100 per first landing. Distance: score = max \|x\| reached (`Sim::max_dist`; big HUD readout, `best` beneath). Time: visit EVERY pad — the run ENDS the tick the last pad's landing registers (`Sim.completed`, `TickReport::completed`); score = completion time in seconds (`Sim.run_ticks × PHYSICS_DT`, **lower is better**), HUD shows `visited/total` + a running `TIME m:ss.t` clock at near-headline size (the clock IS the score; frozen at completion). A crash/fuel-out is a DNF — no board entry. Time levels are hand-drawn (finite pad set); `terrain.pads.len()` is the total |
 | `shafts` | on/off | Off: `seg_in_opening` is always false (sealed cave), no shaft colliders load, minimap skips the carve |
 | `obstacles` | on/off | Off: `obstacle_spec` returns None everywhere (pads then skip the boulder-overlap check) |
 | `pad_spacing` | 40–2000 (clamped) | Metres between pad slots (`PAD_SPACING = 130` is the default) |
 | `seed` | u32 | **0 = the legacy world bit-for-bit** (zero harmonic phases, untouched slot hashes — pinned by the pre-Level unit tests still passing unchanged). Any other seed re-phases the cave harmonics and re-keys every slot hash. The half-width harmonics guarantee ≥ 2.5 m clearance for ANY phases (unit-tested), so no seed can pinch the cave shut |
+| `poly` | `x,y x,y …` | **Hand-drawn terrain** (Across / Elasto Mania model): one SOLID ROCK polygon per line (≥ 3 verts, concave OK, overlaps OK — buried edges are unreachable; winding normalized to CCW on parse). Any `poly` line puts the level in hand-drawn mode: `Level.terrain = Some(Terrain)`, procedural gen off (shafts/obstacles forced off), every edge a segment collider loaded ONCE (no sliding window — hand-drawn maps are finite; `Sim.terrain_loaded` guards the one-shot insert, fixed file order keeps Rapier handle numbering deterministic) |
+| `pad` | `x,y` | Hand-placed pad (deck centre x, deck top y) — terrain levels only; keyed `(index, 0)` in `Sim.pads`, same landing/refuel/score logic |
+| `start` | `x,y` | Terrain levels: a NEUTRAL start platform under the spawn — a plain high-friction deck NOT in `Sim.pads` (no visit/refuel/score fires there), so a Time level's launch spot isn't a freebie visit. Defines the spawn ground (`spawn_y = start.y`); drawn as a dimmer, light-less deck, grey on the minimap |
+| `spawn_y` | f32 | Terrain levels: ground y under the spawn at x = 0 (`stand_y` returns it + 0.78); overridden by `start`'s y when a start platform is present |
 
 `Level::parse` reads `key = value` lines (# comments; unknown keys ignored
 for forward compatibility; missing keys keep `Level::demo()` defaults — the
-legacy world). Shipped levels (pinned by `include_str!` tests), **all
-distance-scored** since 2026-07: **The Expanse** (no shafts, boulders),
-**The Glide** (no shafts, no boulders) and **The Caves** (the original
-shafted world, kept as demo/experimentation level — was the one pads-scored
-level; the compiled-in `Level::demo()` default stays `pads` for the
-pad-scoring unit tests).
+legacy world). Shipped levels (pinned by `include_str!` tests): **The
+Expanse** (no shafts, boulders) and **The Glide** (no shafts, no
+boulders) — both distance-scored — plus **The
+Hollows** (2026-07: the first HAND-DRAWN level — five chambers joined by
+tunnels, five pads scattered through them (incl. a perch on the west
+tunnel's sill) plus a neutral `start` platform in the spawn chamber,
+**time-scored**: visit all five as fast as you can, the run ends on the
+last pad; its geometry-lint unit test asserts every chamber / tunnel /
+pad / start waypoint is open space via `Terrain::point_in_rock`) and **The Caves** (the original shafted world,
+kept as demo/experimentation level; the compiled-in `Level::demo()`
+default stays `pads` for the pad-scoring unit tests).
+
+**Hand-drawn rendering** (`terrain` levels): each rock polygon draws as an
+ear-clip-triangulated `rock_dark` fill (`render::triangulate`, cached in
+main's `TerrainMesh` keyed on the RENDERED terrain — it follows `world_sim`,
+so replays of other levels swap the cache) plus two faceted edge bands
+extruded along the inward normal (CCW ⇒ edge dir rotated +90° points into
+rock; depth 0 sits EXACTLY on the polygon edge = the collider — same
+alignment rule as lattice row 0), lit by the same radial shader. The
+procedural wall/shaft lattice loop is skipped (`terrain.is_some()` break);
+obstacle/shaft/pad loops self-gate via their empty maps. Minimap: dark open
+space with the triangulated rock drawn on top; pad legs use a short fixed
+drop (no floor curve to reach for).
 
 **Decoupled from the wasm**: `index.html` fetches `levels/manifest.json` +
 each `.level` file (cache-bypassed), fills the `#level-select` in the info
@@ -549,10 +570,28 @@ are cleared at boot).
 
 **Replays**: physics depends on the level, so the recording header carries
 `LevelParams` (scoring/shafts/obstacles/pad_spacing/seed — NOT the cosmetic
-name; added in format v2, current version is v3) and `resim`/`ResimPlayer` rebuild
-the level from the header (`Level::from_params`) — a replay re-runs in the
-world it was flown in, unit-tested bit-exact on a non-demo level too
-(`resim_reproduces_on_a_custom_level_bit_exactly`).
+name; added in format v2) and `resim`/`ResimPlayer` rebuild the level from
+the header (`Level::from_params`) — a replay re-runs in the world it was
+flown in, unit-tested bit-exact on a non-demo level too
+(`resim_reproduces_on_a_custom_level_bit_exactly`). New-feature levels
+carry a **flags byte + optional Terrain** in the header (**format v4** —
+flag bit 0 reserved, bit 1 = terrain present, then the Terrain block incl.
+the optional start platform; written only when the level is
+hand-drawn OR time-scored; legacy procedural recordings still serialize
+byte-identical v3 and `deserialize` accepts both, so every pre-existing
+blob keeps decoding). v4 keyframes additionally append **`visited` (u64
+terrain-pad bitmask) + `run_ticks`** (60 B vs v3's 48 B): `Sim::restore`
+re-seeds `visited_pads`/`completed`/the frozen run clock from them, so a
+replay SEEK lands on the correct x/5 count, beacon colors and completion
+state instead of losing them with the rebuilt scratch sim (procedural
+levels keep their old session-state semantics — mask 0).
+Hand-drawn replays are thereby self-contained
+(`resim_reproduces_on_a_hand_drawn_level_bit_exactly` round-trips through
+serialize/deserialize). **Backend caveat**: the deployed verifier's pinned
+sim-core rejects v4 until re-pinned — submissions on the
+hand-drawn / time-scored levels are silently discarded server-side until
+the backend re-pin + redeploy; the legacy procedural levels are
+unaffected.
 
 ## Rendering architecture
 - **High-DPI**: `high_dpi: true` in `window_conf`. The code treats
@@ -1089,10 +1128,14 @@ for now:
   **build id**: index.html parses the first 8 hex chars of
   the deploy revision to a u32 and pushes it via the `set_build_id` export
   (0 = local dev). Bump `REPLAY_FORMAT_VERSION` when the layout changes
-  (v3: exact rotation + land_timer in keyframes). **No backward
-  compatibility while iterating** — `deserialize` rejects other versions,
-  so pre-v3 server blobs stop decoding (watch/ghost pushes no-op
-  gracefully); add version-tolerant reads when the game is released.
+  (v3: exact rotation + land_timer in keyframes; v4 = v3 + the flags
+  byte/Terrain block in LevelParams and visited+run_ticks per keyframe,
+  chosen PER RECORDING — only hand-drawn / time-scored levels
+  write v4, so v3 blobs stay valid and keep decoding). **No backward
+  compatibility while iterating** — `deserialize` rejects pre-v3
+  versions, so older server blobs stop decoding (watch/ghost pushes
+  no-op gracefully); add version-tolerant reads when the game is
+  released.
 - Trimming keeps the retained window **starting at a keyframe** with the
   effective input re-seeded there, so it stays replayable after the cap.
   The window is `HYBRID_MAX_SECS = 60 min` (~1 MB/h worst case) — a memory
@@ -1347,7 +1390,7 @@ commit the refreshed page.
 - **Always open a PR** after pushing a feature branch — standing instruction
   from the owner (no need to ask first). The PR also produces a phone-testable
   preview deployment at `pr-<n>/`.
-- Development branch: `claude/android-back-button-nav-0tgzdd` (current); previous: `claude/backend-score-validation-7fe6xo`
+- Development branch: `claude/two-new-game-levels-eienet` (current); previous: `claude/android-back-button-nav-0tgzdd`
 - Merges to `main` via rebase PRs using the GitHub MCP tools (`mcp__github__create_pull_request`, `mcp__github__merge_pull_request`).
 - **Curate the branch before merging.** Rebase merges land every branch
   commit on `main` verbatim, so branch noise becomes permanent history.

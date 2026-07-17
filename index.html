@@ -368,6 +368,11 @@
       text-shadow: 0 0 8px #fff, 0 0 18px var(--red), 0 0 40px rgba(255, 90, 60, 0.7);
       animation: none;
     }
+    /* Time-level completion: same slab, victory green. */
+    .title.crash.win {
+      color: #dcffe6;
+      text-shadow: 0 0 8px #fff, 0 0 18px var(--green), 0 0 40px rgba(66, 255, 143, 0.7);
+    }
 
     /* --- Ship hero: the real vector ship (from icon.svg) firing its engine.
        Bobs gently; the flame flickers — "in action". Home screen only. */
@@ -1067,7 +1072,7 @@
     </div>
 
     <div class="screen" id="scr-gameover">
-      <div class="title crash">GAME OVER</div>
+      <div class="title crash" id="go-title">GAME OVER</div>
       <div id="go-stats">
         <span id="go-dist"></span>
         <span id="go-best"></span>
@@ -1629,6 +1634,7 @@
     // becomes the game-over screen; a replay watched from the menu (state 3)
     // returns to the menu when it ends mid-flight (a wreck waiting shows the
     // game-over screen through the state-2 branch instead).
+    const goTitle = document.getElementById("go-title");
     const goDist = document.getElementById("go-dist");
     const goBest = document.getElementById("go-best");
     let prevState = 0;
@@ -1645,8 +1651,22 @@
       // off until the game has actually left state 2.
       if (st !== 2) uiCmdPending = false;
       if (st === 2 && overlay === null && !uiCmdPending) {
-        goDist.textContent = Math.round(wasm_exports.cur_dist()) + " m";
-        goBest.textContent = "best " + Math.round(wasm_exports.get_best_dist()) + " m";
+        // Time levels end in LEVEL COMPLETE (cause 3 on the analytics
+        // mirror, fresh for every ended run) with the completion clock; an
+        // unfinished attempt is a DNF. Other levels keep distance + best.
+        const complete = wasm_exports.run_end_cause
+          && wasm_exports.run_end_cause() === 3;
+        goTitle.textContent = complete ? "LEVEL COMPLETE" : "GAME OVER";
+        goTitle.classList.toggle("win", complete);
+        if (levelIsTime(currentLevelFile)) {
+          goDist.textContent = complete
+            ? fmtClock(wasm_exports.run_end_ticks() / 120) : "DNF";
+          const bt = wasm_exports.get_best_time ? wasm_exports.get_best_time() : 0;
+          goBest.textContent = bt > 0 ? "best " + fmtClock(bt) : "";
+        } else {
+          goDist.textContent = Math.round(wasm_exports.cur_dist()) + " m";
+          goBest.textContent = "best " + Math.round(wasm_exports.get_best_dist()) + " m";
+        }
         // Collect the just-ended run SYNCHRONOUSLY before deciding which
         // screen to open — an out-of-fuel game over publishes and enters
         // state 2 in the same frame (no wreck-phase window like a crash),
@@ -2042,6 +2062,20 @@
     let scoresFile = null;        // the level whose board scr-scores shows
     let levelPickerMode = "fly";  // "fly" -> pick & load & fly; "scores" -> pick & show board
 
+    // Time-scored levels (scoring = time in the level file) rank by lowest
+    // completion time — their scores render as m:ss.t clocks, not metres.
+    function levelIsTime(file) {
+      const t = file && levelTexts[file];
+      return !!t && /^\s*scoring\s*=\s*time\s*$/mi.test(t);
+    }
+    function fmtClock(secs) {
+      const m = Math.floor(secs / 60), r = secs - m * 60;
+      return m + ":" + (r < 10 ? "0" : "") + r.toFixed(1);
+    }
+    function fmtScore(file, score) {
+      return levelIsTime(file) ? fmtClock(score) : Math.round(score) + " m";
+    }
+
     const levelBestEls = {}; // file -> the row's {d, by} spans, for in-place updates
     // Fill a row's best cell: the global record over "by <pilot>" (both
     // picker modes). In-place only — see the DOM-stability rule in
@@ -2050,7 +2084,7 @@
       const els = levelBestEls[file];
       if (!els) return;
       const e = globalBestEntryFor(file);
-      els.d.textContent = e && e.score > 0 ? "best " + Math.round(e.score) + " m" : "—";
+      els.d.textContent = e && e.score > 0 ? "best " + fmtScore(file, e.score) : "—";
       els.by.textContent = e && e.name ? "by " + e.name.toUpperCase() : "";
     }
     function renderLevels() {
@@ -2399,7 +2433,7 @@
       // Big amber score readout like the game-over screen; empty (zero
       // height) in the Settings name-editor mode.
       nameScoreEl.textContent = pendingSubmit
-        ? Math.round(pendingSubmit.entry.d) + " m" : "";
+        ? fmtScore(currentLevelFile, pendingSubmit.entry.d) : "";
       nameDistEl.textContent = pendingSubmit
         ? "Submit to the global board?"
         : "Shown on the global boards";
@@ -2549,7 +2583,7 @@
         col.append(who, when);
         const dist = document.createElement("span");
         dist.className = "dist";
-        dist.textContent = Math.round(s.score) + " m";
+        dist.textContent = fmtScore(scoresFile, s.score);
         li.append(rank, col, dist);
         if (s.replayPath) {
           const watch = document.createElement("button");
@@ -2958,7 +2992,7 @@
             const ticks = wasm_exports.run_end_ticks();
             enqueue("run_end", {
               level,
-              cause: ["crash", "reset", "fuel"][wasm_exports.run_end_cause()] || "crash",
+              cause: ["crash", "reset", "fuel", "complete"][wasm_exports.run_end_cause()] || "crash",
               distance: wasm_exports.run_end_dist(),
               durationMs: Math.round(ticks * TICK_MS),
               fuel: wasm_exports.run_end_fuel(),

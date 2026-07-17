@@ -35,6 +35,49 @@ pub const BASE: f32 = std::f32::consts::TAU / PERIOD; // 2π / 600
 pub enum Scoring {
     Pads,     // +100 per first landing on each pad
     Distance, // high score = max |x| reached in a run
+    Time,     // visit EVERY pad; score = completion time, lower is better
+}
+
+// Hand-drawn world geometry (the Across/Elasto Mania model): the level file
+// author draws SOLID ROCK as closed polygons; the playable space is
+// everything they leave open. Polygons may be concave and may overlap (an
+// edge buried inside another rock mass is unreachable and harmless), so an
+// enclosing map frame is authored as a few fat overlapping slabs. Pads are
+// hand-placed. When a Level carries a Terrain, the whole procedural
+// generator (cave curves, shafts, obstacles, pad slots) is switched off and
+// every polygon edge becomes a static segment collider, loaded all at once —
+// hand-drawn maps are finite, so no sliding window is needed.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Terrain {
+    pub polys: Vec<Vec<Vec2>>, // solid rock polygons, CCW (normalized on parse)
+    pub pads: Vec<Vec2>,       // hand-placed pads: (deck centre x, deck top y)
+    // Neutral START platform (deck centre x, deck top y): a plain deck the
+    // ship spawns on — NOT a scoring/refuel pad (it's not in Sim.pads, so
+    // no landing logic fires there). Keeps the launch spot out of a Time
+    // level's visit list — otherwise pad 0 is a freebie under the spawn.
+    // When present it defines the spawn ground (spawn_y = start.y).
+    pub start: Option<Vec2>,
+    pub spawn_y: f32,          // ground y under the spawn at x = 0
+}
+
+impl Terrain {
+    // Point-in-rock test (ray cast). Used by the geometry-lint unit tests to
+    // assert that chambers, tunnels and pad decks are actually open space.
+    pub fn point_in_rock(&self, p: Vec2) -> bool {
+        self.polys.iter().any(|poly| {
+            let mut inside = false;
+            let n = poly.len();
+            for i in 0..n {
+                let (a, b) = (poly[i], poly[(i + 1) % n]);
+                if (a.y > p.y) != (b.y > p.y)
+                    && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x
+                {
+                    inside = !inside;
+                }
+            }
+            inside
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -45,6 +88,7 @@ pub struct Level {
     pub obstacles: bool,
     pub pad_spacing: f32,
     pub seed: u32,
+    pub terrain: Option<Terrain>, // Some = hand-drawn world, procedural gen off
 }
 
 impl Level {
@@ -57,13 +101,28 @@ impl Level {
             obstacles: true,
             pad_spacing: PAD_SPACING,
             seed: 0,
+            terrain: None,
         }
     }
 
     // Parse the `key = value` level format (# comments, unknown keys ignored
     // for forward compatibility; missing keys keep demo defaults).
+    // Hand-drawn terrain keys: `poly = x,y x,y …` (one solid rock polygon per
+    // line, ≥ 3 vertices), `pad = x,y` (deck centre / deck top),
+    // `start = x,y` (the neutral start platform — see Terrain::start) and
+    // `spawn_y = <ground y at x = 0>` (overridden by `start`'s y). Any
+    // `poly` line switches the level to hand-drawn mode, which forces
+    // shafts/obstacles off (they are features of the procedural generator).
     pub fn parse(text: &str) -> Level {
         let mut lvl = Level::demo();
+        let mut polys: Vec<Vec<Vec2>> = Vec::new();
+        let mut pads: Vec<Vec2> = Vec::new();
+        let mut start: Option<Vec2> = None;
+        let mut spawn_y = 0.0f32;
+        let pt = |s: &str| -> Option<Vec2> {
+            let (x, y) = s.split_once(',')?;
+            Some(vec2(x.trim().parse().ok()?, y.trim().parse().ok()?))
+        };
         for line in text.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -77,6 +136,8 @@ impl Level {
                 "scoring" => {
                     lvl.scoring = if v.eq_ignore_ascii_case("distance") {
                         Scoring::Distance
+                    } else if v.eq_ignore_ascii_case("time") {
+                        Scoring::Time
                     } else {
                         Scoring::Pads
                     }
@@ -93,8 +154,46 @@ impl Level {
                         lvl.seed = s;
                     }
                 }
+                "poly" => {
+                    let mut p: Vec<Vec2> = v.split_whitespace().filter_map(pt).collect();
+                    if p.len() >= 3 {
+                        // Normalize winding to CCW (positive signed area) so
+                        // the renderer's "into the rock" edge normal is
+                        // consistent for every polygon.
+                        let area: f32 = (0..p.len())
+                            .map(|i| {
+                                let (a, b) = (p[i], p[(i + 1) % p.len()]);
+                                a.x * b.y - b.x * a.y
+                            })
+                            .sum();
+                        if area < 0.0 {
+                            p.reverse();
+                        }
+                        polys.push(p);
+                    }
+                }
+                "pad" => {
+                    if let Some(p) = pt(v) {
+                        pads.push(p);
+                    }
+                }
+                "start" => start = pt(v),
+                "spawn_y" => {
+                    if let Ok(f) = v.parse::<f32>() {
+                        spawn_y = f;
+                    }
+                }
                 _ => {}
             }
+        }
+        if !polys.is_empty() {
+            // The start platform, when present, IS the spawn ground.
+            if let Some(sp) = start {
+                spawn_y = sp.y;
+            }
+            lvl.terrain = Some(Terrain { polys, pads, start, spawn_y });
+            lvl.shafts = false;
+            lvl.obstacles = false;
         }
         lvl
     }
@@ -115,28 +214,39 @@ impl Level {
     }
 
     // The physics-relevant subset, for the replay header. The name is
-    // cosmetic and doesn't survive the round trip.
+    // cosmetic and doesn't survive the round trip. Hand-drawn terrain IS
+    // physics (every edge is a collider), so it rides along whole — a replay
+    // of a hand-drawn level is self-contained.
     pub fn to_params(&self) -> LevelParams {
         LevelParams {
             scoring: match self.scoring {
                 Scoring::Pads => 0,
                 Scoring::Distance => 1,
+                Scoring::Time => 2,
             },
             shafts: self.shafts as u8,
             obstacles: self.obstacles as u8,
             pad_spacing: self.pad_spacing,
             seed: self.seed,
+            terrain: self.terrain.clone(),
         }
     }
 
     pub fn from_params(p: &LevelParams) -> Level {
         Level {
             name: "(replay)".to_string(),
-            scoring: if p.scoring == 1 { Scoring::Distance } else { Scoring::Pads },
-            shafts: p.shafts != 0,
-            obstacles: p.obstacles != 0,
+            scoring: match p.scoring {
+                1 => Scoring::Distance,
+                2 => Scoring::Time,
+                _ => Scoring::Pads,
+            },
+            // Terrain levels never run the procedural generator (parse
+            // forces these off too — keep the round trip consistent).
+            shafts: p.shafts != 0 && p.terrain.is_none(),
+            obstacles: p.obstacles != 0 && p.terrain.is_none(),
             pad_spacing: p.pad_spacing,
             seed: p.seed,
+            terrain: p.terrain.clone(),
         }
     }
 }
@@ -160,6 +270,12 @@ impl Level {
     // ~5.5 m/s touchdown tripped the crash threshold and put spawn → crash →
     // respawn into an endless loop.
     pub fn stand_y(&self, x: f32) -> f32 {
+        // Hand-drawn worlds spawn at the authored spot (x = 0, on the spawn
+        // pad — hollows-style maps put pad 0 there like the procedural cave
+        // does), so the ground height is a level-file key, not a curve.
+        if let Some(t) = &self.terrain {
+            return t.spawn_y + 0.78;
+        }
         let mut ground = self.cave_center(x) - self.cave_half_width(x);
         // If a landing pad deck covers x, stand on the deck instead (its
         // friction also keeps the parked ship from drifting on sloped,
@@ -217,6 +333,7 @@ pub fn shipped_levels() -> Vec<(&'static str, Level)> {
         ("caves", Level::parse(include_str!("../../levels/caves.level"))),
         ("expanse", Level::parse(include_str!("../../levels/expanse.level"))),
         ("glide", Level::parse(include_str!("../../levels/glide.level"))),
+        ("hollows", Level::parse(include_str!("../../levels/hollows.level"))),
     ]
 }
 
