@@ -1,0 +1,15 @@
+# Level — The Flux: The Rift's shapeshifting twin. Same endless value-noise
+# cave, same boulders and pad spacing — but `seed = random` makes the game
+# roll a brand-new world seed at every load and every restart, so no two
+# attempts fly the same rock. The concrete rolled seed rides each replay's
+# header, so recordings, board replays and server-side verification all
+# re-simulate the exact world that run was flown in; the racing ghost stays
+# off by nature (a ghost's world never matches the fresh one).
+name = The Flux
+description = An endless cave that reshuffles itself on every attempt
+scoring = distance
+shafts = off
+obstacles = on
+endless = on
+pad_spacing = 150
+seed = random

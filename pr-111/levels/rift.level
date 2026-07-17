@@ -1,0 +1,13 @@
+# Level — The Rift: the endless procedural cave. `endless = on` swaps the
+# periodic cave harmonics for hash-based value noise with the same amplitude
+# bounds — the tunnel never wraps around, every kilometre is new rock in
+# BOTH directions. No shafts (one long unique tunnel, like The Expanse),
+# boulders on, refueling pads a little farther apart than usual.
+name = The Rift
+description = An endless cave where every kilometre is new rock
+scoring = distance
+shafts = off
+obstacles = on
+endless = on
+pad_spacing = 150
+seed = 20260717
