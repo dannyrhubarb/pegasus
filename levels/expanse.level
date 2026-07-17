@@ -3,6 +3,7 @@
 # no vertical shafts — one long winding tunnel, boulders and all, with
 # refueling pads every ~130 m.
 name = The Expanse
+description = One long winding tunnel full of boulders. Fly as far as you dare
 scoring = distance
 shafts = off
 obstacles = on

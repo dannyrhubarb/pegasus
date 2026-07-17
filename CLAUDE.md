@@ -157,7 +157,8 @@ while the wasm loads):
   `max-height:560px` so landscape phones keep the Fly button above the fold)
   + Fly / High scores / Settings / About. **No top-level Levels button** —
   level choice is a step inside Fly and High scores (see scr-levels).
-- **scr-levels**: the **shared level picker** — level rows (name + best),
+- **scr-levels**: the **shared level picker** — level rows (name with the
+  level file's one-line `description` beneath it, + best),
   reached two ways via `openLevelPicker(mode)` (`levelPickerMode` drives its
   title + row action): **fly mode** (from Fly, titled "SELECT LEVEL") loads
   the picked level and closes the menu to fly it; **scores mode** (from High
@@ -506,6 +507,7 @@ generator — all world generation is `Level` methods, so a level IS the world:
 | Key | Values | Effect |
 |-----|--------|--------|
 | `name` | text | Cosmetic (picker label, not in replay headers) |
+| `description` | text | Cosmetic one-liner shown under the name in the level picker (JS-only — the wasm parser ignores it like any unknown key) |
 | `scoring` | `pads` / `distance` / `time` | Pads: +100 per first landing. Distance: score = max \|x\| reached (`Sim::max_dist`; big HUD readout, `best` beneath). Time: visit EVERY pad — the run ENDS the tick the last pad's landing registers (`Sim.completed`, `TickReport::completed`); score = completion time in seconds (`Sim.run_ticks × PHYSICS_DT`, **lower is better**), HUD shows `visited/total` + a running `TIME m:ss.t` clock at near-headline size (the clock IS the score; frozen at completion), with `BEST m:ss.t` + the "by <pilot>" record attribution beneath (`BEST_TIME`, seeded from the global all-time record like the distance BEST — see "Online high scores"). A crash/fuel-out is a DNF — no board entry. Time levels are hand-drawn (finite pad set); `terrain.pads.len()` is the total |
 | `endless` | on/off | On: the cave's periodic harmonics (`cave_center`/`cave_half_width`) are replaced by hash-based **value noise** (`Level::vnoise`, smoothstep-interpolated lattice hashes) with the SAME amplitude bounds — the tunnel never wraps in x, every stretch is unique rock in both directions. The no-pinch / no-blowout guarantee carries over (unit-tested over ±34 km); C1-continuous so colliders/lattice stay seamless. Procedural only (ignored under `terrain`) |
 | `shafts` | on/off | Off: `seg_in_opening` is always false (sealed cave), no shaft colliders load, minimap skips the carve |
