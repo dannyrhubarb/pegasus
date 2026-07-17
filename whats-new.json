@@ -1,5 +1,10 @@
 [
  {
+  "rev": "47acd3f",
+  "date": "2026-07-17T23:27:41+02:00",
+  "note": "Time trial levels now show the world-record time and who holds it while you fly"
+ },
+ {
   "rev": "1dd1985",
   "date": "2026-07-17T17:33:20+02:00",
   "note": "New level: The Flux — an endless cave that reshuffles into a brand-new world on every attempt"

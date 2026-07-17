@@ -1033,11 +1033,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">1dd1985</div>
+        <div class="info-value" id="git-rev">47acd3f</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-17T15:34:20Z</div>
+        <div class="info-value" id="build-time">2026-07-17T21:28:36Z</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors, which site
@@ -1922,7 +1922,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "1dd1985";
+    const wasmRev = "47acd3f";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -2534,15 +2534,32 @@
           if (data) putBoard(stem, "alltime", data.scores || []);
           const scores = getBoard(stem, "alltime") || []; // fresh, else cached
           if (file !== currentLevelFile || !scores.length) return;
-          if (typeof wasm_exports !== "undefined" && wasm_exports.get_best_dist) {
-            if (scores[0].score > wasm_exports.get_best_dist()) {
-              wasm_exports.set_best_dist(scores[0].score);
-            }
-            // Attribute the record under the HUD BEST line — unless the
-            // session's own (unsubmitted) best already beats the board, in
-            // which case the game shows "by you" on its own.
-            if (scores[0].score >= wasm_exports.get_best_dist()) {
-              pushTextToWasm(scores[0].name, "set_best_name");
+          if (typeof wasm_exports !== "undefined") {
+            if (levelIsTime(file)) {
+              // Time level: the all-time board ranks fastest-first and
+              // LOWER wins, so the record only ever lowers the seeded best.
+              if (wasm_exports.get_best_time && wasm_exports.set_best_time) {
+                const cur = wasm_exports.get_best_time();
+                if (cur <= 0 || scores[0].score < cur) {
+                  wasm_exports.set_best_time(scores[0].score);
+                }
+                // Attribute the record under the HUD BEST line — unless the
+                // session's own (unsubmitted) best is already faster, in
+                // which case the game shows "by you" on its own.
+                if (scores[0].score <= wasm_exports.get_best_time()) {
+                  pushTextToWasm(scores[0].name, "set_best_name");
+                }
+              }
+            } else if (wasm_exports.get_best_dist) {
+              if (scores[0].score > wasm_exports.get_best_dist()) {
+                wasm_exports.set_best_dist(scores[0].score);
+              }
+              // Attribute the record under the HUD BEST line — unless the
+              // session's own (unsubmitted) best already beats the board, in
+              // which case the game shows "by you" on its own.
+              if (scores[0].score >= wasm_exports.get_best_dist()) {
+                pushTextToWasm(scores[0].name, "set_best_name");
+              }
             }
           }
           // The ghost is the best run that still carries a replay blob
