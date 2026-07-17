@@ -1,5 +1,10 @@
 [
  {
+  "rev": "1dd1985",
+  "date": "2026-07-17T17:33:20+02:00",
+  "note": "New level: The Flux — an endless cave that reshuffles into a brand-new world on every attempt"
+ },
+ {
   "rev": "e08c504",
   "date": "2026-07-17T16:07:45+02:00",
   "note": "Fixed: finishing The Hollows now offers the submit-score dialog"
