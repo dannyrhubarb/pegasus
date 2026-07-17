@@ -1,0 +1,1060 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+  Pegasus level editor (v1, issue #89): draw hand-drawn `.level` worlds — the
+  same representation The Hollows uses (solid-rock `poly` lines + hand-placed
+  `pad` / `start`, see sim-core/src/world.rs `Level::parse`). Standalone page,
+  deployed next to index.html; fully self-contained (no CDNs/webfonts, like
+  the game). Pointer-events based so mouse and touch both work; two fingers
+  always pan/zoom.
+
+  Test fly: the exported level text is stored in localStorage under
+  `pegasus_custom_level` and the game is opened at `./?custom=1` — index.html
+  registers that draft as a picker row and boots straight into it (no boards,
+  no submits for drafts). The working document autosaves to
+  `pegasus_editor_doc` so a round trip to the game never loses work.
+-->
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Pegasus — Level editor</title>
+<style>
+  :root {
+    --bg: #06080d;
+    --panel: #0b0f17;
+    --line: #1d2635;
+    --cyan: #46f0ff;
+    --magenta: #ff59c8;
+    --amber: #ffb545;
+    --green: #57ff9a;
+    --red: #ff5d5d;
+    --dim: #7a8699;
+    --fg: #cdd6e4;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font: 13px/1.4 ui-monospace, Menlo, Consolas, "Courier New", monospace;
+    display: flex; flex-direction: column;
+    padding-top: env(safe-area-inset-top);
+  }
+  #bar {
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    padding: 6px 8px;
+    display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+    user-select: none; -webkit-user-select: none;
+  }
+  .btn {
+    border: 1px solid var(--line);
+    background: #0e1420;
+    color: var(--fg);
+    padding: 7px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font: inherit;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn.tool.on { border-color: var(--cyan); color: var(--cyan);
+                 box-shadow: 0 0 8px rgba(70,240,255,0.25) inset; }
+  .btn.warn { border-color: #5a3020; color: var(--amber); }
+  .btn.go { border-color: #1d5a38; color: var(--green); }
+  .btn.danger { border-color: #5a2020; color: var(--red); }
+  .btn[disabled] { opacity: 0.35; pointer-events: none; }
+  .sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 2px; }
+  .grow { flex: 1 1 0; }
+  #name {
+    border: 1px solid var(--line); background: #0e1420; color: var(--fg);
+    padding: 7px 8px; border-radius: 4px; font: inherit; width: 11em; min-width: 6em;
+  }
+  select {
+    border: 1px solid var(--line); background: #0e1420; color: var(--fg);
+    padding: 7px 6px; border-radius: 4px; font: inherit;
+  }
+  #wrap { position: relative; flex: 1 1 0; min-height: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%;
+           touch-action: none; cursor: crosshair; }
+  #status {
+    background: var(--panel);
+    border-top: 1px solid var(--line);
+    padding: 5px 10px calc(5px + env(safe-area-inset-bottom));
+    display: flex; gap: 14px; align-items: baseline;
+    color: var(--dim); font-size: 12px;
+    user-select: none; -webkit-user-select: none;
+    min-height: 2em;
+  }
+  #status .issues { color: var(--amber); cursor: pointer; }
+  #status .issues.err { color: var(--red); }
+  #coords { min-width: 11em; }
+  /* Modal (export / import / validation) */
+  #modal {
+    position: fixed; inset: 0; z-index: 10; display: none;
+    background: rgba(3,5,9,0.82);
+    align-items: center; justify-content: center;
+    padding: 16px;
+  }
+  #modal.on { display: flex; }
+  #modal .box {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+    width: min(680px, 100%); max-height: 86vh;
+    display: flex; flex-direction: column; gap: 10px; padding: 14px;
+  }
+  #modal h2 { font-size: 15px; letter-spacing: 0.12em; color: var(--cyan); font-weight: normal; }
+  #mtext {
+    flex: 1 1 auto; min-height: 200px; resize: none;
+    background: #060a11; color: var(--fg); border: 1px solid var(--line);
+    border-radius: 4px; padding: 8px; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace;
+    white-space: pre; overflow: auto;
+  }
+  #mlist { flex: 1 1 auto; overflow: auto; min-height: 60px; max-height: 50vh; }
+  #mlist div { padding: 4px 0; border-bottom: 1px solid #10161f; }
+  #mlist .e { color: var(--red); }
+  #mlist .w { color: var(--amber); }
+  #mlist .ok { color: var(--green); }
+  #mrow { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  a.back { color: var(--dim); text-decoration: none; padding: 7px 4px; }
+  a.back:hover { color: var(--cyan); }
+</style>
+</head>
+<body>
+  <div id="bar">
+    <a class="back" href="./" title="Back to the game">&#8249; GAME</a>
+    <button class="btn tool on" id="t-select">SELECT</button>
+    <button class="btn tool" id="t-draw">DRAW ROCK</button>
+    <button class="btn tool" id="t-pad">PAD</button>
+    <button class="btn tool" id="t-start">START</button>
+    <div class="sep"></div>
+    <button class="btn" id="b-undo" title="Ctrl+Z">&#8630;</button>
+    <button class="btn" id="b-redo" title="Ctrl+Shift+Z">&#8631;</button>
+    <button class="btn" id="b-snap" title="Snap to 0.5 m grid">SNAP&nbsp;&#183;5m</button>
+    <button class="btn danger" id="b-del" style="display:none">DELETE</button>
+    <button class="btn go" id="b-close" style="display:none">CLOSE&nbsp;POLY</button>
+    <button class="btn" id="b-cancel" style="display:none">CANCEL</button>
+    <div class="grow"></div>
+    <input id="name" maxlength="40" placeholder="Level name">
+    <select id="scoring" title="Scoring mode">
+      <option value="time">time</option>
+      <option value="pads">pads</option>
+      <option value="distance">distance</option>
+    </select>
+    <div class="sep"></div>
+    <button class="btn" id="b-new">NEW</button>
+    <button class="btn" id="b-import">IMPORT</button>
+    <button class="btn warn" id="b-export">EXPORT</button>
+    <button class="btn go" id="b-fly">&#9654;&nbsp;TEST&nbsp;FLY</button>
+  </div>
+  <div id="wrap"><canvas id="cv"></canvas></div>
+  <div id="status">
+    <span id="coords"></span>
+    <span id="hint"></span>
+    <span class="grow"></span>
+    <span class="issues" id="issues" style="display:none"></span>
+  </div>
+
+  <div id="modal">
+    <div class="box">
+      <h2 id="mtitle"></h2>
+      <textarea id="mtext" spellcheck="false" style="display:none"></textarea>
+      <div id="mlist" style="display:none"></div>
+      <div id="mrow"></div>
+    </div>
+  </div>
+
+<script>
+"use strict";
+
+// ---------- document model ----------
+// Mirrors the `.level` hand-drawn subset (sim-core/src/world.rs Level::parse):
+// polys = solid rock (winding doesn't matter — the game normalizes to CCW),
+// pads/start = (deck centre x, deck top y). Coordinates are world metres,
+// y UP (the level-file convention — see the map comment in hollows.level).
+const DOC_KEY = "pegasus_editor_doc";
+const CUSTOM_KEY = "pegasus_custom_level"; // read by index.html (?custom=1)
+const PAD_HALF_W = 3;      // deck half width, matches the game's PAD_HALF_W
+const SNAP_STEP = 0.5;     // metres
+// Backend verifier plausibility caps (pegasus-backend verify.rs MAX_TERRAIN_*):
+// a level over these can be flown locally but its scores can never verify.
+const MAX_POLYS = 64, MAX_VERTS = 20000, MAX_PADS = 64;
+
+function starterDoc() {
+  // A small flyable box room so TEST FLY works before the first stroke:
+  // floor / ceiling / walls as four overlapping slabs (the Hollows frame
+  // pattern), a start platform under the spawn and two pads to visit.
+  return {
+    name: "My Level",
+    scoring: "time",
+    polys: [
+      [[-40, -9], [40, -9], [40, -2], [-40, -2]],
+      [[-40, 13], [40, 13], [40, 20], [-40, 20]],
+      [[-44, -9], [-38, -9], [-38, 20], [-44, 20]],
+      [[38, -9], [44, -9], [44, 20], [38, 20]],
+    ],
+    pads: [[-20, -1.8], [20, -1.8]],
+    start: [0, -1.8],
+    spawnY: null, // explicit spawn_y (only meaningful with no start platform)
+  };
+}
+
+let doc = starterDoc();
+try {
+  const saved = JSON.parse(localStorage.getItem(DOC_KEY) || "null");
+  if (saved && Array.isArray(saved.polys)) doc = Object.assign(starterDoc(), saved);
+} catch (e) { /* corrupt autosave: start fresh */ }
+
+// ---------- view / canvas ----------
+const cv = document.getElementById("cv");
+const ctx = cv.getContext("2d");
+let view = { x: 0, y: 5, s: 8 }; // world centre + px per metre
+let W = 0, H = 0, DPR = 1;
+
+function resize() {
+  DPR = window.devicePixelRatio || 1;
+  const r = cv.getBoundingClientRect();
+  W = r.width; H = r.height;
+  cv.width = Math.round(W * DPR);
+  cv.height = Math.round(H * DPR);
+  draw();
+}
+window.addEventListener("resize", resize);
+
+const w2sx = wx => (wx - view.x) * view.s + W / 2;
+const w2sy = wy => H / 2 - (wy - view.y) * view.s;
+const s2wx = sx => (sx - W / 2) / view.s + view.x;
+const s2wy = sy => (H / 2 - sy) / view.s + view.y;
+
+function fitView() {
+  let lo = [Infinity, Infinity], hi = [-Infinity, -Infinity];
+  const eat = p => { lo[0] = Math.min(lo[0], p[0]); lo[1] = Math.min(lo[1], p[1]);
+                     hi[0] = Math.max(hi[0], p[0]); hi[1] = Math.max(hi[1], p[1]); };
+  doc.polys.forEach(poly => poly.forEach(eat));
+  doc.pads.forEach(eat);
+  if (doc.start) eat(doc.start);
+  if (lo[0] > hi[0]) { view = { x: 0, y: 5, s: 8 }; return; }
+  view.x = (lo[0] + hi[0]) / 2;
+  view.y = (lo[1] + hi[1]) / 2;
+  const pad = 40; // px margin
+  view.s = Math.min((W - pad * 2) / Math.max(1, hi[0] - lo[0]),
+                    (H - pad * 2) / Math.max(1, hi[1] - lo[1]));
+  view.s = Math.max(0.8, Math.min(60, view.s));
+}
+
+// ---------- undo / autosave ----------
+const undoStack = [], redoStack = [];
+function pushUndo() {
+  undoStack.push(JSON.stringify(doc));
+  if (undoStack.length > 100) undoStack.shift();
+  redoStack.length = 0;
+  syncUndoBtns();
+}
+function commit() { // after any mutation: autosave + refresh chrome
+  try { localStorage.setItem(DOC_KEY, JSON.stringify(doc)); } catch (e) {}
+  refreshIssues();
+  draw();
+}
+function undo() {
+  if (!undoStack.length) return;
+  cancelDraw();
+  redoStack.push(JSON.stringify(doc));
+  doc = JSON.parse(undoStack.pop());
+  sel = null; syncFields(); syncUndoBtns(); commit();
+}
+function redo() {
+  if (!redoStack.length) return;
+  cancelDraw();
+  undoStack.push(JSON.stringify(doc));
+  doc = JSON.parse(redoStack.pop());
+  sel = null; syncFields(); syncUndoBtns(); commit();
+}
+function syncUndoBtns() {
+  document.getElementById("b-undo").disabled = !undoStack.length;
+  document.getElementById("b-redo").disabled = !redoStack.length;
+}
+
+// ---------- tools / selection ----------
+let tool = "select";           // select | draw | pad | start
+let sel = null;                // {kind:'poly'|'pad'|'start', idx, vert:n|null}
+let drawing = null;            // in-progress polygon: [[x,y],...]
+let snapOn = true;
+let hoverClose = false;        // draw tool: cursor near the closing vertex
+
+const HANDLE_PX = 11, TAP_PX = 6, CLOSE_PX = 14;
+
+function snap(v) { return snapOn ? Math.round(v / SNAP_STEP) * SNAP_STEP : Math.round(v * 100) / 100; }
+function snapPt(p) { return [snap(p[0]), snap(p[1])]; }
+
+const toolBtns = { select: "t-select", draw: "t-draw", pad: "t-pad", start: "t-start" };
+function setTool(t) {
+  if (t !== "draw") cancelDraw();
+  tool = t;
+  if (t !== "select") sel = null;
+  for (const k in toolBtns)
+    document.getElementById(toolBtns[k]).classList.toggle("on", k === t);
+  syncContextBtns();
+  setHint();
+  draw();
+}
+for (const k in toolBtns)
+  document.getElementById(toolBtns[k]).addEventListener("click", () => setTool(k));
+
+function setHint() {
+  const hints = {
+    select: "tap: select · drag: move · drag empty: pan · wheel/pinch: zoom",
+    draw: "tap: add vertex · tap first vertex (or CLOSE POLY): finish · drag: pan",
+    pad: "tap: place a landing pad · drag: pan",
+    start: "tap: place the start platform (one per level) · drag: pan",
+  };
+  document.getElementById("hint").textContent = hints[tool];
+}
+
+function syncContextBtns() {
+  document.getElementById("b-del").style.display = sel ? "" : "none";
+  document.getElementById("b-close").style.display =
+    drawing && drawing.length >= 3 ? "" : "none";
+  document.getElementById("b-cancel").style.display = drawing ? "" : "none";
+}
+
+function cancelDraw() {
+  drawing = null;
+  hoverClose = false;
+  syncContextBtns();
+}
+
+function closeDrawing() {
+  if (!drawing || drawing.length < 3) return;
+  pushUndo();
+  doc.polys.push(drawing);
+  const idx = doc.polys.length - 1;
+  drawing = null; hoverClose = false;
+  setTool("select");
+  sel = { kind: "poly", idx, vert: null };
+  syncContextBtns();
+  commit();
+}
+
+function deleteSelected() {
+  if (!sel) return;
+  pushUndo();
+  if (sel.kind === "poly") {
+    if (sel.vert != null && doc.polys[sel.idx].length > 3) {
+      doc.polys[sel.idx].splice(sel.vert, 1);
+      sel.vert = null;
+    } else {
+      doc.polys.splice(sel.idx, 1);
+      sel = null;
+    }
+  } else if (sel.kind === "pad") {
+    doc.pads.splice(sel.idx, 1); sel = null;
+  } else if (sel.kind === "start") {
+    doc.start = null; sel = null;
+  }
+  syncContextBtns();
+  commit();
+}
+
+document.getElementById("b-del").addEventListener("click", deleteSelected);
+document.getElementById("b-close").addEventListener("click", closeDrawing);
+document.getElementById("b-cancel").addEventListener("click", () => { cancelDraw(); draw(); });
+document.getElementById("b-undo").addEventListener("click", undo);
+document.getElementById("b-redo").addEventListener("click", redo);
+document.getElementById("b-snap").addEventListener("click", e => {
+  snapOn = !snapOn;
+  e.currentTarget.style.opacity = snapOn ? "" : "0.45";
+});
+
+// ---------- hit testing ----------
+function distPx(ax, ay, bx, by) { return Math.hypot(ax - bx, ay - by); }
+function pointInPoly(p, poly) {
+  let inside = false;
+  const n = poly.length;
+  for (let i = 0; i < n; i++) {
+    const a = poly[i], b = poly[(i + 1) % n];
+    if ((a[1] > p[1]) !== (b[1] > p[1]) &&
+        p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+function pointInRock(p) { return doc.polys.some(poly => pointInPoly(p, poly)); }
+
+// What is under screen point (sx, sy)?
+// Priority: selected poly's vertices > its edge midpoints (insert) >
+// pads/start markers > polygon bodies (topmost = last drawn).
+function hitTest(sx, sy) {
+  if (sel && sel.kind === "poly" && doc.polys[sel.idx]) {
+    const poly = doc.polys[sel.idx];
+    for (let i = 0; i < poly.length; i++) {
+      if (distPx(sx, sy, w2sx(poly[i][0]), w2sy(poly[i][1])) < HANDLE_PX)
+        return { kind: "vert", idx: sel.idx, vert: i };
+    }
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length];
+      const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+      if (distPx(sx, sy, w2sx(mx), w2sy(my)) < HANDLE_PX - 2)
+        return { kind: "mid", idx: sel.idx, vert: i + 1 };
+    }
+  }
+  for (let i = doc.pads.length - 1; i >= 0; i--) {
+    const p = doc.pads[i];
+    if (Math.abs(sx - w2sx(p[0])) < Math.max(HANDLE_PX, PAD_HALF_W * view.s) &&
+        Math.abs(sy - w2sy(p[1])) < HANDLE_PX + 4)
+      return { kind: "pad", idx: i };
+  }
+  if (doc.start) {
+    const p = doc.start;
+    if (Math.abs(sx - w2sx(p[0])) < Math.max(HANDLE_PX, PAD_HALF_W * view.s) &&
+        Math.abs(sy - w2sy(p[1])) < HANDLE_PX + 4)
+      return { kind: "start" };
+  }
+  const wp = [s2wx(sx), s2wy(sy)];
+  for (let i = doc.polys.length - 1; i >= 0; i--) {
+    if (pointInPoly(wp, doc.polys[i])) return { kind: "poly", idx: i };
+  }
+  return null;
+}
+
+// ---------- pointer input ----------
+// One pointer drives the active tool; a second finger always turns the
+// gesture into pan/zoom (pinch), whatever the tool. Vertices are committed
+// on tap-UP so a drag can stay a pan without side effects.
+const pointers = new Map(); // pointerId -> {sx, sy}
+let gesture = null; // {type:'pan'|'pinch'|'drag-vert'|'drag-pad'|'drag-start'|'drag-poly'|'maybe-tap', ...}
+
+cv.addEventListener("pointerdown", e => {
+  e.preventDefault();
+  cv.setPointerCapture(e.pointerId);
+  const r = cv.getBoundingClientRect();
+  const sx = e.clientX - r.left, sy = e.clientY - r.top;
+  pointers.set(e.pointerId, { sx, sy });
+
+  if (pointers.size === 2) {
+    // Second finger: abandon whatever the first was doing, become a pinch.
+    const [a, b] = [...pointers.values()];
+    gesture = { type: "pinch",
+                d0: distPx(a.sx, a.sy, b.sx, b.sy),
+                cx0: (a.sx + b.sx) / 2, cy0: (a.sy + b.sy) / 2,
+                view0: { ...view } };
+    return;
+  }
+  if (pointers.size > 2) return;
+
+  // Middle mouse button = pan, always.
+  if (e.button === 1) { gesture = { type: "pan", sx, sy, view0: { ...view } }; return; }
+
+  if (tool === "select") {
+    const hit = hitTest(sx, sy);
+    if (hit && (hit.kind === "vert" || hit.kind === "mid")) {
+      pushUndo();
+      if (hit.kind === "mid") { // insert a vertex on the edge, then drag it
+        const wp = snapPt([s2wx(sx), s2wy(sy)]);
+        doc.polys[hit.idx].splice(hit.vert, 0, wp);
+      }
+      sel = { kind: "poly", idx: hit.idx, vert: hit.vert };
+      gesture = { type: "drag-vert", idx: hit.idx, vert: hit.vert, moved: hit.kind === "mid" };
+    } else if (hit && hit.kind === "pad") {
+      sel = { kind: "pad", idx: hit.idx };
+      gesture = { type: "drag-pad", idx: hit.idx, sx, sy, p0: [...doc.pads[hit.idx]], undoPushed: false };
+    } else if (hit && hit.kind === "start") {
+      sel = { kind: "start" };
+      gesture = { type: "drag-start", sx, sy, p0: [...doc.start], undoPushed: false };
+    } else if (hit && hit.kind === "poly") {
+      sel = { kind: "poly", idx: hit.idx, vert: null };
+      gesture = { type: "drag-poly", idx: hit.idx, sx, sy,
+                  p0: doc.polys[hit.idx].map(p => [...p]), undoPushed: false };
+    } else {
+      gesture = { type: "maybe-tap", sx, sy, view0: { ...view }, deselect: true };
+    }
+    syncContextBtns();
+    draw();
+  } else {
+    // draw / pad / start: tap acts on UP; a drag pans.
+    gesture = { type: "maybe-tap", sx, sy, view0: { ...view } };
+  }
+});
+
+cv.addEventListener("pointermove", e => {
+  const r = cv.getBoundingClientRect();
+  const sx = e.clientX - r.left, sy = e.clientY - r.top;
+  const info = pointers.get(e.pointerId);
+
+  if (!info) { // hover (mouse, no button): coords + draw-tool close indicator
+    updateCoords(sx, sy);
+    if (drawing && drawing.length >= 3) {
+      const was = hoverClose;
+      hoverClose = distPx(sx, sy, w2sx(drawing[0][0]), w2sy(drawing[0][1])) < CLOSE_PX;
+      if (was !== hoverClose) draw();
+    }
+    if (drawing) { drawCursor = [s2wx(sx), s2wy(sy)]; draw(); }
+    return;
+  }
+  info.sx = sx; info.sy = sy;
+  updateCoords(sx, sy);
+  if (!gesture) return;
+
+  if (gesture.type === "pinch") {
+    if (pointers.size < 2) return;
+    const [a, b] = [...pointers.values()];
+    const d = distPx(a.sx, a.sy, b.sx, b.sy);
+    const cx = (a.sx + b.sx) / 2, cy = (a.sy + b.sy) / 2;
+    const v0 = gesture.view0;
+    const s = Math.max(0.5, Math.min(400, v0.s * (d / Math.max(20, gesture.d0))));
+    // Keep the world point under the pinch centre anchored.
+    const wx = (gesture.cx0 - W / 2) / v0.s + v0.x;
+    const wy = (H / 2 - gesture.cy0) / v0.s + v0.y;
+    view.s = s;
+    view.x = wx - (cx - W / 2) / s;
+    view.y = wy + (cy - H / 2) / s;
+    draw();
+    return;
+  }
+
+  if (gesture.type === "maybe-tap" &&
+      distPx(sx, sy, gesture.sx, gesture.sy) > TAP_PX) {
+    gesture = { type: "pan", sx: gesture.sx, sy: gesture.sy, view0: gesture.view0 };
+  }
+
+  switch (gesture.type) {
+    case "pan": {
+      view.x = gesture.view0.x - (sx - gesture.sx) / view.s;
+      view.y = gesture.view0.y + (sy - gesture.sy) / view.s;
+      draw();
+      break;
+    }
+    case "drag-vert": {
+      gesture.moved = true;
+      doc.polys[gesture.idx][gesture.vert] = snapPt([s2wx(sx), s2wy(sy)]);
+      draw();
+      break;
+    }
+    case "drag-pad": case "drag-start": case "drag-poly": {
+      const dx = (sx - gesture.sx) / view.s, dy = -(sy - gesture.sy) / view.s;
+      if (Math.hypot(dx, dy) * view.s < TAP_PX && !gesture.undoPushed) break;
+      if (!gesture.undoPushed) { pushUndo(); gesture.undoPushed = true; }
+      if (gesture.type === "drag-pad")
+        doc.pads[gesture.idx] = snapPt([gesture.p0[0] + dx, gesture.p0[1] + dy]);
+      else if (gesture.type === "drag-start")
+        doc.start = snapPt([gesture.p0[0] + dx, gesture.p0[1] + dy]);
+      else {
+        // Translate the whole polygon by the SNAPPED delta so its shape
+        // (relative vertex offsets, incl. off-grid ones) is preserved.
+        const sdx = snap(dx), sdy = snap(dy);
+        doc.polys[gesture.idx] = gesture.p0.map(p => [p[0] + sdx, p[1] + sdy]);
+      }
+      draw();
+      break;
+    }
+  }
+});
+
+function endPointer(e) {
+  const wasGesture = gesture;
+  const r = cv.getBoundingClientRect();
+  const sx = e.clientX - r.left, sy = e.clientY - r.top;
+  pointers.delete(e.pointerId);
+
+  if (wasGesture && wasGesture.type === "pinch") {
+    if (pointers.size === 0) gesture = null;
+    return; // remaining finger (if any) keeps the view where the pinch left it
+  }
+  if (pointers.size > 0) return;
+  gesture = null;
+  if (!wasGesture) return;
+
+  if (wasGesture.type === "maybe-tap") {
+    // A clean tap: act per tool.
+    if (tool === "select") {
+      if (wasGesture.deselect) { sel = null; syncContextBtns(); draw(); }
+    } else if (tool === "draw") {
+      if (drawing && drawing.length >= 3 &&
+          distPx(sx, sy, w2sx(drawing[0][0]), w2sy(drawing[0][1])) < CLOSE_PX) {
+        closeDrawing();
+      } else {
+        if (!drawing) drawing = [];
+        drawing.push(snapPt([s2wx(sx), s2wy(sy)]));
+        drawCursor = null;
+        syncContextBtns();
+        draw();
+      }
+    } else if (tool === "pad") {
+      if (doc.pads.length >= MAX_PADS) { toast("Pad limit reached (" + MAX_PADS + ")"); return; }
+      pushUndo();
+      doc.pads.push(snapPt([s2wx(sx), s2wy(sy)]));
+      setTool("select");
+      sel = { kind: "pad", idx: doc.pads.length - 1 };
+      syncContextBtns();
+      commit();
+    } else if (tool === "start") {
+      pushUndo();
+      doc.start = snapPt([s2wx(sx), s2wy(sy)]);
+      setTool("select");
+      sel = { kind: "start" };
+      syncContextBtns();
+      commit();
+    }
+    return;
+  }
+
+  // A drag ended: commit its result.
+  if (wasGesture.type === "drag-vert") {
+    if (!wasGesture.moved) {
+      // It was a tap on a vertex: just select it (undo entry already pushed —
+      // drop it, nothing changed).
+      undoStack.pop(); syncUndoBtns();
+      sel = { kind: "poly", idx: wasGesture.idx, vert: wasGesture.vert };
+      syncContextBtns(); draw();
+      return;
+    }
+    commit();
+  } else if (wasGesture.undoPushed) {
+    commit();
+  }
+}
+cv.addEventListener("pointerup", endPointer);
+cv.addEventListener("pointercancel", endPointer);
+
+// Wheel zoom about the cursor.
+cv.addEventListener("wheel", e => {
+  e.preventDefault();
+  const r = cv.getBoundingClientRect();
+  const sx = e.clientX - r.left, sy = e.clientY - r.top;
+  const wx = s2wx(sx), wy = s2wy(sy);
+  view.s = Math.max(0.5, Math.min(400, view.s * Math.pow(1.0015, -e.deltaY)));
+  view.x = wx - (sx - W / 2) / view.s;
+  view.y = wy + (sy - H / 2) / view.s;
+  draw();
+}, { passive: false });
+
+let drawCursor = null; // world pos of the pending draw-tool segment preview
+
+function updateCoords(sx, sy) {
+  document.getElementById("coords").textContent =
+    s2wx(sx).toFixed(1) + ", " + s2wy(sy).toFixed(1) + " m";
+}
+
+// ---------- keyboard ----------
+window.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" ||
+      e.target.tagName === "SELECT") return;
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? redo() : undo(); }
+  else if (mod && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); }
+  else if (e.key === "Escape") {
+    if (modalOpen()) closeModal();
+    else if (drawing) { cancelDraw(); draw(); }
+    else { sel = null; syncContextBtns(); draw(); }
+  } else if (e.key === "Enter" && drawing) closeDrawing();
+  else if ((e.key === "Delete" || e.key === "Backspace")) {
+    if (drawing) { drawing.pop(); if (!drawing.length) cancelDraw(); syncContextBtns(); draw(); }
+    else deleteSelected();
+  }
+  else if (e.key === "1") setTool("select");
+  else if (e.key === "2") setTool("draw");
+  else if (e.key === "3") setTool("pad");
+  else if (e.key === "4") setTool("start");
+});
+
+// ---------- name / scoring fields ----------
+const nameEl = document.getElementById("name");
+const scoringEl = document.getElementById("scoring");
+function syncFields() { nameEl.value = doc.name; scoringEl.value = doc.scoring; }
+nameEl.addEventListener("change", () => { pushUndo(); doc.name = nameEl.value.trim() || "My Level"; commit(); });
+scoringEl.addEventListener("change", () => { pushUndo(); doc.scoring = scoringEl.value; commit(); });
+
+// ---------- rendering ----------
+function draw() {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = "#06080d";
+  ctx.fillRect(0, 0, W, H);
+
+  // Grid: pick a step that lands >= 26 px apart on screen.
+  const steps = [0.5, 1, 2, 5, 10, 20, 50, 100];
+  const step = steps.find(s => s * view.s >= 26) || 200;
+  const x0 = Math.floor(s2wx(0) / step) * step, x1 = s2wx(W);
+  const y0 = Math.floor(s2wy(H) / step) * step, y1 = s2wy(0);
+  ctx.lineWidth = 1;
+  ctx.font = "10px ui-monospace, monospace";
+  for (let x = x0; x <= x1; x += step) {
+    const sx = Math.round(w2sx(x)) + 0.5;
+    ctx.strokeStyle = Math.abs(x) < 1e-9 ? "rgba(70,240,255,0.35)" : "rgba(60,80,110,0.18)";
+    ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, H); ctx.stroke();
+    if (step * view.s >= 44) {
+      ctx.fillStyle = "rgba(122,134,153,0.6)";
+      ctx.fillText(String(Math.round(x * 10) / 10), sx + 3, H - 6);
+    }
+  }
+  for (let y = y0; y <= y1; y += step) {
+    const sy = Math.round(w2sy(y)) + 0.5;
+    ctx.strokeStyle = Math.abs(y) < 1e-9 ? "rgba(70,240,255,0.35)" : "rgba(60,80,110,0.18)";
+    ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(W, sy); ctx.stroke();
+    if (step * view.s >= 44) {
+      ctx.fillStyle = "rgba(122,134,153,0.6)";
+      ctx.fillText(String(Math.round(y * 10) / 10), 4, sy - 3);
+    }
+  }
+
+  // Rock polygons (the game's slate palette).
+  doc.polys.forEach((poly, i) => {
+    const isSel = sel && sel.kind === "poly" && sel.idx === i;
+    ctx.beginPath();
+    poly.forEach((p, j) => j ? ctx.lineTo(w2sx(p[0]), w2sy(p[1]))
+                             : ctx.moveTo(w2sx(p[0]), w2sy(p[1])));
+    ctx.closePath();
+    ctx.fillStyle = "rgba(52,68,96,0.5)";
+    ctx.fill();
+    ctx.strokeStyle = isSel ? "#46f0ff" : "#5c7496";
+    ctx.lineWidth = isSel ? 2 : 1.25;
+    ctx.stroke();
+  });
+
+  // Selected polygon: vertex + midpoint handles.
+  if (sel && sel.kind === "poly" && doc.polys[sel.idx]) {
+    const poly = doc.polys[sel.idx];
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length];
+      const mx = w2sx((a[0] + b[0]) / 2), my = w2sy((a[1] + b[1]) / 2);
+      ctx.fillStyle = "rgba(70,240,255,0.35)";
+      ctx.beginPath(); ctx.arc(mx, my, 4, 0, 7); ctx.fill();
+    }
+    poly.forEach((p, i) => {
+      const x = w2sx(p[0]), y = w2sy(p[1]);
+      ctx.fillStyle = sel.vert === i ? "#ffb545" : "#46f0ff";
+      ctx.fillRect(x - 5, y - 5, 10, 10);
+      ctx.strokeStyle = "#06080d"; ctx.lineWidth = 1.5;
+      ctx.strokeRect(x - 5, y - 5, 10, 10);
+    });
+  }
+
+  // In-progress polygon.
+  if (drawing && drawing.length) {
+    ctx.strokeStyle = "#ffb545";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 5]);
+    ctx.beginPath();
+    drawing.forEach((p, j) => j ? ctx.lineTo(w2sx(p[0]), w2sy(p[1]))
+                                : ctx.moveTo(w2sx(p[0]), w2sy(p[1])));
+    if (drawCursor) ctx.lineTo(w2sx(drawCursor[0]), w2sy(drawCursor[1]));
+    ctx.stroke();
+    ctx.setLineDash([]);
+    drawing.forEach((p, j) => {
+      ctx.fillStyle = j === 0 && hoverClose ? "#57ff9a" : "#ffb545";
+      ctx.beginPath(); ctx.arc(w2sx(p[0]), w2sy(p[1]), j === 0 ? 7 : 4, 0, 7); ctx.fill();
+    });
+  }
+
+  // Pads and the start platform: a deck line with legs, like the game.
+  const deck = (p, color, label, isSel) => {
+    const x = w2sx(p[0]), y = w2sy(p[1]);
+    const hw = PAD_HALF_W * view.s;
+    ctx.strokeStyle = color; ctx.lineWidth = isSel ? 4 : 3;
+    ctx.beginPath(); ctx.moveTo(x - hw, y); ctx.lineTo(x + hw, y); ctx.stroke();
+    ctx.lineWidth = 1.5;
+    const leg = Math.min(10, 0.7 * view.s);
+    [[-0.6, 0], [0.6, 0]].forEach(o => {
+      ctx.beginPath();
+      ctx.moveTo(x + o[0] * hw, y); ctx.lineTo(x + o[0] * hw, y + leg);
+      ctx.stroke();
+    });
+    ctx.fillStyle = color;
+    ctx.font = "11px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.fillText(label, x, y + leg + 12);
+    ctx.textAlign = "left";
+    if (isSel) {
+      ctx.strokeStyle = "#46f0ff"; ctx.setLineDash([4, 4]);
+      ctx.strokeRect(x - hw - 5, y - 10, hw * 2 + 10, leg + 18);
+      ctx.setLineDash([]);
+    }
+  };
+  doc.pads.forEach((p, i) =>
+    deck(p, "#57ff9a", "P" + (i + 1), sel && sel.kind === "pad" && sel.idx === i));
+  if (doc.start)
+    deck(doc.start, "#8fa0b5", "START", sel && sel.kind === "start");
+
+  // Spawn marker: where the ship will actually appear (x = 0, ground +0.78 —
+  // stand_y). Red when buried in rock.
+  const ground = doc.start ? doc.start[1] : (doc.spawnY ?? 0);
+  const spawn = [0, ground + 0.78];
+  const sxp = w2sx(spawn[0]), syp = w2sy(spawn[1]);
+  const shipH = Math.max(8, 0.95 * view.s);
+  const buried = pointInRock(spawn);
+  ctx.fillStyle = buried ? "#ff5d5d" : "#ff59c8";
+  ctx.beginPath();
+  ctx.moveTo(sxp, syp - shipH * 0.65);
+  ctx.lineTo(sxp - shipH * 0.38, syp + shipH * 0.35);
+  ctx.lineTo(sxp + shipH * 0.38, syp + shipH * 0.35);
+  ctx.closePath();
+  ctx.fill();
+
+  // Scale bar (bottom right).
+  const bar = steps.find(s => s * view.s >= 60) || 200;
+  const bw = bar * view.s;
+  ctx.strokeStyle = "rgba(122,134,153,0.8)"; ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(W - 14 - bw, H - 16); ctx.lineTo(W - 14, H - 16);
+  ctx.stroke();
+  ctx.fillStyle = "rgba(122,134,153,0.9)";
+  ctx.font = "11px ui-monospace, monospace";
+  ctx.textAlign = "right";
+  ctx.fillText(bar + " m", W - 14, H - 22);
+  ctx.textAlign = "left";
+}
+
+// ---------- validation ----------
+// A JS port of the checks the game's geometry-lint tests do with
+// Terrain::point_in_rock, plus the backend verifier's terrain caps.
+function polyArea(poly) {
+  let a = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i], q = poly[(i + 1) % poly.length];
+    a += p[0] * q[1] - q[0] * p[1];
+  }
+  return Math.abs(a) / 2;
+}
+function clearAbove(p, what, out) {
+  // The deck point and a ship-sized pocket above it must be open space.
+  const probes = [[0, 0.4], [0, 1.2], [0, 2.0], [-1.2, 1.0], [1.2, 1.0]];
+  if (probes.some(o => pointInRock([p[0] + o[0], p[1] + o[1]])))
+    out.push({ level: "error", msg: what + " has rock in the landing pocket above it" });
+}
+function validate() {
+  const out = [];
+  if (!doc.polys.length)
+    out.push({ level: "error", msg: "No rock drawn yet — a level needs at least one polygon" });
+  if (doc.polys.length > MAX_POLYS)
+    out.push({ level: "error", msg: "Too many polygons (" + doc.polys.length + " > " + MAX_POLYS + ", the score-verifier cap)" });
+  const verts = doc.polys.reduce((n, p) => n + p.length, 0);
+  if (verts > MAX_VERTS)
+    out.push({ level: "error", msg: "Too many vertices (" + verts + " > " + MAX_VERTS + ", the score-verifier cap)" });
+  if (doc.pads.length > MAX_PADS)
+    out.push({ level: "error", msg: "Too many pads (" + doc.pads.length + " > " + MAX_PADS + ", the score-verifier cap)" });
+  doc.polys.forEach((p, i) => {
+    if (polyArea(p) < 0.25)
+      out.push({ level: "warn", msg: "Polygon " + (i + 1) + " is degenerate (near-zero area)" });
+  });
+  const ground = doc.start ? doc.start[1] : (doc.spawnY ?? 0);
+  const spawn = [0, ground + 0.78];
+  if (pointInRock(spawn) || pointInRock([spawn[0], spawn[1] + 1.2]))
+    out.push({ level: "error", msg: "The spawn point (x = 0, y = " + spawn[1].toFixed(1) + ") is inside rock — clear it or move the start platform" });
+  if (!doc.start)
+    out.push({ level: "warn", msg: "No start platform — the ship will spawn standing at x = 0, ground y = " + ground.toFixed(1) });
+  else if (Math.abs(doc.start[0]) > 0.01)
+    out.push({ level: "warn", msg: "The start platform is at x = " + doc.start[0] + " but the ship always spawns at x = 0 — centre it (or expect a drop)" });
+  doc.pads.forEach((p, i) => {
+    if (pointInRock([p[0], p[1] + 0.05]))
+      out.push({ level: "error", msg: "Pad " + (i + 1) + " deck is inside rock" });
+    else clearAbove(p, "Pad " + (i + 1), out);
+  });
+  if (doc.start) clearAbove(doc.start, "The start platform", out);
+  if (doc.scoring === "time" && !doc.pads.length)
+    out.push({ level: "error", msg: "Time scoring needs at least one pad to visit" });
+  return out;
+}
+function refreshIssues() {
+  const issues = validate();
+  const el = document.getElementById("issues");
+  const errs = issues.filter(i => i.level === "error").length;
+  if (!issues.length) { el.style.display = "none"; return; }
+  el.style.display = "";
+  el.classList.toggle("err", errs > 0);
+  el.textContent = "⚠ " + issues.length + " issue" + (issues.length > 1 ? "s" : "");
+  el.onclick = () => showValidation(issues);
+}
+
+// ---------- export / import ----------
+function fmtN(v) {
+  const r = Math.round(v * 100) / 100;
+  return String(r === 0 ? 0 : r);
+}
+function levelText() {
+  const L = [];
+  L.push("# Made with the Pegasus level editor (editor.html)");
+  L.push("name = " + doc.name.replace(/[\r\n]/g, " ").trim());
+  L.push("scoring = " + doc.scoring);
+  L.push("shafts = off");
+  L.push("obstacles = off");
+  L.push("");
+  if (doc.start) L.push("start = " + fmtN(doc.start[0]) + "," + fmtN(doc.start[1]));
+  else if (doc.spawnY != null) L.push("spawn_y = " + fmtN(doc.spawnY));
+  for (const p of doc.pads) L.push("pad = " + fmtN(p[0]) + "," + fmtN(p[1]));
+  if (doc.start || doc.spawnY != null || doc.pads.length) L.push("");
+  for (const poly of doc.polys)
+    L.push("poly = " + poly.map(p => fmtN(p[0]) + "," + fmtN(p[1])).join(" "));
+  return L.join("\n") + "\n";
+}
+// Parse the hand-drawn subset of the `.level` format (mirrors Level::parse:
+// `key = value` lines, # comments, unknown keys ignored).
+function parseLevelText(text) {
+  const d = { name: "Imported level", scoring: "time", polys: [], pads: [], start: null, spawnY: null };
+  const pt = s => {
+    const m = s.split(",");
+    if (m.length !== 2) return null;
+    const x = parseFloat(m[0]), y = parseFloat(m[1]);
+    return isFinite(x) && isFinite(y) ? [x, y] : null;
+  };
+  for (let line of text.split(/\r?\n/)) {
+    line = line.trim();
+    if (!line || line.startsWith("#")) continue;
+    const i = line.indexOf("=");
+    if (i < 0) continue;
+    const k = line.slice(0, i).trim(), v = line.slice(i + 1).trim();
+    if (k === "name") d.name = v;
+    else if (k === "scoring" && ["time", "pads", "distance"].includes(v.toLowerCase()))
+      d.scoring = v.toLowerCase();
+    else if (k === "poly") {
+      const p = v.split(/\s+/).map(pt).filter(Boolean);
+      if (p.length >= 3) d.polys.push(p);
+    } else if (k === "pad") { const p = pt(v); if (p) d.pads.push(p); }
+    else if (k === "start") d.start = pt(v);
+    else if (k === "spawn_y") { const f = parseFloat(v); if (isFinite(f)) d.spawnY = f; }
+  }
+  return d.polys.length ? d : null;
+}
+
+// ---------- modal ----------
+const modal = document.getElementById("modal");
+const mtitle = document.getElementById("mtitle");
+const mtext = document.getElementById("mtext");
+const mlist = document.getElementById("mlist");
+const mrow = document.getElementById("mrow");
+function modalOpen() { return modal.classList.contains("on"); }
+function closeModal() { modal.classList.remove("on"); }
+modal.addEventListener("pointerdown", e => { if (e.target === modal) closeModal(); });
+function openModal(title, opts) {
+  mtitle.textContent = title;
+  mtext.style.display = opts.text != null ? "" : "none";
+  mlist.style.display = opts.list ? "" : "none";
+  if (opts.text != null) { mtext.value = opts.text; mtext.readOnly = !!opts.readonly; }
+  if (opts.list) {
+    mlist.textContent = "";
+    for (const it of opts.list) {
+      const div = document.createElement("div");
+      div.className = it.cls;
+      div.textContent = it.msg;
+      mlist.appendChild(div);
+    }
+  }
+  mrow.textContent = "";
+  for (const b of opts.buttons) {
+    const btn = document.createElement("button");
+    btn.className = "btn" + (b.cls ? " " + b.cls : "");
+    btn.textContent = b.label;
+    btn.addEventListener("click", b.fn);
+    mrow.appendChild(btn);
+  }
+  modal.classList.add("on");
+}
+
+function showValidation(issues) {
+  const list = issues.length
+    ? issues.map(i => ({ cls: i.level === "error" ? "e" : "w",
+                         msg: (i.level === "error" ? "✖ " : "⚠ ") + i.msg }))
+    : [{ cls: "ok", msg: "✔ No problems found — good to fly" }];
+  openModal("CHECK LEVEL", { list, buttons: [{ label: "Close", fn: closeModal }] });
+}
+
+function toast(msg) {
+  document.getElementById("hint").textContent = msg;
+  setTimeout(setHint, 2500);
+}
+
+// File stem for the download: from the level name.
+function fileStem() {
+  return (doc.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
+          || "custom") + ".level";
+}
+
+document.getElementById("b-export").addEventListener("click", () => {
+  const text = levelText();
+  openModal("EXPORT · " + fileStem(), {
+    text, readonly: true,
+    buttons: [
+      { label: "Copy", fn: () => {
+          (navigator.clipboard ? navigator.clipboard.writeText(mtext.value)
+                               : Promise.reject()).then(
+            () => toast("Copied"),
+            () => { mtext.select(); document.execCommand("copy"); toast("Copied"); });
+        } },
+      { label: "Download", cls: "go", fn: () => {
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(new Blob([mtext.value], { type: "text/plain" }));
+          a.download = fileStem();
+          a.click();
+          URL.revokeObjectURL(a.href);
+        } },
+      { label: "Close", fn: closeModal },
+    ],
+  });
+});
+
+document.getElementById("b-import").addEventListener("click", () => {
+  openModal("IMPORT · paste .level text", {
+    text: "",
+    buttons: [
+      { label: "Load", cls: "go", fn: () => {
+          const d = parseLevelText(mtext.value);
+          if (!d) { toast("No poly lines found — not a hand-drawn level"); return; }
+          pushUndo();
+          doc = Object.assign(starterDoc(), d);
+          sel = null; cancelDraw();
+          syncFields(); fitView(); closeModal(); commit();
+        } },
+      { label: "Cancel", fn: closeModal },
+    ],
+  });
+  mtext.readOnly = false;
+  mtext.focus();
+});
+
+document.getElementById("b-new").addEventListener("click", () => {
+  openModal("NEW LEVEL", {
+    list: [{ cls: "w", msg: "Replace the current drawing with the starter room? (Undo can bring it back.)" }],
+    buttons: [
+      { label: "Replace", cls: "danger", fn: () => {
+          pushUndo();
+          doc = starterDoc();
+          sel = null; cancelDraw();
+          syncFields(); fitView(); closeModal(); commit();
+        } },
+      { label: "Cancel", fn: closeModal },
+    ],
+  });
+});
+
+document.getElementById("b-fly").addEventListener("click", () => {
+  const issues = validate();
+  const errs = issues.filter(i => i.level === "error");
+  const go = () => {
+    try { localStorage.setItem(CUSTOM_KEY, levelText()); }
+    catch (e) { toast("Couldn't save the level (storage full?)"); return; }
+    location.href = "./?custom=1";
+  };
+  if (errs.length) {
+    openModal("PROBLEMS FOUND", {
+      list: issues.map(i => ({ cls: i.level === "error" ? "e" : "w",
+                               msg: (i.level === "error" ? "✖ " : "⚠ ") + i.msg })),
+      buttons: [
+        { label: "Fly anyway", cls: "warn", fn: go },
+        { label: "Back to editing", cls: "go", fn: closeModal },
+      ],
+    });
+  } else {
+    go();
+  }
+});
+
+// ---------- boot ----------
+syncFields();
+setHint();
+syncUndoBtns();
+resize();
+fitView();
+refreshIssues();
+draw();
+</script>
+</body>
+</html>

@@ -1,0 +1,3213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Pegasus — Moon Lander</title>
+  <link rel="manifest" href="./manifest.json">
+  <meta name="theme-color" content="#14141e">
+  <!-- iOS home screen support -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Pegasus">
+  <link rel="apple-touch-icon" href="./icon-180.png">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { overflow: hidden; background: #05060f; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+
+    /* The attitude stick is drawn IN-CANVAS by the game (macroquad touch
+       API); no DOM element. touch-action:none on the canvas stops iOS
+       scroll/zoom gestures from hijacking flight touches. */
+    canvas { touch-action: none; }
+
+    /* ---------------------------------------------------------------------
+       Retro vector-arcade look: neon glow on a dark CRT, chunky monospace
+       lettering, scanlines. All self-contained (no external fonts/CDNs —
+       glow comes from layered text-shadow, not a webfont).
+       --------------------------------------------------------------------- */
+    :root {
+      --text: #cfe7ff;
+      --dim: #7fb4dd;
+      --faint: #5f7fa8;
+      --cyan: #34e7ff;
+      --magenta: #ff54d6;
+      --amber: #ffc24b;
+      --green: #46ff9c;
+      --red: #ff5a3c;
+      --panel: rgba(12, 22, 44, 0.55);
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Courier New", monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    /* --- In-game corner buttons (pause + restart) -------------------------
+       The only HTML visible during flight. Round, translucent, clear of the
+       notch; they swallow mousedown/touchstart so a tap never reaches the
+       canvas (which would fire the thruster). Hidden while the menu is up. */
+    #hud-btns {
+      position: fixed;
+      top: calc(env(safe-area-inset-top) + 12px);
+      right: calc(env(safe-area-inset-right) + 12px);
+      display: none; /* shown when the menu closes */
+      gap: 10px;
+      z-index: 10;
+    }
+    #hud-btns.on { display: flex; }
+    .cbtn {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(8, 16, 34, 0.6);
+      border: 2px solid var(--cyan);
+      color: var(--cyan);
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+      box-shadow: 0 0 8px rgba(52, 231, 255, 0.5), inset 0 0 8px rgba(52, 231, 255, 0.15);
+    }
+    .cbtn:hover { background: rgba(52, 231, 255, 0.2); }
+    /* Icons share one size + neon glow so pause and restart read as siblings. */
+    .cbtn .icn {
+      width: 26px;
+      height: 26px;
+      display: block;
+      filter: drop-shadow(0 0 5px var(--cyan));
+    }
+
+    /* --- Replay transport bar ----------------------------------------------
+       Play/pause + keyframe seek bar, visible only while a replay plays
+       (ui_state 3). Amber to match the in-canvas REPLAY identity. Swallows
+       mousedown/touchstart like the menu — a canvas tap skips the replay,
+       so bar interactions must never reach it. */
+    #replay-bar {
+      position: fixed;
+      left: 50%;
+      transform: translateX(-50%);
+      bottom: calc(env(safe-area-inset-bottom) + 16px);
+      display: none;
+      flex-direction: column; /* buttons row on top, seek row beneath */
+      align-items: stretch;
+      gap: 8px;
+      padding: 10px 14px;
+      width: min(520px, calc(100vw - 24px));
+      border-radius: 16px;
+      background: rgba(8, 16, 34, 0.7);
+      border: 2px solid var(--amber);
+      color: var(--amber);
+      font-family: var(--mono);
+      box-shadow: 0 0 10px rgba(255, 194, 75, 0.4), inset 0 0 8px rgba(255, 194, 75, 0.12);
+      z-index: 10;
+    }
+    #replay-bar.on { display: flex; }
+    /* YouTube-style auto-hide: fade out while playing untouched, tap the
+       canvas to bring back. pointer-events off so a hidden bar can't eat
+       the tap that re-shows it. */
+    #replay-bar, #exit-replay-btn { transition: opacity 0.25s; }
+    #replay-bar.faded, #exit-replay-btn.faded {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .rp-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      min-width: 0;
+    }
+    /* Top row: time left, ⏮⏯⏭ dead-centre, speed right. The side zones
+       share flex: 1 1 0 (equal width), which is what centres the cluster. */
+    .rp-side {
+      flex: 1 1 0;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+    }
+    .rp-side.right { justify-content: flex-end; }
+    .rp-transport {
+      flex: none;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    /* Amber variant of the corner-button look, shared by play/pause and the
+       two tick-step buttons. */
+    .rp-btn {
+      flex: none;
+      border-color: var(--amber);
+      color: var(--amber);
+      box-shadow: 0 0 8px rgba(255, 194, 75, 0.5), inset 0 0 8px rgba(255, 194, 75, 0.15);
+    }
+    .rp-btn:hover { background: rgba(255, 194, 75, 0.2); }
+    .rp-btn .icn { filter: drop-shadow(0 0 5px var(--amber)); }
+    /* Invisible hit-area extension: +6px all around brings adjacent zones
+       exactly edge-to-edge (buttons sit 12px apart), so touch targets grow
+       without moving anything and without overlapping each other. */
+    .rp-btn { position: relative; }
+    .rp-btn::after {
+      content: "";
+      position: absolute;
+      inset: -6px;
+      border-radius: 50%;
+    }
+    #rp-toggle { width: 44px; height: 44px; }
+    .rp-step { width: 38px; height: 38px; }
+    .rp-step .icn { width: 20px; height: 20px; }
+    /* Speed button is text (¼× … 4×), not an icon. */
+    #rp-speed {
+      font-size: 14px;
+      font-weight: bold;
+      letter-spacing: -0.5px;
+      text-shadow: 0 0 5px var(--amber);
+    }
+    /* The INPUT is the touch target, so it is tall (full bar height) and
+       transparent; the visible 6 px track is drawn by the track pseudo-
+       elements and the thumb is oversized for fat fingers. */
+    #rp-seek {
+      flex: 1;
+      min-width: 0;
+      -webkit-appearance: none;
+      appearance: none;
+      height: 56px; /* the whole input is the touch target; it has its own
+                       row, so the extra height can't collide with buttons */
+      background: transparent;
+      outline: none;
+      cursor: pointer;
+      touch-action: none; /* the drag is the gesture — never scroll/zoom */
+    }
+    #rp-seek::-webkit-slider-runnable-track {
+      height: 6px;
+      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.18);
+    }
+    #rp-seek::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 32px;
+      height: 32px;
+      margin-top: -13px; /* centre the 32px thumb on the 6px track */
+      border-radius: 50%;
+      border: none;
+      background: var(--amber);
+      box-shadow: 0 0 8px rgba(255, 194, 75, 0.8);
+      cursor: pointer;
+    }
+    #rp-seek::-moz-range-track {
+      height: 6px;
+      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.18);
+    }
+    #rp-seek::-moz-range-thumb {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      border: none;
+      background: var(--amber);
+      box-shadow: 0 0 8px rgba(255, 194, 75, 0.8);
+      cursor: pointer;
+    }
+    /* The slider row below carries ~12px of built-in headroom (56px input,
+       32px thumb), so pull the time row's gap back in. */
+    .rp-time-row { justify-content: flex-start; margin-bottom: -12px; }
+    #rp-time {
+      font-size: 12px;
+      color: var(--dim);
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+    /* Speed picker: pops up above the bar, anchored over the speed button
+       (the bar is position: fixed, so it contains the absolute panel). */
+    #rp-speed-menu {
+      position: absolute;
+      right: 10px;
+      bottom: calc(100% + 8px);
+      display: none;
+      flex-direction: column;
+      gap: 2px;
+      padding: 6px;
+      border-radius: 12px;
+      background: rgba(8, 16, 34, 0.92);
+      border: 2px solid var(--amber);
+      box-shadow: 0 0 10px rgba(255, 194, 75, 0.4);
+    }
+    #rp-speed-menu.open { display: flex; }
+    .rp-speed-opt {
+      padding: 8px 22px;
+      border-radius: 8px;
+      color: var(--amber);
+      font: bold 14px var(--mono);
+      text-align: center;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+    }
+    .rp-speed-opt:hover { background: rgba(255, 194, 75, 0.15); }
+    .rp-speed-opt.sel {
+      background: rgba(255, 194, 75, 0.25);
+      box-shadow: inset 0 0 6px rgba(255, 194, 75, 0.35);
+    }
+
+    /* --- Game menu --------------------------------------------------------
+       One fullscreen overlay, one visible .screen at a time. Neon-arcade
+       styling: dark space base + a faint perspective grid, CRT scanlines
+       laid over everything (the .crt layer), custom neon toggle switches. */
+    #menu {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      color: var(--text);
+      font-family: var(--mono);
+      background:
+        radial-gradient(130% 100% at 50% 8%, rgba(40, 20, 80, 0.55), rgba(0, 0, 0, 0) 55%),
+        radial-gradient(120% 90% at 50% 120%, rgba(12, 60, 90, 0.55), rgba(0, 0, 0, 0) 60%),
+        #05060f;
+      z-index: 20;
+      pointer-events: all;
+    }
+    #menu.open { display: flex; }
+    /* Faint perspective grid drifting toward a low horizon. */
+    #menu::before {
+      content: "";
+      position: absolute;
+      inset: -20% -20% -20% -20%;
+      background:
+        repeating-linear-gradient(0deg,  rgba(52, 231, 255, 0.09) 0 1px, transparent 1px 46px),
+        repeating-linear-gradient(90deg, rgba(52, 231, 255, 0.09) 0 1px, transparent 1px 46px);
+      background-position: center;
+      transform: perspective(420px) rotateX(62deg) translateY(12%);
+      transform-origin: center 70%;
+      mask-image: linear-gradient(180deg, transparent 40%, #000 100%);
+      -webkit-mask-image: linear-gradient(180deg, transparent 40%, #000 100%);
+      animation: gridflow 6s linear infinite;
+      pointer-events: none;
+    }
+    @keyframes gridflow { to { background-position: center 46px; } }
+
+    /* CRT overlay: scanlines + vignette + a slow bright sweep. Sits on top
+       of the screens visually but never eats a tap (pointer-events:none). */
+    .crt {
+      position: absolute;
+      inset: 0;
+      z-index: 40;
+      pointer-events: none;
+      background:
+        repeating-linear-gradient(0deg, rgba(0,0,0,0) 0 2px, rgba(0,0,0,0.16) 2px 3px),
+        radial-gradient(120% 120% at 50% 50%, transparent 55%, rgba(0,0,0,0.55) 100%);
+      mix-blend-mode: multiply;
+    }
+    .crt::after {
+      content: "";
+      position: absolute;
+      left: 0; right: 0; height: 40%;
+      background: linear-gradient(180deg, transparent, rgba(120, 220, 255, 0.05), transparent);
+      animation: sweep 7s linear infinite;
+    }
+    @keyframes sweep { 0% { top: -40%; } 100% { top: 120%; } }
+
+    .screen {
+      position: relative;
+      z-index: 30;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      width: 100%;
+      max-height: 100%;
+      overflow-y: auto;
+      padding: max(env(safe-area-inset-top), 28px) 24px max(env(safe-area-inset-bottom), 28px);
+      text-align: center;
+    }
+    .screen.on { display: flex; }
+
+    .title {
+      font-family: var(--mono);
+      font-size: clamp(42px, 10vw, 82px);
+      font-weight: 800;
+      letter-spacing: 0.22em;
+      margin-right: -0.22em; /* recentre: tracking pads the right edge */
+      color: #eafcff;
+      text-shadow:
+        0 0 6px #fff,
+        0 0 14px var(--cyan),
+        0 0 30px var(--cyan),
+        0 0 60px rgba(52, 231, 255, 0.6);
+      animation: flicker 5s infinite;
+    }
+    /* Occasional CRT flicker on the title. */
+    @keyframes flicker {
+      0%, 100%, 43%, 47%, 92% { opacity: 1; }
+      44%, 91% { opacity: 0.72; }
+      45%, 93% { opacity: 0.95; }
+    }
+    .subtitle {
+      font-size: clamp(12px, 3vw, 16px);
+      letter-spacing: 0.62em;
+      margin-right: -0.62em;
+      margin-bottom: 4px;
+      color: var(--magenta);
+      text-shadow: 0 0 10px rgba(255, 84, 214, 0.8);
+    }
+    .h2 {
+      font-size: clamp(22px, 5vw, 30px);
+      font-weight: 800;
+      letter-spacing: 0.28em;
+      margin-right: -0.28em;
+      margin-bottom: 8px;
+      color: var(--cyan);
+      text-shadow: 0 0 12px rgba(52, 231, 255, 0.7);
+    }
+    .title.crash {
+      font-size: clamp(38px, 9vw, 66px);
+      color: #ffd9d0;
+      text-shadow: 0 0 8px #fff, 0 0 18px var(--red), 0 0 40px rgba(255, 90, 60, 0.7);
+      animation: none;
+    }
+    /* Time-level completion: same slab, victory green. */
+    .title.crash.win {
+      color: #dcffe6;
+      text-shadow: 0 0 8px #fff, 0 0 18px var(--green), 0 0 40px rgba(66, 255, 143, 0.7);
+    }
+
+    /* --- Ship hero: the real vector ship (from icon.svg) firing its engine.
+       Bobs gently; the flame flickers — "in action". Home screen only. */
+    .ship-hero {
+      width: clamp(150px, 40vw, 260px);
+      height: auto;
+      margin: 2px 0 6px;
+      filter: drop-shadow(0 0 18px rgba(120, 190, 255, 0.45));
+      animation: bob 3.4s ease-in-out infinite;
+    }
+    @keyframes bob {
+      0%, 100% { transform: translateY(0); }
+      50%      { transform: translateY(-10px); }
+    }
+    .ship-hero .flame {
+      transform-box: fill-box;
+      transform-origin: 50% 0%;
+      animation: flame 0.11s steps(2, jump-none) infinite;
+    }
+    @keyframes flame {
+      0%   { opacity: 0.8;  transform: scaleY(0.86); }
+      100% { opacity: 1;    transform: scaleY(1.08); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .ship-hero, .ship-hero .flame, .title, #menu::before, .crt::after { animation: none; }
+    }
+    /* Short screens (landscape phones): drop the hero so the buttons — the
+       Fly button especially — stay above the fold. */
+    @media (max-height: 560px) {
+      .ship-hero { display: none; }
+      .title { font-size: clamp(30px, 7vw, 52px); }
+      .subtitle { margin-bottom: 2px; }
+    }
+
+    .mbtn {
+      width: min(340px, 84vw);
+      padding: 14px 18px;
+      border: 1.5px solid var(--cyan);
+      border-radius: 10px;
+      background: var(--panel);
+      color: var(--cyan);
+      font: 700 16px/1.2 var(--mono);
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+      text-shadow: 0 0 8px rgba(52, 231, 255, 0.6);
+      box-shadow: 0 0 8px rgba(52, 231, 255, 0.25), inset 0 0 10px rgba(52, 231, 255, 0.08);
+      transition: background 0.12s, box-shadow 0.12s, transform 0.05s;
+    }
+    .mbtn:hover {
+      background: rgba(52, 231, 255, 0.16);
+      box-shadow: 0 0 16px rgba(52, 231, 255, 0.5), inset 0 0 14px rgba(52, 231, 255, 0.15);
+    }
+    .mbtn:active { transform: translateY(1px); }
+    a.mbtn { text-decoration: none; }
+    .mbtn.primary {
+      border-color: var(--green);
+      color: var(--green);
+      text-shadow: 0 0 10px rgba(70, 255, 156, 0.8);
+      box-shadow: 0 0 12px rgba(70, 255, 156, 0.4), inset 0 0 12px rgba(70, 255, 156, 0.12);
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 12px rgba(70, 255, 156, 0.35), inset 0 0 12px rgba(70, 255, 156, 0.1); }
+      50%      { box-shadow: 0 0 22px rgba(70, 255, 156, 0.7),  inset 0 0 16px rgba(70, 255, 156, 0.2); }
+    }
+    .mbtn.back {
+      width: auto;
+      padding: 10px 22px;
+      font-size: 13px;
+      border-color: var(--faint);
+      color: var(--dim);
+      text-shadow: none;
+      box-shadow: none;
+      margin-top: 10px;
+      animation: none;
+    }
+    .mbtn.back:hover { background: rgba(127, 180, 221, 0.12); box-shadow: none; }
+    .hint { font-size: 13px; color: var(--faint); letter-spacing: 0.08em; }
+
+    /* Dormant load-time announcement panel, kept for future messages
+       (see #scr-announce). */
+    .announce-msg {
+      width: min(520px, 88vw);
+      padding: 18px 20px;
+      border: 1.5px solid var(--amber);
+      border-radius: 10px;
+      background: var(--panel);
+      color: var(--amber);
+      font: 700 15px/1.65 var(--mono);
+      letter-spacing: 0.06em;
+      text-align: center;
+      text-shadow: 0 0 8px rgba(255, 194, 75, 0.5);
+      box-shadow: 0 0 12px rgba(255, 194, 75, 0.3), inset 0 0 12px rgba(255, 194, 75, 0.08);
+    }
+
+    /* Rows shared by the level list and the high-score list */
+    .rowlist {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      width: min(440px, 88vw);
+    }
+    /* The board can hold 50 entries — scroll the LIST itself (keeping the
+       title, period chips and Back button fixed) rather than the whole
+       screen. A hair of right padding keeps rows clear of the scrollbar. */
+    #scores-list {
+      max-height: 54vh;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      padding-right: 4px;
+    }
+    .rowlist li, .rowlist .row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--panel);
+      border: 1.5px solid rgba(52, 231, 255, 0.35);
+      border-radius: 8px;
+      padding: 12px 14px;
+      font-size: clamp(14px, 3.2vw, 17px);
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .rowlist .row:hover { background: rgba(52, 231, 255, 0.12); }
+    .rowlist .row .lname { flex: 1; text-align: left; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+    .rowlist .row .lbest {
+      color: var(--dim);
+      font-size: 0.85em;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 2px;
+    }
+    .rowlist .row .lbest-by { color: var(--faint); font-size: 0.78em; white-space: nowrap; }
+    .rowlist .row .lbest-by:empty { display: none; }
+    /* Drill-down chevron (scores-mode picker: a row opens that level's board) */
+    .rowlist .row .chev { color: var(--cyan); font-size: 1.25em; line-height: 1; opacity: 0.65; }
+    /* What's New (About): read-only changelog rows — two lines, no tap
+       affordance; the list scrolls internally like the score board. */
+    #wn-list {
+      max-height: 54vh;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      padding-right: 4px;
+    }
+    #wn-list li {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 4px;
+      cursor: default;
+      font-size: clamp(13px, 3vw, 15px);
+    }
+    #wn-list .wn-note { text-align: left; }
+    #wn-list .wn-meta { color: var(--faint); font-size: 0.78em; white-space: nowrap; }
+    #scores-list .rank { color: var(--amber); width: 1.6em; text-align: left; }
+    #scores-list .dist { font-weight: 700; min-width: 4.5em; text-align: right; color: var(--text); }
+    /* Two-line global entry: pilot name over the localised date+time */
+    #scores-list .pcol {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+      text-align: left;
+    }
+    #scores-list .pdate { color: var(--faint); font-size: 0.72em; white-space: nowrap; }
+    #scores-list .watch {
+      font: 700 12px/1 var(--mono);
+      letter-spacing: 0.08em;
+      color: var(--green);
+      background: rgba(70, 255, 156, 0.12);
+      border: 1.5px solid var(--green);
+      border-radius: 6px;
+      padding: 8px 11px;
+      cursor: pointer;
+      text-shadow: 0 0 8px rgba(70, 255, 156, 0.6);
+    }
+    #scores-list .watch:hover { background: rgba(70, 255, 156, 0.28); }
+    #scores-list .pname {
+      max-width: 100%;
+      text-align: left;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* Local/Global + period pickers on the High-scores screen (shown only
+       when a backend config.json is deployed — see "Online high scores") */
+    .chiprow { display: flex; gap: 8px; }
+    .chip {
+      font: 700 12px/1 var(--mono);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--dim);
+      border: 1.5px solid var(--faint);
+      border-radius: 6px;
+      padding: 9px 13px;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .chip.sel {
+      color: var(--cyan);
+      border-color: var(--cyan);
+      background: rgba(52, 231, 255, 0.12);
+      box-shadow: 0 0 10px rgba(52, 231, 255, 0.4);
+      text-shadow: 0 0 8px rgba(52, 231, 255, 0.6);
+    }
+
+    /* API loading indicator: a neon ring in a fixed-height slot on the
+       High-scores screen (visibility, not display — the slot must keep its
+       height so the list below never shifts under a tap). */
+    #scores-wait {
+      height: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    #scores-reset { font-size: 12px; color: var(--faint); letter-spacing: 0.08em; }
+    #scores-wait .loader { visibility: hidden; }
+    #scores-wait.on .loader { visibility: visible; }
+    .loader {
+      width: 15px;
+      height: 15px;
+      border: 2px solid rgba(52, 231, 255, 0.25);
+      border-top-color: var(--cyan);
+      border-radius: 50%;
+      box-shadow: 0 0 8px rgba(52, 231, 255, 0.35);
+      animation: loader-spin 0.8s linear infinite;
+    }
+    @keyframes loader-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      .loader { animation: none; }
+    }
+
+    /* Callsign input on the submit-score dialog. Neutral white/gray border
+       so the INPUT reads as a field and doesn't compete with the glowing
+       Submit button right below it. */
+    .name-input {
+      width: min(340px, 84vw);
+      background: rgba(4, 10, 24, 0.9);
+      border: 1.5px solid rgba(200, 210, 226, 0.45);
+      border-radius: 8px;
+      padding: 14px 15px;
+      font: 700 clamp(16px, 4vw, 20px)/1.2 var(--mono);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      text-align: center;
+      color: var(--cyan);
+      text-shadow: 0 0 8px rgba(52, 231, 255, 0.6);
+      caret-color: var(--cyan);
+      outline: none;
+    }
+    .name-input:focus {
+      border-color: rgba(235, 241, 250, 0.9);
+      box-shadow: 0 0 12px rgba(210, 222, 240, 0.3), inset 0 0 10px rgba(210, 222, 240, 0.1);
+    }
+    .name-input::placeholder { color: var(--faint); text-shadow: none; }
+
+    /* Settings rows: custom neon toggle switches, no native checkboxes */
+    .setrow {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      width: min(340px, 84vw);
+      background: var(--panel);
+      border: 1.5px solid rgba(52, 231, 255, 0.35);
+      border-radius: 8px;
+      padding: 13px 15px;
+      font-size: clamp(14px, 3.4vw, 17px);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    /* Labels sit left (the screen centres text, so a wrapped long label
+       would otherwise centre its lines). */
+    .setrow span:first-child { flex: 1; text-align: left; }
+    .setrow input { display: none; }
+    .setrow .tgl {
+      flex: 0 0 auto;
+      width: 52px;
+      height: 28px;
+      border-radius: 4px;
+      border: 1.5px solid var(--faint);
+      background: rgba(4, 10, 24, 0.9);
+      position: relative;
+      transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+    }
+    .setrow .tgl::after {
+      content: "";
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 20px;
+      height: 20px;
+      border-radius: 3px;
+      background: var(--faint);
+      transition: left 0.15s, background 0.15s;
+    }
+    .setrow input:checked + .tgl {
+      background: rgba(52, 231, 255, 0.25);
+      border-color: var(--cyan);
+      box-shadow: 0 0 10px rgba(52, 231, 255, 0.5), inset 0 0 8px rgba(52, 231, 255, 0.25);
+    }
+    .setrow input:checked + .tgl::after {
+      left: 27px;
+      background: var(--cyan);
+      box-shadow: 0 0 8px var(--cyan);
+    }
+
+    /* About rows */
+    .info-row { font-size: clamp(14px, 3.4vw, 19px); }
+    .info-label { color: var(--magenta); letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 4px; text-shadow: 0 0 8px rgba(255, 84, 214, 0.5); }
+    .info-value { font-size: clamp(17px, 4vw, 24px); color: var(--text); }
+
+    /* Game-over stats */
+    #go-stats {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-bottom: 10px;
+    }
+    #go-dist, #name-score { font: 800 clamp(32px, 8vw, 50px)/1.1 var(--mono); color: var(--amber); text-shadow: 0 0 16px rgba(255, 194, 75, 0.6); }
+    #go-best { font-size: clamp(13px, 3.2vw, 16px); color: var(--dim); letter-spacing: 0.1em; }
+
+    /* "New build available" toast — GitHub Pages caches index.html for
+       ~10 min, so a fresh deploy can serve a stale page; version.json is
+       fetched with the cache bypassed and a mismatch shows this. */
+    #update-toast {
+      position: fixed;
+      top: calc(env(safe-area-inset-top) + 64px);
+      left: 50%;
+      transform: translateX(-50%) translateY(-16px);
+      background: rgba(8, 16, 34, 0.95);
+      border: 1.5px solid var(--cyan);
+      border-radius: 8px;
+      color: var(--cyan);
+      font: 700 14px/1.2 var(--mono);
+      letter-spacing: 0.06em;
+      padding: 12px 20px;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      /* Hidden = untouchable. The old opacity-only hiding left an INVISIBLE
+         fixed tap-stealer (z-index 60, pointer-events all) floating exactly
+         over the High-scores title — tapping it "mysteriously" reloaded to
+         the main menu whenever a newer build existed. */
+      pointer-events: none;
+      z-index: 60;
+      opacity: 0;
+      box-shadow: 0 0 14px rgba(52, 231, 255, 0.5);
+      text-shadow: 0 0 8px var(--cyan);
+      transition: opacity 0.3s, transform 0.3s;
+    }
+    #update-toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+      pointer-events: all;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="glcanvas" tabindex="1"></canvas>
+
+  <!-- Probe elements to read the safe-area insets in CSS pixels (all four sides) -->
+  <div id="safe-area-probe" style="position:fixed;top:0;left:0;height:env(safe-area-inset-top);width:env(safe-area-inset-left);pointer-events:none;"></div>
+  <div id="safe-area-probe-br" style="position:fixed;bottom:0;right:0;height:env(safe-area-inset-bottom);width:env(safe-area-inset-right);pointer-events:none;"></div>
+
+  <!-- In-game corner buttons: pause + restart during play; during a replay
+       they swap for a single ✕ (exit replay → ui_command 3). -->
+  <div id="hud-btns">
+    <div id="exit-replay-btn" class="cbtn rp-btn" role="button" aria-label="Exit replay" title="Exit replay" style="display:none">
+      <svg class="icn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true">
+        <line x1="6.5" y1="6.5" x2="17.5" y2="17.5"></line>
+        <line x1="17.5" y1="6.5" x2="6.5" y2="17.5"></line>
+      </svg>
+    </div>
+    <div id="restart-btn" class="cbtn" role="button" aria-label="Restart" title="Restart">
+      <svg class="icn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <polyline points="21 5 21 10.5 15.5 10.5"></polyline>
+        <path d="M18.4 15a7.5 7.5 0 1 1-1.8-7.8L21 10.5"></path>
+      </svg>
+    </div>
+    <div id="pause-btn" class="cbtn" role="button" aria-label="Menu" title="Menu">
+      <svg class="icn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true">
+        <line x1="6.5" y1="6.5" x2="17.5" y2="17.5"></line>
+        <line x1="17.5" y1="6.5" x2="6.5" y2="17.5"></line>
+      </svg>
+    </div>
+  </div>
+
+  <!-- Replay transport bar: keyframe step back / play-pause / step forward
+       + seek slider (visible while a replay plays) -->
+  <div id="replay-bar">
+    <div class="rp-row">
+      <div class="rp-side"></div>
+      <div class="rp-transport">
+        <div id="rp-back" class="cbtn rp-btn rp-step" role="button" aria-label="Step 0.1 s back" title="Step 0.1 s back (hold to repeat)">
+          <svg class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <rect x="5" y="5.5" width="2.6" height="13" rx="1.2"></rect>
+            <polygon points="19 5.2 9.5 12 19 18.8"></polygon>
+          </svg>
+        </div>
+        <div id="rp-toggle" class="cbtn rp-btn" role="button" aria-label="Pause replay" title="Play / pause">
+          <svg id="rp-pause-icn" class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <rect x="7.2" y="5.5" width="3.4" height="13" rx="1.4"></rect>
+            <rect x="13.4" y="5.5" width="3.4" height="13" rx="1.4"></rect>
+          </svg>
+          <svg id="rp-play-icn" class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="display:none">
+            <polygon points="8 5.2 19 12 8 18.8"></polygon>
+          </svg>
+        </div>
+        <div id="rp-fwd" class="cbtn rp-btn rp-step" role="button" aria-label="Step 0.1 s forward" title="Step 0.1 s forward (hold to repeat)">
+          <svg class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <polygon points="5 5.2 14.5 12 5 18.8"></polygon>
+            <rect x="16.4" y="5.5" width="2.6" height="13" rx="1.2"></rect>
+          </svg>
+        </div>
+      </div>
+      <div class="rp-side right">
+        <div id="rp-speed" class="cbtn rp-btn rp-step" role="button" aria-haspopup="true" aria-label="Playback speed" title="Playback speed">1×</div>
+      </div>
+    </div>
+    <div class="rp-row rp-time-row">
+      <div id="rp-time">0:00.0 / 0:00.0</div>
+    </div>
+    <div class="rp-row">
+      <input id="rp-seek" type="range" min="0" max="1000" step="1" value="0" aria-label="Replay position">
+    </div>
+    <div id="rp-speed-menu" role="menu" aria-label="Playback speed">
+      <div class="rp-speed-opt" role="menuitem" data-speed="0.25">¼×</div>
+      <div class="rp-speed-opt" role="menuitem" data-speed="0.5">½×</div>
+      <div class="rp-speed-opt" role="menuitem" data-speed="1">1×</div>
+      <div class="rp-speed-opt" role="menuitem" data-speed="2">2×</div>
+      <div class="rp-speed-opt" role="menuitem" data-speed="4">4×</div>
+    </div>
+  </div>
+
+  <!-- Game menu: open at boot (markup, not JS, so it shows while wasm loads) -->
+  <div id="menu" class="open" role="dialog" aria-modal="true">
+
+    <!-- DORMANT load-time announcement kept for future messages. To show
+         one: put the text in .announce-msg, move the `on` class from
+         #scr-home to this screen, and set the boot state back to
+         "scr-announce" in the script (the `overlay` init + the history
+         boot root + histEntries[0]) — the "Roger that" button already
+         dismisses to the main menu. Currently the game boots straight to
+         #scr-home. -->
+    <div class="screen" id="scr-announce">
+      <div class="h2">INCOMING TRANSMISSION</div>
+      <div class="announce-msg">
+        Attention you floor scraping maggots!<br><br>
+        I respect the commitment to horizontal living but the anti-measures
+        have been researched, funded, and will be deployed. Your reign of
+        low-effort terror ends in a near future! Stay tuned and start
+        practicing real flying!
+      </div>
+      <div class="mbtn primary" id="btn-announce-ok" data-goto="scr-home">Roger that</div>
+    </div>
+
+    <div class="screen on" id="scr-home">
+      <div class="title">PEGASUS</div>
+      <div class="subtitle">MOON LANDER</div>
+      <!-- Ship hero: the real vector ship (same geometry as icon.svg /
+           src/ship_mesh.rs) firing its engine. Flame flickers, ship bobs. -->
+      <svg class="ship-hero" viewBox="150 70 212 460" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <defs>
+          <radialGradient id="sh-thrustOuter" cx="50%" cy="0%" r="100%">
+            <stop offset="0%" stop-color="#ff6600" stop-opacity="0.9"/>
+            <stop offset="100%" stop-color="#ff6600" stop-opacity="0"/>
+          </radialGradient>
+          <radialGradient id="sh-thrustInner" cx="50%" cy="0%" r="100%">
+            <stop offset="0%" stop-color="#ffe066" stop-opacity="1"/>
+            <stop offset="100%" stop-color="#ffe066" stop-opacity="0"/>
+          </radialGradient>
+          <filter id="sh-glow" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="6" result="blur"/>
+            <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+          <filter id="sh-softglow" x="-100%" y="-100%" width="300%" height="300%">
+            <feGaussianBlur stdDeviation="18"/>
+          </filter>
+        </defs>
+        <g class="flame">
+          <ellipse cx="256.0" cy="417.7" rx="65" ry="100" fill="#ff5500" opacity="0.35" filter="url(#sh-softglow)"/>
+          <ellipse cx="256.0" cy="402.7" rx="34" ry="70" fill="#ffaa00" opacity="0.45" filter="url(#sh-softglow)"/>
+          <polygon points="256.0,472.8 213.2,372.0 298.8,372.0" fill="url(#sh-thrustOuter)"/>
+          <polygon points="256.0,431.5 234.6,372.0 277.4,372.0" fill="url(#sh-thrustInner)"/>
+        </g>
+        <g filter="url(#sh-glow)">
+          <polygon points="256.0,96.9 249.4,96.9 241.9,100.5" fill="rgb(247,59,53)"/>
+          <polygon points="256.0,96.9 241.9,100.5 230.8,112.2" fill="rgb(246,59,53)"/>
+          <polygon points="256.0,96.9 230.8,112.2 221.8,127.8" fill="rgb(244,58,52)"/>
+          <polygon points="256.0,96.9 221.8,127.8 213.1,152.4" fill="rgb(240,57,52)"/>
+          <polygon points="256.9,96.0 256.0,96.9 213.1,152.4" fill="rgb(243,58,52)"/>
+          <polygon points="256.9,96.0 213.1,152.4 205.6,183.6" fill="rgb(236,56,51)"/>
+          <polygon points="256.9,96.0 205.6,183.6 202.6,212.4" fill="rgb(185,191,207)"/>
+          <polygon points="256.9,96.0 202.6,212.4 201.7,262.2" fill="rgb(179,186,201)"/>
+          <polygon points="256.9,96.0 201.7,262.2 204.7,289.8" fill="rgb(174,180,195)"/>
+          <polygon points="199.6,292.8 193.6,291.9 184.9,298.5" fill="rgb(158,164,177)"/>
+          <polygon points="199.6,292.8 184.9,298.5 178.0,312.0" fill="rgb(157,163,176)"/>
+          <polygon points="204.7,289.8 199.6,292.8 178.0,312.0" fill="rgb(158,163,176)"/>
+          <polygon points="204.7,289.8 178.0,312.0 175.0,326.1" fill="rgb(155,161,174)"/>
+          <polygon points="204.7,289.8 175.0,326.1 175.0,352.2" fill="rgb(153,158,171)"/>
+          <polygon points="204.7,289.8 175.0,352.2 181.0,371.4" fill="rgb(150,155,168)"/>
+          <polygon points="204.7,289.8 181.0,371.4 181.0,381.0" fill="rgb(148,153,165)"/>
+          <polygon points="256.9,96.0 204.7,289.8 181.0,381.0" fill="rgb(166,172,186)"/>
+          <polygon points="181.0,381.0 210.1,381.0 210.1,372.9" fill="rgb(142,147,159)"/>
+          <polygon points="256.9,96.0 181.0,381.0 210.1,372.9" fill="rgb(161,166,180)"/>
+          <polygon points="256.9,96.0 210.1,372.9 221.8,354.3" fill="rgb(162,168,182)"/>
+          <polygon points="256.9,96.0 221.8,354.3 231.4,370.5" fill="rgb(163,168,182)"/>
+          <polygon points="256.9,96.0 231.4,370.5 231.4,381.0" fill="rgb(161,167,180)"/>
+          <polygon points="256.9,96.0 231.4,381.0 280.6,381.0" fill="rgb(160,166,179)"/>
+          <polygon points="256.9,96.0 280.6,381.0 280.6,372.9" fill="rgb(161,166,180)"/>
+          <polygon points="256.9,96.0 280.6,372.9 292.3,355.8" fill="rgb(162,168,182)"/>
+          <polygon points="256.9,96.0 292.3,355.8 301.3,372.9" fill="rgb(162,168,182)"/>
+          <polygon points="301.3,372.9 301.3,381.0 330.1,381.0" fill="rgb(142,147,159)"/>
+          <polygon points="256.9,96.0 301.3,372.9 330.1,381.0" fill="rgb(161,166,180)"/>
+          <polygon points="330.1,381.0 337.0,347.7 336.1,324.6" fill="rgb(147,152,165)"/>
+          <polygon points="330.1,381.0 336.1,324.6 327.1,298.5" fill="rgb(150,156,168)"/>
+          <polygon points="330.1,381.0 327.1,298.5 318.4,291.9" fill="rgb(153,158,171)"/>
+          <polygon points="330.1,381.0 318.4,291.9 312.4,292.8" fill="rgb(153,158,171)"/>
+          <polygon points="330.1,381.0 312.4,292.8 308.8,289.8" fill="rgb(153,159,171)"/>
+          <polygon points="256.9,96.0 330.1,381.0 308.8,289.8" fill="rgb(166,172,186)"/>
+          <polygon points="256.9,96.0 308.8,289.8 311.5,253.5" fill="rgb(175,181,196)"/>
+          <polygon points="256.9,96.0 311.5,253.5 310.9,216.9" fill="rgb(180,186,201)"/>
+          <polygon points="256.9,96.0 310.9,216.9 307.3,183.6" fill="rgb(184,191,206)"/>
+          <polygon points="256.9,96.0 307.3,183.6 300.4,152.4" fill="rgb(236,56,51)"/>
+          <polygon points="256.9,96.0 300.4,152.4 291.7,127.8" fill="rgb(240,57,52)"/>
+          <polygon points="256.9,96.0 291.7,127.8 282.7,112.2" fill="rgb(244,58,52)"/>
+          <polygon points="282.7,112.2 271.0,100.5 256.9,96.0" fill="rgb(246,59,53)"/>
+        </g>
+        <g>
+          <polygon points="312.7,292.8 297.7,366.0 299.8,372.0" fill="rgb(200,48,43)"/>
+          <polygon points="312.7,292.8 299.8,372.0 331.3,372.0" fill="rgb(200,48,43)"/>
+          <polygon points="312.7,292.8 331.3,372.0 333.1,367.5" fill="rgb(200,48,43)"/>
+          <polygon points="312.7,292.8 333.1,367.5 337.0,345.9" fill="rgb(200,48,43)"/>
+          <polygon points="312.7,292.8 337.0,345.9 337.3,339.6" fill="rgb(200,48,43)"/>
+          <polygon points="312.7,292.8 337.3,339.6 337.0,333.3" fill="rgb(200,48,43)"/>
+          <polygon points="312.7,292.8 337.0,333.3 334.3,315.9" fill="rgb(200,48,43)"/>
+          <polygon points="312.7,292.8 334.3,315.9 330.7,306.0" fill="rgb(200,48,43)"/>
+          <polygon points="312.7,292.8 330.7,306.0 326.2,298.5" fill="rgb(200,48,43)"/>
+          <polygon points="312.7,292.8 326.2,298.5 321.1,293.7" fill="rgb(200,48,43)"/>
+          <polygon points="312.7,292.8 321.1,293.7 318.4,292.5" fill="rgb(200,48,43)"/>
+          <polygon points="318.4,292.5 315.4,292.2 312.7,292.8" fill="rgb(200,48,43)"/>
+          <polygon points="214.6,366.0 199.3,292.8 196.6,292.2" fill="rgb(200,48,43)"/>
+          <polygon points="214.6,366.0 196.6,292.2 190.9,293.7" fill="rgb(200,48,43)"/>
+          <polygon points="214.6,366.0 190.9,293.7 185.8,298.5" fill="rgb(200,48,43)"/>
+          <polygon points="214.6,366.0 185.8,298.5 181.3,306.0" fill="rgb(200,48,43)"/>
+          <polygon points="214.6,366.0 181.3,306.0 177.7,315.9" fill="rgb(200,48,43)"/>
+          <polygon points="214.6,366.0 177.7,315.9 175.6,327.3" fill="rgb(200,48,43)"/>
+          <polygon points="214.6,366.0 175.6,327.3 174.7,339.6" fill="rgb(200,48,43)"/>
+          <polygon points="214.6,366.0 174.7,339.6 175.6,351.6" fill="rgb(200,48,43)"/>
+          <polygon points="214.6,366.0 175.6,351.6 177.4,362.4" fill="rgb(200,48,43)"/>
+          <polygon points="214.6,366.0 177.4,362.4 181.0,372.0" fill="rgb(200,48,43)"/>
+          <polygon points="181.0,372.0 212.2,372.0 214.6,366.0" fill="rgb(200,48,43)"/>
+          <polygon points="291.7,354.0 220.9,352.2 226.6,363.3" fill="rgb(120,125,138)"/>
+          <polygon points="291.7,354.0 226.6,363.3 232.3,372.0" fill="rgb(120,125,138)"/>
+          <polygon points="291.7,354.0 232.3,372.0 281.2,372.0" fill="rgb(120,125,138)"/>
+          <polygon points="291.7,354.0 281.2,372.0 286.6,363.9" fill="rgb(120,125,138)"/>
+          <polygon points="286.6,363.9 289.9,357.6 291.7,354.0" fill="rgb(120,125,138)"/>
+          <polygon points="280.9,381.0 280.9,372.0 231.7,372.0" fill="rgb(198,202,212)"/>
+          <polygon points="231.7,372.0 231.7,381.0 280.9,381.0" fill="rgb(198,202,212)"/>
+          <polygon points="181.3,372.0 181.3,381.0 210.4,381.0" fill="rgb(180,150,52)"/>
+          <polygon points="210.4,381.0 210.4,372.0 181.3,372.0" fill="rgb(180,150,52)"/>
+          <polygon points="256.0,157.5 264.4,177.0 247.6,177.0" fill="rgb(125,198,236)"/>
+          <polygon points="211.0,199.5 220.6,199.5 214.0,283.5" fill="rgb(48,124,208)"/>
+          <polygon points="211.0,199.5 214.0,283.5 204.4,283.5" fill="rgb(48,124,208)"/>
+          <polygon points="291.4,199.5 301.0,199.5 307.6,283.5" fill="rgb(48,124,208)"/>
+          <polygon points="291.4,199.5 307.6,283.5 298.0,283.5" fill="rgb(48,124,208)"/>
+        </g>
+      </svg>
+      <div class="mbtn primary" id="btn-fly">Fly</div>
+      <div class="mbtn" id="btn-scores">High scores</div>
+      <div class="mbtn" data-goto="scr-settings">Settings</div>
+      <div class="mbtn" data-goto="scr-about">About</div>
+    </div>
+
+    <!-- Shared level picker: a step inside Fly (pick → fly) and High scores
+         (pick → that level's board). Its title + row action follow the mode
+         it was opened in (see levelPickerMode). -->
+    <div class="screen" id="scr-levels">
+      <div class="h2" id="levels-title">SELECT LEVEL</div>
+      <div class="rowlist" id="level-list"></div>
+      <div class="hint" id="level-none">Level list unavailable — flying the built-in level</div>
+      <!-- Fly mode only: opens the standalone level editor (editor.html) -->
+      <div class="mbtn" id="btn-editor" style="display:none">+ Create your own</div>
+      <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
+    </div>
+
+    <div class="screen" id="scr-scores">
+      <div class="h2">HIGH SCORES</div>
+      <div class="hint" id="scores-level"></div>
+      <div class="chiprow" id="scores-period" style="display:none">
+        <div class="chip" data-period="today">Today</div>
+        <div class="chip" data-period="week">This week</div>
+        <div class="chip sel" data-period="alltime">All time</div>
+      </div>
+      <!-- Fixed-height slot (no layout shift when contents appear — a
+           shifting list retargets in-flight taps): the board-reset
+           countdown plus the API loading indicator -->
+      <div id="scores-wait"><span id="scores-reset"></span><span class="loader" aria-hidden="true"></span></div>
+      <ol class="rowlist" id="scores-list"></ol>
+      <div class="hint" id="scores-status" style="display:none"></div>
+      <div class="hint" id="scores-empty">No flights recorded yet</div>
+      <div class="mbtn back" id="btn-scores-back">&#8249; Back</div>
+    </div>
+
+    <div class="screen" id="scr-settings">
+      <div class="h2">SETTINGS</div>
+      <label class="setrow" id="sound-toggle-row">
+        <span>Sound</span>
+        <input type="checkbox" id="sound-toggle"><span class="tgl"></span>
+      </label>
+      <label class="setrow" id="vel-toggle-row">
+        <span>Velocity vector</span>
+        <input type="checkbox" id="vel-toggle"><span class="tgl"></span>
+      </label>
+      <label class="setrow" id="inv-toggle-row">
+        <span>Invert stick</span>
+        <input type="checkbox" id="inv-toggle"><span class="tgl"></span>
+      </label>
+      <label class="setrow" id="ghost-toggle-row">
+        <span>Race best ghost</span>
+        <input type="checkbox" id="ghost-toggle"><span class="tgl"></span>
+      </label>
+      <label class="setrow" id="debug-toggle-row">
+        <span>Debug HUD</span>
+        <input type="checkbox" id="debug-toggle"><span class="tgl"></span>
+      </label>
+      <label class="setrow" id="retid-toggle-row">
+        <span>Share anonymous returning-player id</span>
+        <input type="checkbox" id="retid-toggle"><span class="tgl"></span>
+      </label>
+      <div class="setrow" id="name-row" style="display:none">
+        <span>Pilot name</span>
+        <span id="name-cur" style="color:var(--dim)">—</span>
+      </div>
+      <!-- Debug-only (shown while the Debug HUD toggle is on): forget the
+           consent answer so the scr-consent flow can be re-tested. -->
+      <div class="mbtn" id="reset-consent" style="display:none">Reset analytics consent</div>
+      <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
+    </div>
+
+    <div class="screen" id="scr-about">
+      <div class="h2">ABOUT</div>
+      <div class="info-row">
+        <div class="info-label">Build revision</div>
+        <div class="info-value" id="git-rev">81a5759-pr-110</div>
+      </div>
+      <div class="info-row">
+        <div class="info-label">Build time</div>
+        <div class="info-value" id="build-time">2026-07-17T21:34:47Z</div>
+      </div>
+      <div class="hint" id="privacy-note">
+        Anonymous play stats (runs, distances, menu taps, errors, which site
+        linked here &mdash; never the page &mdash; and rough device type
+        like &ldquo;iOS &middot; Safari &middot; phone&rdquo;) are sent to
+        the developer to improve the game &mdash; no account, no ads, no
+        third parties, no IP address stored. Optionally (Settings &rarr; &ldquo;Share
+        anonymous returning-player id&rdquo;) a random id is kept on this
+        device so returning players can be counted; switching it off deletes
+        the id.
+      </div>
+      <div class="mbtn" id="btn-whatsnew">What's new</div>
+      <a class="mbtn" href="third-party-licenses.html" target="_blank" rel="noopener">Third-party licenses</a>
+      <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
+      <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
+    </div>
+
+    <!-- What's New: the deploy-generated changelog (whats-new.json =
+         curated backfill + `Whats-new:` commit trailers — see CLAUDE.md
+         "What's new page"). Fetched lazily on first open. -->
+    <div class="screen" id="scr-whatsnew">
+      <div class="h2">WHAT'S NEW</div>
+      <ul class="rowlist" id="wn-list"></ul>
+      <div class="hint" id="wn-status" style="display:none"></div>
+      <div class="mbtn back" data-goto="scr-about">&#8249; Back</div>
+    </div>
+
+    <div class="screen" id="scr-pause">
+      <div class="h2">PAUSED</div>
+      <div class="mbtn primary" id="btn-resume">Resume</div>
+      <div class="mbtn" id="btn-exit">Exit to menu</div>
+    </div>
+
+    <div class="screen" id="scr-gameover">
+      <div class="title crash" id="go-title">GAME OVER</div>
+      <div id="go-stats">
+        <span id="go-dist"></span>
+        <span id="go-best"></span>
+      </div>
+      <div class="mbtn primary" id="btn-again">Fly again</div>
+      <div class="mbtn" id="btn-replay">Watch replay</div>
+      <div class="mbtn back" id="btn-gomenu">&#8249; Back</div>
+    </div>
+
+    <!-- One-time analytics consent ask: its own full screen, slotted
+         between the submit-score dialog and the game-over screen once the
+         device has 3 plays (see "Analytics"). Equal-weight buttons — the
+         game is identical either way; a "consent or no play" wall would
+         not be freely-given consent under GDPR. -->
+    <div class="screen" id="scr-consent">
+      <div class="h2">HELP IMPROVE PEGASUS?</div>
+      <div class="hint">Store an anonymous id on this device to count
+        returning players. No account, no ads, no third parties.</div>
+      <div class="mbtn" id="consent-yes">Sure</div>
+      <div class="mbtn" id="consent-no">No thanks</div>
+    </div>
+
+    <!-- First-time score submission: pops instead of the game-over screen
+         while no pilot name is persisted (see "Online high scores") -->
+    <div class="screen" id="scr-name">
+      <div class="h2">SUBMIT SCORE</div>
+      <div id="name-score"></div>
+      <div class="hint" id="name-dist"></div>
+      <input class="name-input" id="name-input" maxlength="24"
+             autocomplete="nickname" spellcheck="false" enterkeyhint="send"
+             placeholder="YOUR CALLSIGN">
+      <div class="mbtn primary" id="btn-name-submit">Submit</div>
+      <div class="mbtn back" id="btn-name-skip">Skip</div>
+    </div>
+
+    <!-- CRT scanlines + vignette + sweep, over everything but tap-transparent -->
+    <div class="crt" aria-hidden="true"></div>
+  </div>
+
+  <!-- Stale-cache reload toast (hidden until a newer version.json is seen) -->
+  <div id="update-toast" role="button">⟳ New build available — tap to reload</div>
+
+  <script>
+    // Boot guard — deliberately in its OWN <script> tag: script tags parse
+    // independently, so a SyntaxError in the bundle or the main inline
+    // script below cannot kill this one (that failure mode shipped once:
+    // a redeclared bundle global silently killed the whole main script and
+    // the page showed only HTML chrome with no error anywhere). Shows any
+    // script error on screen and offers a cache-bypass reload if the wasm
+    // hasn't started.
+    (function () {
+      var box = null;
+      function show(msg) {
+        if (!box) {
+          box = document.createElement("div");
+          box.style.cssText = "position:fixed;left:12px;right:12px;bottom:12px;" +
+            "z-index:99;background:rgba(130,25,25,0.93);color:#fff;" +
+            "font:13px/1.45 -apple-system,BlinkMacSystemFont,sans-serif;" +
+            "padding:10px 14px;border-radius:10px;white-space:pre-wrap;";
+          box.addEventListener("click", function () {
+            location.replace(location.pathname + "?fresh=" + Date.now());
+          });
+          document.body.appendChild(box);
+        }
+        box.textContent = msg + "\n(tap here to reload the latest build)";
+      }
+      // Rust panics print their message + location via console.error just
+      // before the wasm traps, but the error event that follows is muted to a
+      // bare "Script error." (no file/line) on iOS Safari — wasm frames fail
+      // its same-origin check. Mirror the last console.error so the banner
+      // can show the real panic instead. Installed here (before the bundle
+      // loads) so the bundle's console_error import routes through it.
+      // Tiny capped error buffer drained by the analytics module in the
+      // main script. Push-only here — the guard stays standalone and never
+      // depends on analytics. Entries inherit exactly the banner's
+      // signal/noise filtering below.
+      window.__pegErrs = [];
+      function recErr(kind, message, file, line) {
+        try {
+          if (window.__pegErrs.length < 10) {
+            window.__pegErrs.push({
+              kind: kind,
+              message: String(message).slice(0, 300),
+              file: file || "",
+              line: line || 0,
+            });
+          }
+        } catch (_) { /* never let telemetry break the guard */ }
+      }
+      var lastConsoleError = "";
+      var origConsoleError = console.error;
+      console.error = function () {
+        try {
+          lastConsoleError =
+            Array.prototype.map.call(arguments, String).join(" ").slice(0, 300);
+        } catch (_) { /* never let logging break the logger */ }
+        return origConsoleError.apply(console, arguments);
+      };
+      window.addEventListener("error", function (e) {
+        // Fully-anonymous error (no filename) with no console.error trace:
+        // cannot be ours. Same-origin scripts always report file:line, and a
+        // wasm panic always logs through the panic hook first. What does land
+        // here is Safari-injected third-party JS — reproduced live: opening
+        // the iOS share sheet runs share/action extensions' preprocessing
+        // scripts in the page, and any error they throw arrives as a muted
+        // "Script error." Don't paint the banner over that noise.
+        if (!e.filename && !lastConsoleError) return;
+        var msg = "Script error: " + (e.message || "unknown") +
+          (e.filename ? "\n" + e.filename.split("/").pop() + ":" + e.lineno : "");
+        // Anonymous or wasm-trap error: iOS Safari mutes wasm errors to a
+        // bare "Script error." (no filename); Chrome attributes them to the
+        // .wasm URL but the message is just "unreachable". Either way the
+        // last console.error (the panic hook's output) is the real cause.
+        var isPanic = (!e.filename || /\.wasm(\?|$)/.test(e.filename)) && lastConsoleError;
+        if (isPanic) {
+          msg += "\n" + lastConsoleError;
+        }
+        recErr(isPanic ? "panic" : "script",
+          isPanic ? lastConsoleError : (e.message || "unknown"),
+          e.filename ? e.filename.split("/").pop() : "", e.lineno);
+        show(msg);
+      });
+      window.addEventListener("unhandledrejection", function (e) {
+        if (e.reason == null) return; // contentless → same third-party noise rule
+        recErr("rejection", String(e.reason));
+        show("Unhandled promise rejection: " + String(e.reason).slice(0, 300));
+      });
+      setTimeout(function () {
+        if (typeof wasm_exports === "undefined" || !wasm_exports) {
+          recErr("boot_timeout", "wasm not running after 8 s");
+          show("Game failed to start (wasm not running after 8 s).");
+        }
+      }, 8000);
+    })();
+  </script>
+  <script src="./mq_js_bundle.js"></script>
+  <script>
+    function call(name, ...args) {
+      if (typeof wasm_exports !== "undefined" && wasm_exports[name]) {
+        wasm_exports[name](...args);
+      }
+    }
+
+    // --- Attitude stick + main engine ---
+    // The floating attitude stick is drawn and read IN-CANVAS by the game
+    // (macroquad touch API, mouse-synthesis disabled). No DOM stick, no
+    // document touch handlers — holding the stick lights the engine. The
+    // only touch setting forwarded from here is Invert stick (wired below).
+
+    // --- Bluetooth / USB game controller (Web Gamepad API) ---
+    // A controller paired with the device shows up in navigator.getGamepads().
+    // We poll it each animation frame and forward to dedicated WASM exports
+    // (set_pad_*), which are combined with touch/keyboard inside the game.
+    //   Thrust   : A / Cross (0), R2 trigger (7), or D-pad up (12)
+    //   Steer    : left stick X (axes[0], dead-zoned) or D-pad left/right (14/15)
+    //   Reset    : Start (9) or Y / Triangle (3)
+    // Standard mapping is assumed (the common layout for BT pads in browsers).
+    const STICK_DEADZONE = 0.18;
+    let padPolling = false;
+    let prevResetPressed = false;
+
+    function firstGamepad() {
+      const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+      for (const p of pads) if (p) return p;
+      return null;
+    }
+
+    function pollGamepad() {
+      const pad = firstGamepad();
+      if (!pad) {
+        // Controller dropped out — release any held inputs and stop polling.
+        call("set_pad_thrust", 0);
+        call("set_pad_torque", 0);
+        prevResetPressed = false;
+        padPolling = false;
+        return;
+      }
+
+      const btn = i => pad.buttons[i] && pad.buttons[i].pressed;
+      const val = i => (pad.buttons[i] ? pad.buttons[i].value : 0);
+
+      // Thrust: A button, R2 trigger (analog → treat >0.3 as on), or D-pad up.
+      const thrust = (btn(0) || val(7) > 0.3 || btn(12)) ? 1 : 0;
+      call("set_pad_thrust", thrust);
+
+      // Steering: analog left stick with a dead-zone, rescaled so it still
+      // reaches ±1 past the dead-zone. D-pad overrides to full deflection.
+      let x = pad.axes[0] || 0;
+      if (Math.abs(x) < STICK_DEADZONE) {
+        x = 0;
+      } else {
+        x = (x - Math.sign(x) * STICK_DEADZONE) / (1 - STICK_DEADZONE);
+      }
+      if (btn(14)) x = -1;
+      else if (btn(15)) x = 1;
+      call("set_pad_torque", Math.max(-1, Math.min(1, x)));
+
+      // Reset: edge-triggered so a held button fires once.
+      const resetPressed = btn(9) || btn(3);
+      if (resetPressed && !prevResetPressed) call("set_pad_reset");
+      prevResetPressed = resetPressed;
+
+      requestAnimationFrame(pollGamepad);
+    }
+
+    function startPadPolling() {
+      if (padPolling) return;
+      padPolling = true;
+      requestAnimationFrame(pollGamepad);
+    }
+
+    window.addEventListener("gamepadconnected", startPadPolling);
+    // Some browsers report an already-connected pad without firing the event
+    // (e.g. after a reload), so probe once the WASM exports are ready too.
+    if (firstGamepad()) startPadPolling();
+
+    // Report the safe-area insets (all four sides) to the game, in CSS px.
+    // The canvas is 100vh, so it extends UNDER the floating browser toolbar;
+    // env(safe-area-inset-bottom) only covers the home indicator, so the
+    // bottom inset also folds in the toolbar height measured via
+    // visualViewport (window height minus the actually-visible height).
+    const safeProbe = document.getElementById("safe-area-probe");
+    const safeProbeBR = document.getElementById("safe-area-probe-br");
+    function reportSafeArea() {
+      const tl = safeProbe.getBoundingClientRect();
+      const br = safeProbeBR.getBoundingClientRect();
+      const vv = window.visualViewport;
+      // The canvas is 100vh = the LARGE viewport (toolbar retracted); vh units
+      // don't shrink when the toolbar shows. visualViewport.height is the
+      // ACTUALLY visible height. Their difference is what the floating toolbar
+      // + home indicator hide at the bottom. (window.innerHeight is unreliable
+      // here — it often already equals visualViewport.height.)
+      let obscuredBottom = 0;
+      if (vv) {
+        const canvas = document.getElementById("glcanvas");
+        const ch = canvas ? canvas.getBoundingClientRect().height : window.innerHeight;
+        obscuredBottom = Math.max(0, Math.round(ch - vv.height - vv.offsetTop));
+      }
+      const bottom = Math.max(br.height, obscuredBottom);
+      call("set_safe_area", tl.height, tl.width, bottom, br.width);
+    }
+    window.addEventListener("resize", reportSafeArea);
+    window.addEventListener("orientationchange", () => setTimeout(reportSafeArea, 300));
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener("resize", reportSafeArea);
+      window.visualViewport.addEventListener("scroll", reportSafeArea);
+    }
+    // The WASM exports aren't ready immediately; poll briefly until it loads.
+    const safeAreaTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_safe_area) {
+        reportSafeArea();
+        clearInterval(safeAreaTimer);
+      }
+    }, 200);
+
+    // =====================================================================
+    // Game menu state machine
+    // =====================================================================
+    // One overlay (#menu), one visible .screen. `overlay` is the open
+    // screen's id, or null while playing. The wasm side is driven through
+    // set_ui_pause (freeze the live sim while any screen is up) and
+    // ui_command (1 = reset / fly again, 2 = watch the last run's replay),
+    // and observed through ui_state (0 flying / 1 wreck / 2 crash dialog /
+    // 3 replay) + cur_dist — see the bridge block in src/main.rs.
+    const menuEl = document.getElementById("menu");
+    const hudBtns = document.getElementById("hud-btns");
+    let overlay = "scr-home"; // matches the markup's boot state (scr-home;
+                              // the dormant scr-announce is opt-in — see its
+                              // markup comment to run a future message)
+    let wantPause = 1;        // re-asserted once the exports load
+
+    function setPause(on) {
+      wantPause = on;
+      call("set_ui_pause", on);
+    }
+    const pauseTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_ui_pause) {
+        wasm_exports.set_ui_pause(wantPause);
+        clearInterval(pauseTimer);
+      }
+    }, 200);
+
+    function showScreen(id) {
+      overlay = id;
+      menuEl.classList.add("open");
+      hudBtns.classList.remove("on");
+      menuEl.querySelectorAll(".screen").forEach(s =>
+        s.classList.toggle("on", s.id === id));
+      setPause(1);
+      // Entering High scores always re-renders — the global board refetches
+      // so it's never stale (renderGlobalScores skips fetching while the
+      // screen isn't up, so this entry point is what keeps it fresh).
+      if (id === "scr-scores") renderScores();
+      if (id === "scr-about") renderBuildTime();
+      pegAnalytics.screen(id); // funnel signal (consecutive-deduped inside)
+      syncHistory();
+    }
+    function closeMenu() {
+      overlay = null;
+      menuEl.classList.remove("open");
+      hudBtns.classList.add("on");
+      setPause(0);
+      syncHistory();
+    }
+
+    // Taps inside the menu / corner buttons must never reach the canvas
+    // (mousedown fires the thruster on desktop).
+    const swallow = e => e.stopPropagation();
+    ["mousedown", "touchstart"].forEach(ev => {
+      menuEl.addEventListener(ev, swallow);
+      hudBtns.addEventListener(ev, swallow);
+    });
+
+    // Plain navigation buttons (Settings / About / Back).
+    menuEl.querySelectorAll("[data-goto]").forEach(el =>
+      el.addEventListener("click", () => showScreen(el.dataset.goto)));
+
+    // Level choice is a step inside Fly and High scores (the old top-level
+    // Levels button is gone): openLevelPicker(mode) shows the shared level
+    // list, and each row's action follows the mode (see renderLevels). With
+    // no level list (manifest fetch failed) there's nothing to pick, so skip
+    // straight to the destination on the built-in level.
+    const levelsTitle = document.getElementById("levels-title");
+    function openLevelPicker(mode) {
+      levelPickerMode = mode;
+      if (!levelFiles.length) {
+        if (mode === "scores") showScreen("scr-scores");
+        else closeMenu();
+        return;
+      }
+      levelsTitle.textContent = mode === "scores" ? "HIGH SCORES" : "SELECT LEVEL";
+      // "Create your own" is a fly-mode action (it leaves for the editor);
+      // a scores-mode picker only browses boards.
+      document.getElementById("btn-editor").style.display =
+        mode === "fly" ? "" : "none";
+      renderLevels();
+      prefetchGlobalBests(); // warm each level's global record for the rows
+      showScreen("scr-levels");
+    }
+    document.getElementById("btn-editor").addEventListener("click", () => {
+      location.href = "editor.html";
+    });
+    document.getElementById("btn-scores").addEventListener("click", () => openLevelPicker("scores"));
+    // Back from a board returns to the level picker to check another level —
+    // or home when there's no picker (no level list).
+    document.getElementById("btn-scores-back").addEventListener("click", () =>
+      levelFiles.length ? openLevelPicker("scores") : showScreen("scr-home"));
+
+    // Home / pause / game-over actions.
+    document.getElementById("btn-fly").addEventListener("click", () => openLevelPicker("fly"));
+    document.getElementById("btn-resume").addEventListener("click", closeMenu);
+    document.getElementById("btn-exit").addEventListener("click", () => {
+      // Abandoning the run ends it (reset-ended runs are never submitted
+      // online); the fresh ship waits, paused, behind the menu.
+      call("ui_command", 1);
+      showScreen("scr-home");
+    });
+    document.getElementById("btn-again").addEventListener("click", () => {
+      call("ui_command", 1);
+      uiCmdPending = true; // see the ui-state poll
+      closeMenu();
+    });
+    document.getElementById("btn-replay").addEventListener("click", () => {
+      pegAnalytics.replayWatch("gameover");
+      call("ui_command", 2);
+      uiCmdPending = true;
+      closeMenu(); // state flips to replay; the poll below brings us back
+    });
+    document.getElementById("btn-gomenu").addEventListener("click", () => {
+      // Back from the game-over screen: end the run (the fresh ship waits
+      // behind the menu) and return to the level picker — or home when
+      // there's no level list.
+      call("ui_command", 1);
+      levelFiles.length ? openLevelPicker("fly") : showScreen("scr-home");
+    });
+
+    // In-game corner buttons.
+    const pauseBtn = document.getElementById("pause-btn");
+    const restartBtn = document.getElementById("restart-btn");
+    function onTap(el, fn) {
+      // The corner buttons preventDefault their touchstart (no synthesized
+      // click follows), so the menu's click-delegated ui_click never sees
+      // them — log here instead, where every tap lands exactly once.
+      const go = () => { pegAnalytics.enqueue("ui_click", { target: el.id }); fn(); };
+      el.addEventListener("click", e => { e.stopPropagation(); go(); });
+      el.addEventListener("touchstart", e => {
+        e.preventDefault();
+        e.stopPropagation();
+        go();
+      }, { passive: false });
+    }
+    const exitReplayBtn = document.getElementById("exit-replay-btn");
+    onTap(pauseBtn, () => showScreen("scr-pause"));
+    onTap(restartBtn, () => call("ui_command", 1));
+    onTap(exitReplayBtn, () => call("ui_command", 3));
+
+    // Esc toggles the pause view (desktop nicety).
+    window.addEventListener("keydown", e => {
+      if (e.key !== "Escape") return;
+      if (overlay === null) showScreen("scr-pause");
+      else if (overlay === "scr-pause") closeMenu();
+    });
+
+    // =====================================================================
+    // Hardware / browser back = one step back in the game UI
+    // =====================================================================
+    // Android's back button (and browser Back / iOS edge-swipe) must step
+    // back through the game's screens, not dump the player out of the
+    // site. Session history mirrors the LOGICAL SCREEN STACK — one entry
+    // per screen (histPath gives each UI state its canonical ancestor
+    // chain), each tagged {pegasus, s: state, d: depth}. Entries matter
+    // beyond popstate routing: mobile browsers animate a back navigation
+    // with a stored SCREENSHOT of the destination entry, so the entry
+    // beneath the current one must BE the screen back will land on —
+    // that's why a single sentinel entry didn't work (its one screenshot
+    // — the main menu — flashed before every real destination). Because
+    // showScreen flips the DOM and reconciles in the same task, each
+    // entry's screenshot is the screen it represents.
+    //
+    // A back press runs uiBack() — the current state's own Back action,
+    // via the UI's real controls — and syncHistory() reconciles the
+    // session history to the new state's canonical path afterwards:
+    // deeper → pushState, one up → the traversal already happened,
+    // lateral (the crash flow name → consent → game-over swaps at one
+    // depth) → replaceState, jumps (exit-to-menu) → history.go(-k) with
+    // the resulting popstate swallowed and reconciliation continued
+    // there. UI Back buttons need no special wiring: their showScreen
+    // lands one-above-target and reconcile issues the real history.go.
+    // At depth 0 (home / announce) there is nothing beneath, so back
+    // leaves the site as usual.
+    let histDepth = 0;
+    const histEntries = []; // depth -> state string, our mirror of the entries
+    let histSwallow = 0;    // popstates from our own go()/back(), not the user
+    const hs0 = history.state;
+    if (hs0 && hs0.pegasus && typeof hs0.d === "number") {
+      // Reload landed mid-stack (history.state survives reloads): adopt
+      // the depth; the boot reconcile below unwinds to the home root.
+      histDepth = hs0.d;
+      histEntries[histDepth] = hs0.s;
+    } else {
+      history.replaceState({ pegasus: 1, s: "scr-home", d: 0 }, "");
+      histEntries[0] = "scr-home";
+    }
+
+    // The canonical entry chain (root -> state) for every UI state.
+    // "game" = no overlay: flight, the wreck phase and replay playback.
+    function histPath(s) {
+      switch (s) {
+        case "scr-announce": return ["scr-announce"];
+        case "scr-home":     return ["scr-home"];
+        case "scr-levels":   return ["scr-home", "scr-levels"];
+        case "scr-scores":   return levelFiles.length
+          ? ["scr-home", "scr-levels", "scr-scores"]
+          : ["scr-home", "scr-scores"]; // no manifest: boards open directly
+        case "scr-settings": return ["scr-home", "scr-settings"];
+        case "scr-about":    return ["scr-home", "scr-about"];
+        case "scr-whatsnew": return ["scr-home", "scr-about", "scr-whatsnew"];
+        case "game":         return ["scr-home", "game"];
+        case "scr-pause":    return ["scr-home", "game", "scr-pause"];
+        case "scr-gameover": return levelFiles.length
+          ? ["scr-home", "scr-levels", "scr-gameover"] // back = level picker
+          : ["scr-home", "scr-gameover"];
+        case "scr-consent":  return ["scr-home", "game", "scr-consent"];
+        case "scr-name":     return nameReturnTo === "scr-settings"
+          ? ["scr-home", "scr-settings", "scr-name"] // the Settings name editor
+          : ["scr-home", "game", "scr-name"];        // the crash-flow submit ask
+        default:             return ["scr-home", s]; // future screens: child of home
+      }
+    }
+    function histTag(s) { return { pegasus: 1, s: s, d: histDepth }; }
+    function histState() { return overlay === null ? "game" : overlay; }
+
+    function syncHistory() {
+      // A traversal of ours is still in flight: reconciling now would
+      // double-issue it (go() is async). The swallowed popstate calls
+      // back in here with the settled depth and the CURRENT ui state.
+      if (histSwallow > 0) return;
+      const cur = histState();
+      const target = histPath(cur);
+      const top = target.length - 1;
+      // The lazily-armed flight guard (below) is a legal extra entry.
+      if (cur === "game" && histDepth === top + 1 &&
+          histEntries[histDepth] === "game") return;
+      if (histDepth > top) {
+        // Above the target depth (a UI Back button, exit-to-menu, fly
+        // again): perform the real traversal; the swallowed popstate
+        // re-runs this reconciler on arrival.
+        histSwallow++;
+        history.go(top - histDepth);
+        return;
+      }
+      if (histEntries[histDepth] !== target[histDepth]) {
+        // Lateral move at one depth (crash flow, announce -> home).
+        histEntries[histDepth] = target[histDepth];
+        history.replaceState(histTag(target[histDepth]), "");
+      }
+      while (histDepth < top) {
+        // Deeper: push the missing tail (clobbers any forward entries).
+        histDepth++;
+        histEntries.length = histDepth;
+        histEntries[histDepth] = target[histDepth];
+        history.pushState(histTag(target[histDepth]), "");
+      }
+      histEntries.length = histDepth + 1;
+      if (cur === "game") armFlightGuard();
+    }
+
+    // In-flight, back should PAUSE, not exit — so once a flight frame has
+    // PAINTED, a duplicate "game" entry goes on top. A back press pops
+    // the duplicate (whose beneath-screenshot is the flight itself, so
+    // the browser's back preview shows the game, not the menu) and
+    // uiBack opens the pause screen in its slot. Armed a frame late so
+    // the screenshot is right; re-armed after every resume.
+    let guardQueued = false;
+    function armFlightGuard() {
+      if (guardQueued) return;
+      guardQueued = true;
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        guardQueued = false;
+        if (histState() !== "game" || histSwallow > 0) return;
+        if (histDepth !== 1 || histEntries[1] !== "game") return; // moved on
+        histDepth++;
+        histEntries.length = histDepth;
+        histEntries[histDepth] = "game";
+        history.pushState(histTag("game"), "");
+      }));
+    }
+
+    function uiBack() {
+      if (overlay === null) {
+        // In-game: back exits a replay, otherwise opens the pause screen —
+        // the same actions as the ✕ corner buttons (driven as clicks so
+        // analytics sees them like taps).
+        const st = (typeof wasm_exports !== "undefined" && wasm_exports.ui_state)
+          ? wasm_exports.ui_state() : 0;
+        (st === 3 ? exitReplayBtn : pauseBtn).click();
+      } else if (overlay === "scr-pause") {
+        document.getElementById("btn-resume").click();
+      } else if (overlay === "scr-consent") {
+        // The consent ask has no default answer — back just re-arms.
+      } else {
+        // Generic: the screen's own Back button (the name dialog's Skip
+        // carries the same class) — any future screen with an .mbtn.back
+        // gets hardware back for free. Root screens (home / announce)
+        // have none: no action, depth stays 0, the next back exits.
+        const b = document.querySelector("#" + overlay + " .mbtn.back");
+        if (b) b.click();
+      }
+    }
+    window.addEventListener("popstate", e => {
+      // Trust the landed entry's own tag — it survives reloads and keeps
+      // fast sequences racing our own async go() self-consistent.
+      if (e.state && e.state.pegasus) {
+        histDepth = e.state.d || 0;
+        histEntries[histDepth] = e.state.s;
+      } else {
+        histDepth = 0;
+      }
+      if (histSwallow > 0) { histSwallow--; syncHistory(); return; }
+      uiBack();
+      syncHistory(); // covers actions that open no screen (replay exit, consent)
+    });
+    syncHistory(); // boot: a reload that landed mid-stack unwinds to the root
+
+    // Watch the game's mode: a finished crash (state 2) with no overlay up
+    // becomes the game-over screen; a replay watched from the menu (state 3)
+    // returns to the menu when it ends mid-flight (a wreck waiting shows the
+    // game-over screen through the state-2 branch instead).
+    const goTitle = document.getElementById("go-title");
+    const goDist = document.getElementById("go-dist");
+    const goBest = document.getElementById("go-best");
+    let prevState = 0;
+    let watchFromMenu = false;
+    let uiCmdPending = false; // ui_command sent, game hasn't consumed it yet
+    setInterval(() => {
+      if (typeof wasm_exports === "undefined" || !wasm_exports.ui_state) return;
+      const st = wasm_exports.ui_state();
+      // "Fly again"/"Watch replay" send a ui_command and close the menu, but
+      // the game consumes commands on its NEXT FRAME — a poll tick landing
+      // in that window still sees state 2 with no overlay and would re-open
+      // the game-over screen over the fresh run (pausing it: the menu
+      // silently flashing back, seen as a wedged e2e run). Hold this branch
+      // off until the game has actually left state 2.
+      if (st !== 2) uiCmdPending = false;
+      if (st === 2 && overlay === null && !uiCmdPending) {
+        // Time levels end in LEVEL COMPLETE (cause 3 on the analytics
+        // mirror, fresh for every ended run) with the completion clock; an
+        // unfinished attempt is a DNF. Other levels keep distance + best.
+        const complete = wasm_exports.run_end_cause
+          && wasm_exports.run_end_cause() === 3;
+        goTitle.textContent = complete ? "LEVEL COMPLETE" : "GAME OVER";
+        goTitle.classList.toggle("win", complete);
+        if (levelIsTime(currentLevelFile)) {
+          goDist.textContent = complete
+            ? fmtClock(wasm_exports.run_end_ticks() / 120) : "DNF";
+          const bt = wasm_exports.get_best_time ? wasm_exports.get_best_time() : 0;
+          goBest.textContent = bt > 0 ? "best " + fmtClock(bt) : "";
+        } else {
+          goDist.textContent = Math.round(wasm_exports.cur_dist()) + " m";
+          goBest.textContent = "best " + Math.round(wasm_exports.get_best_dist()) + " m";
+        }
+        // Collect the just-ended run SYNCHRONOUSLY before deciding which
+        // screen to open — an out-of-fuel game over publishes and enters
+        // state 2 in the same frame (no wreck-phase window like a crash),
+        // so waiting for the 500 ms collect poll could miss the submit
+        // dialog. Then bank the run for analytics (its run_end drives the
+        // play counter) and slot the one-time consent screen between the
+        // score dialog and the game-over screen once the device has
+        // 3 plays: game over → [submit dialog] → [scr-consent] →
+        // scr-gameover.
+        collectEndedRun();
+        pegAnalytics.pollRuns();
+        const afterScore = pegAnalytics.consentDue() ? "scr-consent" : "scr-gameover";
+        // Every crash-ended publishable run gets the submit/skip dialog in
+        // the game-over screen's slot (leading there on either choice); the
+        // callsign input arrives prefilled once a name is persisted.
+        if (pendingSubmit) openNameDialog(afterScore);
+        else showScreen(afterScore);
+      }
+      if (watchFromMenu && prevState === 3 && st !== 3) {
+        watchFromMenu = false;
+        if (st !== 2) showScreen("scr-scores");
+      }
+      prevState = st;
+    }, 200);
+
+    // --- Replay transport bar (play/pause + keyframe seek) -----------------
+    // Shown while a replay plays (state 3, no menu screen up). Drives the
+    // wasm through set_replay_paused / replay_seek and mirrors position and
+    // pause state back via replay_pos / replay_len / replay_paused (the
+    // space-bar toggle lives in-canvas, so the icon must follow the game,
+    // not local JS state). Seeks snap to the recording's 1 Hz keyframes
+    // game-side; dedupe on the snapped second so a drag doesn't rebuild the
+    // scratch sim for sub-keyframe knob moves.
+    const rpBar = document.getElementById("replay-bar");
+    const rpToggle = document.getElementById("rp-toggle");
+    const rpSeek = document.getElementById("rp-seek");
+    const rpTime = document.getElementById("rp-time");
+    const rpPlayIcn = document.getElementById("rp-play-icn");
+    const rpPauseIcn = document.getElementById("rp-pause-icn");
+    ["mousedown", "touchstart"].forEach(ev => rpBar.addEventListener(ev, swallow));
+    let rpDragging = false;
+    let rpLastSent = -1;
+    rpSeek.addEventListener("input", () => {
+      rpDragging = true;
+      if (typeof wasm_exports === "undefined" || !wasm_exports.replay_seek) return;
+      // Seeks are tick-resolution game-side; the slider's 1000 positions
+      // are the quantisation, so dedupe per position.
+      if (rpSeek.value !== rpLastSent) {
+        rpLastSent = rpSeek.value;
+        wasm_exports.replay_seek(rpSeek.value / 1000);
+      }
+    });
+    ["change", "pointerup", "touchend"].forEach(ev =>
+      rpSeek.addEventListener(ev, () => { rpDragging = false; rpLastSent = -1; }));
+    onTap(rpToggle, () => {
+      if (typeof wasm_exports === "undefined" || !wasm_exports.replay_paused) return;
+      call("set_replay_paused", wasm_exports.replay_paused() ? 0 : 1);
+    });
+    // Transport steps: 0.1 s of sim per tap — 12 ticks at the 120 Hz
+    // physics rate (same as the arrow keys; the game auto-pauses on a
+    // step). Holding repeats at ~10/s, a realtime shuttle either way.
+    const RP_STEP_TICKS = 12;
+    function stepHold(el, dir) {
+      let delay = null, rep = null;
+      const fire = () => call("replay_step", dir * RP_STEP_TICKS);
+      const stop = () => {
+        clearTimeout(delay);
+        clearInterval(rep);
+        delay = rep = null;
+      };
+      el.addEventListener("pointerdown", e => {
+        e.preventDefault();
+        e.stopPropagation();
+        fire();
+        delay = setTimeout(() => { rep = setInterval(fire, 100); }, 350);
+      });
+      ["pointerup", "pointerleave", "pointercancel"].forEach(ev =>
+        el.addEventListener(ev, stop));
+    }
+    stepHold(document.getElementById("rp-back"), -1);
+    stepHold(document.getElementById("rp-fwd"), 1);
+    // Playback speed: the button opens a picker panel above the bar (the
+    // in-canvas S key still cycles; the label and the panel highlight
+    // follow the game via the poll below, so all three stay in sync).
+    const rpSpeedBtn = document.getElementById("rp-speed");
+    const rpSpeedMenu = document.getElementById("rp-speed-menu");
+    const rpSpeedLabel = s => (s === 0.25 ? "¼×" : s === 0.5 ? "½×" : s + "×");
+    onTap(rpSpeedBtn, () => rpSpeedMenu.classList.toggle("open"));
+    rpSpeedMenu.querySelectorAll(".rp-speed-opt").forEach(opt =>
+      onTap(opt, () => {
+        call("set_replay_speed", parseFloat(opt.dataset.speed));
+        rpSpeedMenu.classList.remove("open");
+      }));
+    // A tap anywhere else on the bar dismisses the picker.
+    ["mousedown", "touchstart"].forEach(ev =>
+      rpBar.addEventListener(ev, e => {
+        if (!rpSpeedMenu.contains(e.target) && !rpSpeedBtn.contains(e.target)) {
+          rpSpeedMenu.classList.remove("open");
+        }
+      }));
+
+    // --- Auto-hide (YouTube-style) ---
+    // The GUI (bar + ✕) fades after a few seconds of untouched playback;
+    // tapping the canvas toggles it back. Never hides while paused (incl.
+    // the freeze-frame ending) or with the speed picker open. The wasm
+    // mirrors visibility so the recorded-input stick swaps between its
+    // half-size spot above the bar and its full-size parked home.
+    const RP_HIDE_MS = 2500;
+    let rpUiVisible = true;
+    let rpHideAt = Date.now() + RP_HIDE_MS;
+    let rpWasPaused = false;
+    let rpWasOn = false;
+    function rpShowUi(show) {
+      rpUiVisible = show;
+      rpBar.classList.toggle("faded", !show);
+      exitReplayBtn.classList.toggle("faded", !show);
+      call("set_replay_ui_visible", show ? 1 : 0);
+      if (show) rpHideAt = Date.now() + RP_HIDE_MS;
+    }
+    // Any bar interaction re-arms the timer.
+    ["pointerdown", "pointerup", "input"].forEach(ev =>
+      rpBar.addEventListener(ev, () => { rpHideAt = Date.now() + RP_HIDE_MS; }));
+    // Canvas tap: toggle the GUI (the game ignores touches during replay).
+    document.getElementById("glcanvas").addEventListener("pointerdown", () => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.ui_state
+          && wasm_exports.ui_state() === 3 && overlay === null) {
+        rpShowUi(!rpUiVisible);
+      }
+    });
+    const fmtT = s => {
+      // m:ss.t — tenths make frame-stepping visibly move the clock.
+      s = Math.max(0, s);
+      const m = Math.floor(s / 60);
+      const r = Math.min(59.9, s - m * 60);
+      return m + ":" + (r < 10 ? "0" : "") + r.toFixed(1);
+    };
+    setInterval(() => {
+      if (typeof wasm_exports === "undefined" || !wasm_exports.replay_pos) return;
+      const inReplay = wasm_exports.ui_state() === 3;
+      // During a replay the pause/restart corner buttons swap for ✕.
+      pauseBtn.style.display = inReplay ? "none" : "";
+      restartBtn.style.display = inReplay ? "none" : "";
+      exitReplayBtn.style.display = inReplay ? "" : "none";
+      const on = inReplay && overlay === null;
+      rpBar.classList.toggle("on", on);
+      if (!on) {
+        rpSpeedMenu.classList.remove("open");
+        rpWasOn = false;
+        return;
+      }
+      // A fresh replay ALWAYS starts with the GUI shown and the fade timer
+      // re-armed. (Resetting only on exit left rpHideAt from the previous
+      // watch: idle in the menu > 2.5 s and the next replay's first poll
+      // tick faded the GUI instantly — seen as "randomly starts hidden".)
+      if (!rpWasOn) {
+        rpWasOn = true;
+        rpWasPaused = false;
+        rpShowUi(true);
+      }
+      // Auto-hide clock. Pausing SURFACES the GUI on the transition only
+      // (so the freeze-frame ending and a space-bar pause bring it up),
+      // and while paused / picker-open the timer is suspended — but an
+      // explicit canvas tap can still hide it, like YouTube. Forcing it
+      // visible continuously here fought the tap toggle (show-hide
+      // flicker).
+      const rpPaused = wasm_exports.replay_paused() !== 0;
+      if (rpPaused && !rpWasPaused && !rpUiVisible) rpShowUi(true);
+      rpWasPaused = rpPaused;
+      if (rpPaused || rpSpeedMenu.classList.contains("open")) {
+        rpHideAt = Date.now() + RP_HIDE_MS;
+      } else if (rpUiVisible && Date.now() > rpHideAt) {
+        rpShowUi(false);
+      }
+      const len = wasm_exports.replay_len();
+      const pos = wasm_exports.replay_pos();
+      if (!rpDragging) rpSeek.value = Math.round(pos * 1000);
+      rpTime.textContent = fmtT(pos * len) + " / " + fmtT(len);
+      const paused = wasm_exports.replay_paused() !== 0;
+      rpPauseIcn.style.display = paused ? "none" : "block";
+      rpPlayIcn.style.display = paused ? "block" : "none";
+      rpToggle.setAttribute("aria-label", paused ? "Play replay" : "Pause replay");
+      const spd = wasm_exports.replay_speed();
+      rpSpeedBtn.textContent = rpSpeedLabel(spd);
+      rpSpeedMenu.querySelectorAll(".rp-speed-opt").forEach(opt =>
+        opt.classList.toggle("sel", Math.abs(parseFloat(opt.dataset.speed) - spd) < 0.01));
+    }, 100);
+
+    // If the deploy-time placeholders weren't substituted (e.g. opened locally),
+    // show a friendly fallback instead of the raw token.
+    // sed replaces the placeholders everywhere including in string literals,
+    // so compare with startsWith("__") rather than a literal match.
+    const gitRev = document.getElementById("git-rev");
+    const buildTime = document.getElementById("build-time");
+    const rawBuildTime = buildTime.textContent.trim(); // ISO-8601 UTC when deployed
+    if (gitRev.textContent.trim().startsWith("__")) {
+      gitRev.textContent = "dev (local build)";
+    }
+    if (rawBuildTime.startsWith("__")) {
+      buildTime.textContent = "dev (local build)";
+    }
+    // Render the baked UTC build time like the board timestamps (viewer's
+    // timezone + region-derived locale). Called when About opens, so the
+    // deferred locale scan has settled; unparseable values (dev fallback,
+    // pre-ISO deploys) are left as-is.
+    function renderBuildTime() {
+      const t = Date.parse(rawBuildTime);
+      if (!isNaN(t)) buildTime.textContent = fmtDateTime(t);
+    }
+
+    // --- What's New (About) ---
+    // whats-new.json is generated at deploy time (curated backfill +
+    // `Whats-new:` commit trailers). Fetched once per page load, lazily on
+    // first open; timestamps render via fmtDateTime like the boards. A
+    // local dev build has no deploy step, so a missing file just leaves
+    // the explanatory hint up — never an error.
+    const wnList = document.getElementById("wn-list");
+    const wnStatus = document.getElementById("wn-status");
+    let wnLoaded = false;
+    function renderWhatsNew(entries) {
+      wnList.textContent = "";
+      for (const e of entries) {
+        const li = document.createElement("li");
+        const note = document.createElement("div");
+        note.className = "wn-note";
+        note.textContent = e.note;
+        const meta = document.createElement("div");
+        meta.className = "wn-meta";
+        const t = Date.parse(e.date);
+        meta.textContent = (isNaN(t) ? e.date : fmtDateTime(t)) + " · " + e.rev;
+        li.append(note, meta);
+        wnList.appendChild(li);
+      }
+    }
+    document.getElementById("btn-whatsnew").addEventListener("click", () => {
+      showScreen("scr-whatsnew");
+      if (wnLoaded) return;
+      wnStatus.textContent = "Loading…";
+      wnStatus.style.display = "";
+      fetch("whats-new.json?nocache=" + Date.now(), { cache: "no-store" })
+        .then(r => (r.ok ? r.json() : null))
+        .then(list => {
+          if (!Array.isArray(list) || !list.length) throw new Error("no data");
+          wnLoaded = true;
+          wnStatus.style.display = "none";
+          renderWhatsNew(list);
+        })
+        .catch(() => {
+          wnStatus.textContent =
+            "What’s new is generated at deploy time — unavailable in this build";
+        });
+    });
+
+    // Cache-bust the wasm with the deploy revision so a fresh deploy never
+    // serves a stale binary from the browser/CDN cache. Locally the
+    // placeholder is untouched (sed only runs at deploy) → plain URL.
+    const wasmRev = "81a5759-pr-110";
+    load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
+
+    // Stamp the deploy revision into the game (first 8 hex chars of the git
+    // hash → u32) so serialized replay blobs record which build flew them.
+    // 0 = local dev build. Exports aren't ready immediately; retry like the
+    // velocity-toggle probe below.
+    const buildId = wasmRev.startsWith("__")
+      ? 0
+      : (parseInt(wasmRev.slice(0, 8), 16) || 0) >>> 0;
+    const buildIdTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_build_id) {
+        wasm_exports.set_build_id(buildId);
+        clearInterval(buildIdTimer);
+      }
+    }, 200);
+
+    // --- Stale-cache detection ---
+    // GitHub Pages caches index.html for ~10 minutes, so right after a deploy
+    // this page (and the ?v= it carries) can be the PREVIOUS build. Compare
+    // the baked-in revision against version.json fetched with the cache
+    // bypassed; on mismatch show a reload toast. Reloading navigates to a
+    // ?fresh=<ts> URL, which skips the cached HTML entirely.
+    const updateToast = document.getElementById("update-toast");
+    let lastVersionCheck = 0;
+
+    // Navigate to a ?fresh=<ts> URL: a unique query string bypasses the
+    // cached copy of index.html (a plain reload would re-serve it).
+    function freshReload() {
+      pegAnalytics.enqueue("stale_cache", { action: "reload" });
+      pegAnalytics.flushNow(); // beacon — survives the navigation below
+      location.replace(location.pathname + "?fresh=" + Date.now());
+    }
+
+    function checkVersion() {
+      if (wasmRev.startsWith("__")) return;          // local dev: no version.json
+      const now = Date.now();
+      if (now - lastVersionCheck < 30000) return;    // throttle
+      lastVersionCheck = now;
+      fetch("./version.json?nocache=" + now, { cache: "no-store" })
+        .then(r => (r.ok ? r.json() : null))
+        .then(v => {
+          if (v && v.revision && v.revision !== wasmRev) {
+            if (!updateToast.classList.contains("show")) {
+              pegAnalytics.enqueue("stale_cache", { action: "shown" });
+            }
+            updateToast.classList.add("show");
+          }
+        })
+        .catch(() => {});                            // offline / pre-toast deploys: ignore
+    }
+
+    updateToast.addEventListener("mousedown", e => e.stopPropagation());
+    updateToast.addEventListener("click", e => {
+      e.stopPropagation();
+      freshReload();
+    });
+    updateToast.addEventListener("touchstart", e => {
+      e.preventDefault();
+      e.stopPropagation();
+      freshReload();
+    }, { passive: false });
+
+    // Sound toggle: OFF by default (only "1" enables it). Forwarded to the
+    // game, persisted per device; re-applied once the exports load.
+    const soundToggle = document.getElementById("sound-toggle");
+    soundToggle.checked = localStorage.getItem("pegasus_sound") === "1";
+    function applySoundSetting() {
+      call("set_sound_enabled", soundToggle.checked ? 1 : 0);
+    }
+    soundToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_sound", soundToggle.checked ? "1" : "0");
+      applySoundSetting();
+    });
+    const soundTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_sound_enabled) {
+        applySoundSetting();
+        clearInterval(soundTimer);
+      }
+    }, 200);
+
+    // Velocity-vector toggle: forwarded to the game, persisted per device.
+    const velToggle = document.getElementById("vel-toggle");
+    velToggle.checked = localStorage.getItem("pegasus_show_vel") === "1";
+    function applyVelSetting() {
+      call("set_show_velocity", velToggle.checked ? 1 : 0);
+    }
+    velToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_show_vel", velToggle.checked ? "1" : "0");
+      applyVelSetting();
+    });
+    // The WASM exports aren't ready immediately; apply the saved value once
+    // they are (same pattern as the safe-area probe).
+    const velTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_show_velocity) {
+        applyVelSetting();
+        clearInterval(velTimer);
+      }
+    }, 200);
+
+    // Invert-stick toggle: negates the commanded nose direction in-game
+    // (push down = nose up). Forwarded to the WASM `set_invert_stick` export
+    // and persisted per device; re-applied once the exports load (same
+    // pattern as the velocity toggle).
+    const invToggle = document.getElementById("inv-toggle");
+    invToggle.checked = localStorage.getItem("pegasus_invert_stick") === "1";
+    function applyInvSetting() {
+      call("set_invert_stick", invToggle.checked ? 1 : 0);
+    }
+    invToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_invert_stick", invToggle.checked ? "1" : "0");
+      applyInvSetting();
+    });
+    const invTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_invert_stick) {
+        applyInvSetting();
+        clearInterval(invTimer);
+      }
+    }, 200);
+
+    // --- Level picker ---
+    // Levels are DATA files (levels/*.level) fetched at runtime, so new
+    // levels deploy without recompiling the wasm. levels/manifest.json lists
+    // them in menu order; each file's `name =` line labels its row. The
+    // selected level's text is written into a wasm-side buffer
+    // (level_buf_ptr + load_level) and the game restarts on it. The choice
+    // persists in localStorage, as does the best distance per level file
+    // (mirrored from the get_best_dist export below). If the manifest can't
+    // be fetched the list stays empty (with a hint) and the game keeps its
+    // built-in level.
+    const levelList = document.getElementById("level-list");
+    const levelNone = document.getElementById("level-none");
+    const scoresLevelEl = document.getElementById("scores-level");
+    const levelTexts = {};        // file -> level text
+    const levelNames = {};        // file -> display name
+    const levelFiles = [];        // manifest order
+    let currentLevelFile = null;  // the level LOADED in the game
+    let scoresFile = null;        // the level whose board scr-scores shows
+    let levelPickerMode = "fly";  // "fly" -> pick & load & fly; "scores" -> pick & show board
+
+    // Time-scored levels (scoring = time in the level file) rank by lowest
+    // completion time — their scores render as m:ss.t clocks, not metres.
+    function levelIsTime(file) {
+      const t = file && levelTexts[file];
+      return !!t && /^\s*scoring\s*=\s*time\s*$/mi.test(t);
+    }
+    function fmtClock(secs) {
+      const m = Math.floor(secs / 60), r = secs - m * 60;
+      return m + ":" + (r < 10 ? "0" : "") + r.toFixed(1);
+    }
+    function fmtScore(file, score) {
+      return levelIsTime(file) ? fmtClock(score) : Math.round(score) + " m";
+    }
+
+    const levelBestEls = {}; // file -> the row's {d, by} spans, for in-place updates
+    // Fill a row's best cell: the global record over "by <pilot>" (both
+    // picker modes). In-place only — see the DOM-stability rule in
+    // renderLevels.
+    function setLevelBest(file) {
+      const els = levelBestEls[file];
+      if (!els) return;
+      const e = globalBestEntryFor(file);
+      els.d.textContent = e && e.score > 0 ? "best " + fmtScore(file, e.score) : "—";
+      els.by.textContent = e && e.name ? "by " + e.name.toUpperCase() : "";
+    }
+    function renderLevels() {
+      // A chooser, not a status view — no pre-selected highlight. The "best"
+      // shown per row is the level's GLOBAL all-time record (from the board
+      // cache, warmed by prefetchGlobalBests); "—" offline/unknown.
+      //
+      // Async results must NOT call back into this function: rebuilding the
+      // rows under an in-flight tap made the tap land on whatever ended up
+      // at those coordinates — including the Back button right below the
+      // list (= surprise exit to the main menu, seen in the field). Late
+      // data updates go through levelBestEls in place instead.
+      levelList.textContent = "";
+      for (const file of levelFiles) {
+        const row = document.createElement("div");
+        row.className = "row";
+        const name = document.createElement("span");
+        name.className = "lname";
+        name.textContent = levelNames[file];
+        const best = document.createElement("span");
+        best.className = "lbest";
+        const bd = document.createElement("span");
+        const by = document.createElement("span");
+        by.className = "lbest-by";
+        best.append(bd, by);
+        levelBestEls[file] = { d: bd, by };
+        setLevelBest(file);
+        row.append(name, best);
+        if (levelPickerMode === "scores") {
+          // Drill-down affordance: tapping a row opens that level's board.
+          const chev = document.createElement("span");
+          chev.className = "chev";
+          chev.textContent = "›";
+          row.appendChild(chev);
+        }
+        row.addEventListener("click", () => {
+          if (levelPickerMode === "scores") {
+            // View this level's board WITHOUT reloading the game (checking a
+            // board must never reset the flight waiting behind the menu).
+            scoresFile = file;
+            showScreen("scr-scores");
+            return;
+          }
+          localStorage.setItem("pegasus_level", file);
+          pushLevel(file); // no-op if it's already the loaded level
+          closeMenu();     // ...and fly it
+        });
+        levelList.appendChild(row);
+      }
+    }
+
+    function pushLevel(file) {
+      const text = levelTexts[file];
+      if (text === undefined) return;
+      const push = () => {
+        if (typeof wasm_exports === "undefined" || !wasm_exports.load_level) return false;
+        collectEndedRun(); // collect any just-ended run under the OLD level first
+        pegAnalytics.pollRuns(); // same: the run belongs to the OLD level
+        const bytes = new TextEncoder().encode(text);
+        const ptr = wasm_exports.level_buf_ptr(bytes.length);
+        new Uint8Array(wasm_memory.buffer, ptr, bytes.length).set(bytes);
+        wasm_exports.load_level(bytes.length); // also clears the in-game best
+        currentLevelFile = file;
+        scoresFile = file; // the board defaults to the loaded level
+        ghostLoadedPath = null; // the fresh start dropped the old ghost
+        renderLevels();
+        renderScores();
+        applyGlobalRecord(file); // global record -> BEST readout + ghost
+        return true;
+      };
+      // Exports may not be ready yet (startup restore) — retry like the
+      // other setting probes.
+      if (!push()) {
+        const t = setInterval(() => { if (push()) clearInterval(t); }, 200);
+      }
+    }
+
+    // --- Custom draft level (from the level editor, editor.html) ---
+    // The editor's TEST FLY stores its exported `.level` text under
+    // pegasus_custom_level and opens ./?custom=1. The draft shows up as its
+    // own picker row ("<name> (draft)") and flies like any level, but it is
+    // strictly LOCAL: no global boards, no score submits, no ghost — drafts
+    // aren't shipped levels, so their scores could never verify anyway (the
+    // guards live in maybeSubmitOnline / applyGlobalRecord /
+    // prefetchGlobalBests / renderGlobalScores).
+    const CUSTOM_LEVEL_FILE = "custom-draft.level";
+    const isCustomLevel = file => file === CUSTOM_LEVEL_FILE;
+    function registerCustomLevel() {
+      let text = null;
+      try { text = localStorage.getItem("pegasus_custom_level"); } catch (e) {}
+      if (!text || !/^\s*poly\s*=/m.test(text)) return false; // editor output only
+      levelTexts[CUSTOM_LEVEL_FILE] = text;
+      levelNames[CUSTOM_LEVEL_FILE] =
+        (((text.match(/^\s*name\s*=\s*(.+)$/m) || [])[1]) || "Custom level").trim()
+        + " (draft)";
+      if (!levelFiles.includes(CUSTOM_LEVEL_FILE)) levelFiles.push(CUSTOM_LEVEL_FILE);
+      return true;
+    }
+
+    fetch("levels/manifest.json?nocache=" + Date.now(), { cache: "no-store" })
+      .then(r => (r.ok ? r.json() : null))
+      .catch(() => null) // local dev without a server: built-in level (+ draft)
+      .then(async m => {
+        if (m && Array.isArray(m.levels)) {
+          for (const file of m.levels) {
+            try {
+              const r = await fetch("levels/" + file + "?nocache=" + Date.now(), { cache: "no-store" });
+              if (!r.ok) continue;
+              const text = await r.text();
+              levelTexts[file] = text;
+              levelNames[file] =
+                ((text.match(/^\s*name\s*=\s*(.+)$/m) || [])[1] || file).trim();
+              levelFiles.push(file);
+            } catch (e) { /* skip an unfetchable level */ }
+          }
+        }
+        const hasCustom = registerCustomLevel();
+        if (!levelFiles.length) return;
+        levelNone.style.display = "none";
+        // ?custom=1 (the editor's TEST FLY) boots straight into the draft —
+        // load it and close the menu, exactly like a fly-mode picker tap.
+        if (hasCustom && new URLSearchParams(location.search).has("custom")) {
+          pushLevel(CUSTOM_LEVEL_FILE);
+          closeMenu();
+          return;
+        }
+        const saved = localStorage.getItem("pegasus_level");
+        const start = levelTexts[saved] !== undefined ? saved : levelFiles[0];
+        pushLevel(start);
+      })
+      .catch(() => {});
+
+    // --- High scores (global-only) ---
+    // The game publishes every ended run (crash, or a manual reset while
+    // alive) as a deflated recording blob + final distance + a bumped
+    // sequence number; the online submit flow is its only consumer. Scores,
+    // replays and the racing ghost all live on the global board — there is
+    // no local store any more (the old pegasus_best_<file> /
+    // pegasus_scores_<file> keys are cleared below).
+    const scoresList = document.getElementById("scores-list");
+    const scoresEmpty = document.getElementById("scores-empty");
+
+    // Clear the dead local high-score layer left by earlier builds — the
+    // base64 replay blobs made it by far the biggest thing in localStorage.
+    try {
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i);
+        if (k && (k.startsWith("pegasus_best_") || k.startsWith("pegasus_scores_"))) {
+          localStorage.removeItem(k);
+        }
+      }
+    } catch (e) { /* storage unavailable — nothing to clean */ }
+
+    // Uint8Array -> base64 (chunked: String.fromCharCode has an argument
+    // limit, and replay blobs can reach hundreds of KB), for the submit
+    // POST body.
+    function b64FromBytes(bytes) {
+      let out = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) {
+        out += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      }
+      return btoa(out);
+    }
+
+    function pushBytesToWasm(bytes, exportName) {
+      if (typeof wasm_exports === "undefined" || !wasm_exports[exportName]) return false;
+      const ptr = wasm_exports.blob_in_ptr(bytes.length);
+      new Uint8Array(wasm_memory.buffer, ptr, bytes.length).set(bytes);
+      return wasm_exports[exportName](bytes.length) === 1;
+    }
+    // UTF-8 text through the same blob_in_ptr buffer (set_best_name /
+    // set_ghost_name — void consumers, so no return check).
+    function pushTextToWasm(text, exportName) {
+      if (typeof wasm_exports === "undefined" || !wasm_exports[exportName]) return;
+      const b = new TextEncoder().encode(text || "");
+      const ptr = wasm_exports.blob_in_ptr(b.length);
+      new Uint8Array(wasm_memory.buffer, ptr, b.length).set(b);
+      wasm_exports[exportName](b.length);
+    }
+
+    // The board shows `scoresFile` — the level picked for viewing, which
+    // defaults to the loaded level but can differ (browsing another level's
+    // scores must not reload the game).
+    function renderScores() {
+      const file = scoresFile || currentLevelFile;
+      scoresLevelEl.textContent = file ? (levelNames[file] || "") : "";
+      updateResetHint(); // clears itself on all-time / offline
+      renderGlobalScores();
+    }
+
+    // Collect a newly ended run for the online submit flow. Called on a
+    // short poll and right before a level switch (so the run lands under
+    // the level it was actually flown on).
+    let lastRunSeq = 0;
+    function collectEndedRun() {
+      if (!currentLevelFile) return;
+      if (typeof wasm_exports === "undefined" || !wasm_exports.run_seq) return;
+      const seq = wasm_exports.run_seq();
+      if (seq === lastRunSeq) return;
+      lastRunSeq = seq;
+      if (!backendCfg) return; // offline: nowhere to submit
+      const len = wasm_exports.run_blob_len();
+      if (!len) return;
+      const bytes = new Uint8Array(wasm_memory.buffer, wasm_exports.run_blob_ptr(), len).slice();
+      maybeSubmitOnline(currentLevelFile,
+        { d: wasm_exports.run_dist(), b: b64FromBytes(bytes) });
+    }
+    setInterval(() => {
+      collectEndedRun();
+      pegAnalytics.pollRuns();
+    }, 500);
+
+    // --- Online high scores (dannyrhubarb/pegasus-backend) -----------------
+    // config.json ({apiBaseUrl, replayBaseUrl}) is written at deploy time
+    // from the BACKEND_CONFIG_JSON repo variable (see build-site); no file =
+    // offline build (local dev, forks, variable unset): no boards, no ghost,
+    // and the BEST readout is session-only. With it: every crash-ended run
+    // gets the submit/skip dialog (name prefilled once persisted as
+    // `pegasus_player_name`), the High-scores screen fetches the top-50
+    // board (today / week / all time), and its ▶ buttons pull the replay
+    // blob from CloudFront into the watch_replay_blob path.
+    let backendCfg = null;
+    let pendingSubmit = null; // {file, entry} awaiting the first-time dialog
+    const scoresPeriodRow = document.getElementById("scores-period");
+    const scoresWait = document.getElementById("scores-wait");
+    const setLoading = (on) => scoresWait.classList.toggle("on", on);
+    const scoresReset = document.getElementById("scores-reset");
+
+    // Countdown to the current bucket's end on the Today / This week boards.
+    // Buckets are UTC (see the backend's boards.rs): the day flips at UTC
+    // midnight, the ISO week at Monday 00:00 UTC. Re-rendered per board
+    // render and on a slow tick while the screen is up.
+    function updateResetHint() {
+      if (!backendCfg || scoresPeriod === "alltime") {
+        scoresReset.textContent = "";
+        return;
+      }
+      const now = new Date();
+      let end = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+      if (scoresPeriod === "week") {
+        const dow = (now.getUTCDay() + 6) % 7; // Mon = 0
+        end = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + (7 - dow));
+      }
+      const mins = Math.max(1, Math.floor((end - now.getTime()) / 60000));
+      const d = Math.floor(mins / 1440), h = Math.floor((mins % 1440) / 60), m = mins % 60;
+      const dur = d > 0 ? d + "d " + h + "h" : h > 0 ? h + "h " + m + "m" : m + "m";
+      scoresReset.textContent = (scoresPeriod === "week"
+        ? "This week's board resets in " : "Today's board resets in ") + dur;
+    }
+    setInterval(() => { if (overlay === "scr-scores") updateResetHint(); }, 30000);
+    const scoresStatus = document.getElementById("scores-status");
+    const nameRow = document.getElementById("name-row");
+    const nameCur = document.getElementById("name-cur");
+    const nameDistEl = document.getElementById("name-dist");
+    const nameScoreEl = document.getElementById("name-score");
+    const nameInput = document.getElementById("name-input");
+    let scoresPeriod = "alltime";
+
+    function playerName() {
+      return localStorage.getItem("pegasus_player_name") || "";
+    }
+    function levelStem(file) {
+      return file.replace(/\.level$/, ""); // the backend keys boards by stem
+    }
+
+    // Board timestamps: formatted for the region derived from the device
+    // TIMEZONE — the one regional setting browsers actually expose.
+    // Language tags lie about region: a phone set to English in Sweden
+    // reports a bare en-US (verified in the field via a temporary Settings
+    // debug readout), but its Intl.DateTimeFormat().resolvedOptions()
+    // .timeZone is still Europe/Stockholm. Intl only maps region -> zones
+    // (Intl.Locale getTimeZones), so reverse-map by scanning the 676
+    // candidate region codes for the one whose zone list contains ours
+    // (~200 ms: deferred off the boot path and memoized in localStorage).
+    // Formatting then follows the REGION'S OWN conventions — its dominant
+    // language via maximize() (und-SE -> sv-Latn-SE -> "2026-07-11 16:00"),
+    // NOT the UI language glued onto the region (en-SE inserts a comma
+    // that is not the standard Swedish format). These timestamps are
+    // purely numeric, so no words from that language ever surface;
+    // -u-nu-latn pins Latin digits for regions whose default numerals
+    // aren't. Regionless zones (UTC, Etc/*), missing APIs (old Safari),
+    // or a not-yet-finished scan fall back to a fixed ISO local format.
+    let DATE_LOCALE = null;
+    (function initDateLocale() {
+      let zone = "";
+      try { zone = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) { return; }
+      if (!zone) return;
+      try {
+        const c = JSON.parse(localStorage.getItem("pegasus_date_locale") || "null");
+        // v2: region-dominant-language formatting (v1 cached <lang>-<region>)
+        if (c && c.v === 2 && c.zone === zone) { DATE_LOCALE = c.locale; return; }
+      } catch (e) { /* recompute below */ }
+      setTimeout(() => {
+        let locale = null;
+        for (let i = 0; i < 26 && !locale; i++) {
+          for (let j = 0; j < 26; j++) {
+            const region = String.fromCharCode(65 + i) + String.fromCharCode(65 + j);
+            let zones;
+            try {
+              const l = new Intl.Locale("und-" + region);
+              zones = l.getTimeZones ? l.getTimeZones() : l.timeZones;
+            } catch (e) { continue; }
+            if (zones && zones.includes(zone)) {
+              try { locale = new Intl.Locale("und-" + region).maximize().toString() + "-u-nu-latn"; }
+              catch (e) { locale = "en-" + region; }
+              break;
+            }
+          }
+        }
+        DATE_LOCALE = locale;
+        try {
+          localStorage.setItem("pegasus_date_locale", JSON.stringify({ v: 2, zone, locale }));
+        } catch (e) { /* quota — recompute next load */ }
+      }, 0);
+    })();
+    function fmtDateTime(ts) {
+      const d = new Date(ts);
+      if (DATE_LOCALE) {
+        try { return d.toLocaleString(DATE_LOCALE, { dateStyle: "short", timeStyle: "short" }); }
+        catch (e) { /* engine rejects the constructed tag — fall through */ }
+      }
+      const p = n => String(n).padStart(2, "0");
+      return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate())
+        + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+    }
+
+    fetch("config.json?nocache=" + Date.now(), { cache: "no-store" })
+      .then(r => (r.ok ? r.json() : null))
+      .then(c => {
+        pegAnalytics.configure(c); // analytics needs only apiBaseUrl
+        if (!c || !c.apiBaseUrl || !c.replayBaseUrl) return;
+        backendCfg = c;
+        scoresPeriodRow.style.display = "";
+        nameRow.style.display = "";
+        nameCur.textContent = playerName() || "—";
+        if (overlay === "scr-scores") renderScores(); // config raced the open screen
+        applyGlobalRecord(currentLevelFile); // ...or raced the level load
+      })
+      .catch(() => {}); // offline build / no server: everything stays local
+
+    function submitScore(file, entry) {
+      // The replay is mandatory: the server re-simulates it to verify the
+      // claimed score before the run reaches any board (maybeSubmitOnline
+      // guarantees entry.b exists and fits the 512 KiB decoded cap).
+      const body = {
+        level: levelStem(file), name: playerName(), score: entry.d,
+        replay: entry.b,
+      };
+      fetch(backendCfg.apiBaseUrl + "/v1/scores", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }).then(r => {
+        if (!r.ok) { console.warn("score submit failed:", r.status); return; }
+        applyGlobalRecord(file); // a new record should race the next spawn
+      }).catch(e => console.warn("score submit failed:", e));
+    }
+
+    function maybeSubmitOnline(file, entry) {
+      if (isCustomLevel(file)) return; // drafts are local-only, never submitted
+      // No replay (or one over the server's 512 KiB decoded cap ≈ 699k
+      // base64 chars — multi-hour runs only) means the server can't verify
+      // the run, so it isn't submittable at all; don't offer the dialog.
+      if (!backendCfg || entry.d < 1 || !entry.b || entry.b.length > 699050) return;
+      // Submission is always an EXPLICIT choice: every crash-ended run gets
+      // the submit/skip dialog (name prefilled once persisted). The gate on
+      // state 1 wreck / 2 dialog means reset-ended runs (restart / exit to
+      // menu mid-flight) never pop UI over the new flight — and therefore
+      // are not submitted at all. A COMPLETED time level publishes during
+      // the "LEVEL COMPLETE" grace while the mode is still flying (state
+      // 0 — the game-over dialog follows 1.6 s later), so the state gate
+      // alone dropped it: the 500 ms collect poll consumes run_seq before
+      // state 2 ever shows. Cause 3 on the analytics mirror (set in the
+      // same frame as the publish) identifies it; reset-ended runs
+      // (cause 1) stay excluded.
+      const st = wasm_exports.ui_state ? wasm_exports.ui_state() : 0;
+      const complete = wasm_exports.run_end_cause && wasm_exports.run_end_cause() === 3;
+      if (st === 1 || st === 2 || complete) pendingSubmit = { file, entry };
+    }
+
+    // The submit-score dialog doubles as the Settings name editor: with a
+    // pending run it submits on save, without one it just persists the name.
+    let nameReturnTo = "scr-gameover";
+    function openNameDialog(returnTo) {
+      nameReturnTo = returnTo;
+      // Big amber score readout like the game-over screen; empty (zero
+      // height) in the Settings name-editor mode.
+      nameScoreEl.textContent = pendingSubmit
+        ? fmtScore(currentLevelFile, pendingSubmit.entry.d) : "";
+      nameDistEl.textContent = pendingSubmit
+        ? "Submit to the global board?"
+        : "Shown on the global boards";
+      nameInput.value = playerName();
+      showScreen("scr-name");
+      nameInput.focus();
+    }
+    nameRow.addEventListener("click", () => openNameDialog("scr-settings"));
+    document.getElementById("btn-name-submit").addEventListener("click", () => {
+      const name = nameInput.value.replace(/\s+/g, " ").trim().slice(0, 24);
+      if (!name) { nameInput.focus(); return; }
+      localStorage.setItem("pegasus_player_name", name);
+      nameCur.textContent = name;
+      if (pendingSubmit) {
+        pegAnalytics.enqueue("score_submit",
+          { action: "submitted", level: levelStem(pendingSubmit.file) });
+        submitScore(pendingSubmit.file, pendingSubmit.entry);
+        pendingSubmit = null;
+      }
+      showScreen(nameReturnTo);
+    });
+    document.getElementById("btn-name-skip").addEventListener("click", () => {
+      // Only the crash-flow ask counts as a skip — closing the Settings
+      // name editor (no pending run) is not a submit decision.
+      if (pendingSubmit) {
+        pegAnalytics.enqueue("score_submit",
+          { action: "skipped", level: levelStem(pendingSubmit.file) });
+      }
+      pendingSubmit = null; // this run stays unsubmitted; asks again next crash
+      showScreen(nameReturnTo);
+    });
+    nameInput.addEventListener("keydown", e => {
+      e.stopPropagation(); // typing must never reach the game's key handlers
+      if (e.key === "Enter") document.getElementById("btn-name-submit").click();
+    });
+
+    // Period picker (global board only).
+    scoresPeriodRow.querySelectorAll(".chip").forEach(ch =>
+      ch.addEventListener("click", () => {
+        scoresPeriod = ch.dataset.period;
+        scoresPeriodRow.querySelectorAll(".chip").forEach(c =>
+          c.classList.toggle("sel", c === ch));
+        renderScores();
+      }));
+
+    // Global board: fetched on every entry to the High-scores screen (and
+    // per picker tap); a stale response (slow fetch racing a picker tap) is
+    // dropped via the sequence check. While the screen isn't up, skip the
+    // network entirely — banking a run calls renderScores too, and the
+    // entry-point refetch in showScreen covers freshness.
+    // Board result cache (level|period -> scores[]), persisted so it
+    // survives reloads. Two jobs: show a cached board INSTANTLY on entry
+    // while a fresh fetch runs in the background, and feed the level
+    // picker's per-level "best" (the all-time #1) without a blocking fetch.
+    const BOARD_CACHE_KEY = "pegasus_board_cache";
+    let boardCache = {};
+    try { boardCache = JSON.parse(localStorage.getItem(BOARD_CACHE_KEY) || "{}") || {}; }
+    catch (e) { boardCache = {}; }
+    const cacheKey = (stem, period) => stem + "|" + period;
+    function getBoard(stem, period) { return boardCache[cacheKey(stem, period)]; }
+    function putBoard(stem, period, scores) {
+      boardCache[cacheKey(stem, period)] = scores;
+      try { localStorage.setItem(BOARD_CACHE_KEY, JSON.stringify(boardCache)); }
+      catch (e) { /* quota — cache is best-effort */ }
+    }
+    // Global all-time record entry for a level, for the picker rows
+    // ({name, score, ...} — null if unknown).
+    function globalBestEntryFor(file) {
+      const c = getBoard(levelStem(file), "alltime");
+      return c && c.length ? c[0] : null;
+    }
+
+    // The global all-time record drives the in-flight BEST readout and the
+    // racing ghost: refresh the loaded level's all-time board, raise the
+    // in-game best to the record, and push the record's replay blob in as
+    // the ghost. Called after every level load, when config.json arrives
+    // (it can race the startup level load), and after a successful submit
+    // (a new record should race the very next spawn). Everything is
+    // best-effort: offline or with an empty board the game just flies
+    // without a record. The `currentLevelFile` re-checks drop responses
+    // that arrive after the player switched levels (the game would also
+    // drop a wrong-level ghost itself, but skip the wasted push).
+    let ghostLoadedPath = null; // replayPath already in the game (skip refetch)
+    function applyGlobalRecord(file) {
+      if (!backendCfg || !file || file !== currentLevelFile || isCustomLevel(file)) return;
+      const stem = levelStem(file);
+      fetch(backendCfg.apiBaseUrl + "/v1/levels/" + encodeURIComponent(stem)
+            + "/scores?period=alltime", { cache: "no-store" })
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+          if (data) putBoard(stem, "alltime", data.scores || []);
+          const scores = getBoard(stem, "alltime") || []; // fresh, else cached
+          if (file !== currentLevelFile || !scores.length) return;
+          if (typeof wasm_exports !== "undefined") {
+            if (levelIsTime(file)) {
+              // Time level: the all-time board ranks fastest-first and
+              // LOWER wins, so the record only ever lowers the seeded best.
+              if (wasm_exports.get_best_time && wasm_exports.set_best_time) {
+                const cur = wasm_exports.get_best_time();
+                if (cur <= 0 || scores[0].score < cur) {
+                  wasm_exports.set_best_time(scores[0].score);
+                }
+                // Attribute the record under the HUD BEST line — unless the
+                // session's own (unsubmitted) best is already faster, in
+                // which case the game shows "by you" on its own.
+                if (scores[0].score <= wasm_exports.get_best_time()) {
+                  pushTextToWasm(scores[0].name, "set_best_name");
+                }
+              }
+            } else if (wasm_exports.get_best_dist) {
+              if (scores[0].score > wasm_exports.get_best_dist()) {
+                wasm_exports.set_best_dist(scores[0].score);
+              }
+              // Attribute the record under the HUD BEST line — unless the
+              // session's own (unsubmitted) best already beats the board, in
+              // which case the game shows "by you" on its own.
+              if (scores[0].score >= wasm_exports.get_best_dist()) {
+                pushTextToWasm(scores[0].name, "set_best_name");
+              }
+            }
+          }
+          // The ghost is the best run that still carries a replay blob
+          // (over-long runs submit score-only).
+          const g = scores.find(s => s.replayPath);
+          if (!g || g.replayPath === ghostLoadedPath) return;
+          return fetch(backendCfg.replayBaseUrl + "/" + g.replayPath)
+            .then(r => (r.ok ? r.arrayBuffer() : null))
+            .then(buf => {
+              if (!buf || file !== currentLevelFile) return;
+              if (pushBytesToWasm(new Uint8Array(buf), "load_ghost_blob")) {
+                ghostLoadedPath = g.replayPath;
+                // The pilot's callsign floats under the ghost in-game.
+                pushTextToWasm(g.name, "set_ghost_name");
+              }
+            });
+        })
+        .catch(() => {}); // offline / server down: fly without a record
+    }
+
+    // Build the board rows for one score list (shared by cached + fresh
+    // renders). Each entry is TWO LINES: rank / [name over localised
+    // date+time] / distance / ▶ watch. renderedBoardJson remembers what's
+    // on screen so a background refetch that returns identical data doesn't
+    // rebuild the DOM under an in-flight tap (same mis-tap hazard as the
+    // level picker — see renderLevels).
+    let renderedBoardJson = null;
+    function renderBoardRows(scores) {
+      renderedBoardJson = JSON.stringify(scores);
+      scoresList.textContent = "";
+      scoresEmpty.style.display = scores.length ? "none" : "";
+      scores.forEach((s, i) => {
+        const li = document.createElement("li");
+        const rank = document.createElement("span");
+        rank.className = "rank";
+        rank.textContent = (i + 1) + ".";
+        const col = document.createElement("span");
+        col.className = "pcol";
+        const who = document.createElement("span");
+        who.className = "pname";
+        who.textContent = s.name;
+        const when = document.createElement("span");
+        when.className = "pdate";
+        when.textContent = s.ts ? fmtDateTime(s.ts) : "";
+        col.append(who, when);
+        const dist = document.createElement("span");
+        dist.className = "dist";
+        dist.textContent = fmtScore(scoresFile, s.score);
+        li.append(rank, col, dist);
+        if (s.replayPath) {
+          const watch = document.createElement("button");
+          watch.className = "watch";
+          watch.textContent = "▶ watch";
+          watch.addEventListener("click", e => {
+            e.stopPropagation();
+            watchGlobalReplay(s.replayPath); // blob fetched only now, on tap
+          });
+          li.appendChild(watch);
+        }
+        scoresList.appendChild(li);
+      });
+    }
+
+    let globalFetchSeq = 0;
+    function renderGlobalScores() {
+      if (overlay !== "scr-scores") return;
+      const file = scoresFile || currentLevelFile;
+      if (isCustomLevel(file)) {
+        // Drafts never touch the backend — no board to show or fetch.
+        scoresList.textContent = "";
+        renderedBoardJson = null;
+        scoresEmpty.style.display = "none";
+        scoresStatus.textContent = "Draft levels have no global board";
+        scoresStatus.style.display = "";
+        return;
+      }
+      if (!backendCfg || !file) {
+        // Offline build (or the config fetch hasn't landed): scores are
+        // global-only, so there is nothing to show.
+        scoresList.textContent = "";
+        renderedBoardJson = null;
+        scoresEmpty.style.display = "none";
+        scoresStatus.textContent = "Global scores need a connection";
+        scoresStatus.style.display = "";
+        return;
+      }
+      const stem = levelStem(file);
+      // Show the cached board immediately; the spinner covers both the cold
+      // load and the background refresh of a cached board.
+      const cached = getBoard(stem, scoresPeriod);
+      scoresStatus.style.display = "none";
+      if (cached) { renderBoardRows(cached); }
+      else { scoresList.textContent = ""; renderedBoardJson = null;
+             scoresEmpty.style.display = "none"; }
+      setLoading(true);
+      const seq = ++globalFetchSeq;
+      const url = backendCfg.apiBaseUrl + "/v1/levels/"
+        + encodeURIComponent(stem) + "/scores?period=" + scoresPeriod;
+      fetch(url, { cache: "no-store" })
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+          if (seq !== globalFetchSeq) return;
+          if (!data) throw new Error("bad response");
+          setLoading(false);
+          const scores = data.scores || [];
+          putBoard(stem, scoresPeriod, scores);
+          // Rebuild only when the data actually changed — a rebuild under an
+          // in-flight tap retargets it (see renderBoardRows).
+          if (JSON.stringify(scores) !== renderedBoardJson) renderBoardRows(scores);
+        })
+        .catch(() => {
+          if (seq !== globalFetchSeq) return;
+          setLoading(false);
+          // Keep the cached board on screen if we have one; only surface the
+          // error when there's nothing to show.
+          if (!cached) { scoresStatus.textContent = "Couldn't reach the score server";
+                         scoresStatus.style.display = ""; }
+        });
+    }
+
+    // Warm each level's global record for the picker rows. The cached value
+    // (if any) paints immediately via renderLevels; this refreshes it in the
+    // background on every picker open (a deliberate, infrequent action — a
+    // few tiny GETs, and an empty cached board must not stay stale after a
+    // run lands). Rows update in place as results arrive.
+    function prefetchGlobalBests() {
+      if (!backendCfg) return;
+      for (const file of levelFiles) {
+        if (isCustomLevel(file)) continue; // no board behind a draft
+        const stem = levelStem(file);
+        fetch(backendCfg.apiBaseUrl + "/v1/levels/" + encodeURIComponent(stem) + "/scores?period=alltime",
+              { cache: "no-store" })
+          .then(r => (r.ok ? r.json() : null))
+          .then(data => {
+            if (!data) return;
+            putBoard(stem, "alltime", data.scores || []);
+            // In-place text update ONLY — never rebuild the rows from an
+            // async callback (see renderLevels).
+            setLevelBest(file);
+          })
+          .catch(() => {});
+      }
+    }
+
+    // A global replay plays through the exact machinery as a local one —
+    // the blob carries its level in the header, so it re-sims in the world
+    // it was flown in even if that's not the selected level. Failures are
+    // SURFACED on the status line ("HTTP 403" = CDN/permissions, "Failed to
+    // fetch" = network/CORS, "rejected" = format/build mismatch) — a silent
+    // watch button is undebuggable in the field.
+    function watchGlobalReplay(path) {
+      setLoading(true);
+      scoresStatus.style.display = "none";
+      fetch(backendCfg.replayBaseUrl + "/" + path)
+        .then(r => {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.arrayBuffer();
+        })
+        .then(buf => {
+          if (!pushBytesToWasm(new Uint8Array(buf), "watch_replay_blob")) {
+            throw new Error("replay rejected by the game (build mismatch?)");
+          }
+          setLoading(false);
+          pegAnalytics.replayWatch("scores");
+          watchFromMenu = true;
+          closeMenu(); // the ui_state poll returns here when it ends
+        })
+        .catch(e => {
+          console.warn("replay fetch failed:", e);
+          setLoading(false);
+          scoresStatus.textContent = "Replay unavailable — " + e.message;
+          scoresStatus.style.display = "";
+        });
+    }
+
+    // "Race best ghost" toggle (on by default), same pattern as the others.
+    const ghostToggle = document.getElementById("ghost-toggle");
+    ghostToggle.checked = localStorage.getItem("pegasus_ghost") !== "0";
+    function applyGhostSetting() {
+      call("set_ghost_enabled", ghostToggle.checked ? 1 : 0);
+    }
+    ghostToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_ghost", ghostToggle.checked ? "1" : "0");
+      applyGhostSetting();
+    });
+    const ghostTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_ghost_enabled) {
+        applyGhostSetting();
+        clearInterval(ghostTimer);
+      }
+    }, 200);
+
+    // "Debug HUD" toggle (OFF by default): shows the developer telemetry line
+    // + the minimap. Same plumbing as the others.
+    const debugToggle = document.getElementById("debug-toggle");
+    debugToggle.checked = localStorage.getItem("pegasus_debug_hud") === "1";
+    const resetConsentBtn = document.getElementById("reset-consent");
+    function applyDebugSetting() {
+      call("set_debug_hud", debugToggle.checked ? 1 : 0);
+      // The consent-reset test button rides the same switch.
+      resetConsentBtn.style.display = debugToggle.checked ? "" : "none";
+    }
+    resetConsentBtn.addEventListener("click", () => {
+      pegAnalytics.resetConsent();
+      resetConsentBtn.textContent = "Consent forgotten — crash to re-test";
+      setTimeout(() => { resetConsentBtn.textContent = "Reset analytics consent"; }, 2000);
+    });
+    debugToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_debug_hud", debugToggle.checked ? "1" : "0");
+      applyDebugSetting();
+    });
+    const debugTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_debug_hud) {
+        applyDebugSetting();
+        clearInterval(debugTimer);
+      }
+    }, 200);
+
+    // --- Analytics (self-contained; must NEVER break the game) -----------
+    // Anonymous by default: a per-page-load session id held in memory, no
+    // cookies, no IP/UA stored (backend contract). Events are batched to
+    // POST {apiBaseUrl}/v1/events using config.json — a missing/empty
+    // config (local checkout, no deployed backend) leaves analytics
+    // silently off; local dev opts in with
+    // localStorage.pegasus_analytics_debug = "1".
+    // The tab-close flush is a sendBeacon STRING body → text/plain → a CORS
+    // simple request, no preflight. Do NOT "improve" it to a Blob typed
+    // application/json: that forces a preflight sendBeacon handles
+    // inconsistently (the backend deliberately ignores content-type, see
+    // pegasus-backend's track_events.rs). Every public entry point is
+    // try/caught — an analytics failure must never reach game code.
+    const pegAnalytics = (() => {
+      const MAX_QUEUE = 100, MAX_BATCH = 50, FLUSH_MS = 15000;
+      const TICK_MS = 1000 / 120; // PHYSICS_DT, for run durations
+      const SHORT_TICKS = 240;    // GHOST_MIN_SECS (2 s) in ticks: runs the
+                                  // highscore path drops, flagged not lost
+      const env = wasmRev.startsWith("__")
+        ? "dev" : (/\/pr-\d+\//.test(location.pathname) ? "preview" : "prod");
+      const newId = () => (crypto.randomUUID && crypto.randomUUID()) ||
+        (Date.now() + "-" + Math.random().toString(36).slice(2, 10));
+      const sessionId = newId();
+      const t0 = Date.now();
+      let apiBase = null; // stays null = disabled
+      let seq = 0, queue = [], runs = 0;
+      let activeMs = 0, hiddenMs = 0, bgCount = 0, visSince = Date.now();
+      let lastScreen = null, lastEndSent = 0, consentAsked = false;
+      let lastStartSeq = 0, lastEndSeq = 0;
+
+      function enqueue(name, props) {
+        try {
+          queue.push({ seq: seq++, t: Date.now(), name, props: props || {} });
+          if (queue.length > MAX_QUEUE) queue.shift(); // drop oldest
+        } catch (_) { /* never throw into game code */ }
+      }
+
+      // The boot guard buffers {kind, message, file, line} error records in
+      // window.__pegErrs (it stays standalone — push-only); drain them into
+      // the pipe whenever we flush.
+      function drainErrors() {
+        try {
+          const buf = window.__pegErrs;
+          if (buf && buf.length) buf.splice(0).forEach(e => enqueue("error", e));
+        } catch (_) {}
+      }
+
+      function flush(useBeacon) {
+        try {
+          if (!apiBase || !queue.length) return;
+          const events = queue.slice(0, MAX_BATCH);
+          const payload = {
+            sessionId,
+            build: wasmRev.startsWith("__") ? "dev" : wasmRev,
+            env,
+            events,
+          };
+          // deviceId rides along only while consent stands.
+          if (localStorage.getItem("pegasus_analytics_consent") === "1") {
+            const did = localStorage.getItem("pegasus_device_id");
+            if (did) payload.deviceId = did;
+          }
+          const body = JSON.stringify(payload);
+          let sent;
+          if (useBeacon && navigator.sendBeacon) {
+            sent = navigator.sendBeacon(apiBase + "/v1/events", body);
+          } else {
+            // A string fetch body is also text/plain → also preflight-free.
+            fetch(apiBase + "/v1/events", { method: "POST", body, keepalive: true })
+              .catch(() => {});
+            sent = true; // fire-and-forget: no retry, never re-queue
+          }
+          if (sent) queue = queue.slice(events.length);
+        } catch (_) {}
+      }
+
+      // Fed by the ONE config.json fetch (the online-highscores block above
+      // calls this before its own stricter checks): analytics needs only
+      // apiBaseUrl. No config / no apiBaseUrl = analytics stays off.
+      function configure(cfg) {
+        try {
+          if (apiBase || !cfg || !cfg.apiBaseUrl) return;
+          if (env === "dev" &&
+              localStorage.getItem("pegasus_analytics_debug") !== "1") return;
+          // Drop automated browsers so headless bots don't inflate
+          // plays/sessions (a Playwright-style fleet was looping the game
+          // for hours). navigator.webdriver is the W3C flag
+          // Playwright/Puppeteer/Selenium all set; the HeadlessChrome UA
+          // token catches naive headless Chrome (which Playwright's normal
+          // UA wouldn't reveal). The pegasus_analytics_debug override lets
+          // the e2e suite — itself an automated browser — still exercise
+          // the pipeline. Bailing here leaves apiBase null, so nothing is
+          // ever sent (degrades to silence like every other off path).
+          if ((navigator.webdriver === true ||
+               /HeadlessChrome/.test(navigator.userAgent || "")) &&
+              localStorage.getItem("pegasus_analytics_debug") !== "1") return;
+          apiBase = String(cfg.apiBaseUrl).replace(/\/+$/, "");
+          const vp = Math.min(innerWidth, innerHeight);
+          enqueue("session_start", Object.assign({
+            touch: (navigator.maxTouchPoints || 0) > 0,
+            // Same 600 CSS px threshold the game's mobile zoom keys on.
+            viewport: vp < 600 ? "small" : vp < 900 ? "medium" : "large",
+            dpr: Math.round(devicePixelRatio || 1),
+          }, acquisition(), deviceInfo()));
+        } catch (_) {}
+      }
+
+      // Coarse device enums parsed HERE, client-side — only these bucket
+      // names are ever sent; the raw user-agent string never leaves the
+      // device (the backend allowlists exactly these values). Known lies
+      // handled: iPadOS 13+ reports a macOS UA in desktop-class mode
+      // (unmasked via Mac platform + real touch points); every iOS
+      // browser is WebKit, so "chrome" on ios is a shell, not an engine;
+      // token order matters because Chromium UAs embed Safari's tokens
+      // and Edge/Samsung embed Chrome's. "webview" = an in-app browser
+      // (iOS WKWebViews carry no Safari/ token; Android webviews carry
+      // "; wv"). "standalone" = installed PWA / home-screen app
+      // (display-mode media query, or Safari's legacy navigator.standalone).
+      function deviceInfo() {
+        const d = {};
+        try {
+          const ua = navigator.userAgent || "";
+          const iPadMasq = navigator.platform === "MacIntel" &&
+            (navigator.maxTouchPoints || 0) > 1;
+          const iPad = /iPad/.test(ua) || iPadMasq;
+          const ios = /iPhone|iPod/.test(ua) || iPad;
+          d.os = ios ? "ios"
+            : /Android/.test(ua) ? "android"
+            : /Mac/.test(ua) ? "mac"
+            : /Windows/.test(ua) ? "windows"
+            : /Linux|CrOS/.test(ua) ? "linux"
+            : "other";
+          d.browser =
+            /Edg|EdgiOS|EdgA/.test(ua) ? "edge"
+            : /SamsungBrowser/.test(ua) ? "samsung"
+            // A home-screen app also lacks the Safari/ token but is
+            // Safari's shell, not an in-app webview — the display enum
+            // already carries its installed-ness.
+            : ios && navigator.standalone === true ? "safari"
+            : /; wv\)/.test(ua) || (ios && !/Safari\//.test(ua)) ? "webview"
+            : /Firefox|FxiOS/.test(ua) ? "firefox"
+            : /Chrome|CriOS/.test(ua) ? "chrome" // Opera/Brave/etc land here — they are Chromium
+            : /Safari\//.test(ua) ? "safari"
+            : "other";
+          d.display = (window.matchMedia &&
+              matchMedia("(display-mode: standalone)").matches) ||
+            navigator.standalone === true ? "standalone" : "browser";
+          d.formFactor = ios ? (iPad ? "tablet" : "phone")
+            : /Android/.test(ua) ? (/Mobile/.test(ua) ? "phone" : "tablet")
+            : "desktop";
+        } catch (_) {}
+        return d;
+      }
+
+      // Where the player came from. The referrer is ORIGIN-only by
+      // construction: strict-origin-when-cross-origin is the web default
+      // and Safari ITP additionally truncates all cross-site referrers, so
+      // a path/query never reaches us anyway — and origin-only is also
+      // what the privacy note promises (content-free: "reddit.com sent
+      // someone", never which post). Links opened from native apps
+      // (iMessage, QR codes, most in-app browsers) carry NO referrer at
+      // all, so utm_* query tags on links we hand out ourselves are the
+      // reliable channel — they ride our own URL, unaffected by referrer
+      // policy. Same-origin referrers (the ?fresh= self-reload) are
+      // dropped as non-signal.
+      function acquisition() {
+        const a = {};
+        try {
+          if (document.referrer) {
+            const o = new URL(document.referrer).origin;
+            if (o && o !== "null" && o !== location.origin) {
+              a.referrer = o.slice(0, 100);
+            }
+          }
+        } catch (_) {}
+        try {
+          const q = new URLSearchParams(location.search);
+          [["utm_source", "utmSource"], ["utm_medium", "utmMedium"],
+           ["utm_campaign", "utmCampaign"]].forEach(([param, prop]) => {
+            const v = q.get(param);
+            if (v) a[prop] = v.slice(0, 50);
+          });
+        } catch (_) {}
+        return a;
+      }
+
+      setInterval(() => { drainErrors(); flush(false); }, FLUSH_MS);
+
+      // Session length without heartbeats: a session_end on every tab-hide
+      // (the beacon survives navigation/close); analysis takes the max per
+      // session. hidden + pagehide fire back-to-back — send once.
+      function noteEnd() {
+        const now = Date.now();
+        if (now - lastEndSent > 1000) {
+          lastEndSent = now;
+          enqueue("session_end", {
+            durationMs: now - t0,
+            activeMs: activeMs +
+              (document.visibilityState === "visible" ? now - visSince : 0),
+            hiddenMs,
+            bgCount,
+            runs,
+          });
+        }
+        drainErrors();
+        flush(true);
+      }
+      document.addEventListener("visibilitychange", () => {
+        const now = Date.now();
+        if (document.visibilityState === "hidden") {
+          activeMs += now - visSince;
+          bgCount++;
+          visSince = now;
+          noteEnd();
+        } else {
+          hiddenMs += now - visSince;
+          visSince = now;
+        }
+      });
+      window.addEventListener("pagehide", noteEnd);
+
+      // The wasm analytics run channel (run_start_seq / run_end_seq
+      // counters + payload mirrors) — polled on the same 500 ms cadence as
+      // the highscore publish, and once before a level switch.
+      function pollRuns() {
+        try {
+          if (typeof wasm_exports === "undefined" || !wasm_exports.run_start_seq) return;
+          const level = currentLevelFile || "builtin";
+          const s = wasm_exports.run_start_seq();
+          for (; lastStartSeq < s; lastStartSeq++) {
+            runs++;
+            enqueue("run_start", { level });
+          }
+          const e = wasm_exports.run_end_seq();
+          if (e !== lastEndSeq) {
+            // A jump > 1 lost the intermediate payloads (one atomic slot) —
+            // report the latest run; the start counter above kept the count.
+            lastEndSeq = e;
+            // Device-local play counter (functional state, never sent):
+            // gates when the consent screen appears. Capped — its only job
+            // is crossing the ask threshold.
+            try {
+              const n = parseInt(localStorage.getItem("pegasus_play_count") || "0", 10) || 0;
+              if (n < 100) localStorage.setItem("pegasus_play_count", String(n + 1));
+            } catch (_) {}
+            const ticks = wasm_exports.run_end_ticks();
+            enqueue("run_end", {
+              level,
+              cause: ["crash", "reset", "fuel", "complete"][wasm_exports.run_end_cause()] || "crash",
+              distance: wasm_exports.run_end_dist(),
+              durationMs: Math.round(ticks * TICK_MS),
+              fuel: wasm_exports.run_end_fuel(),
+              hull: wasm_exports.run_end_hull(),
+              short: ticks < SHORT_TICKS,
+            });
+          }
+        } catch (_) {}
+      }
+
+      // Consent for the returning-player id: opt-in and freely given — the
+      // game plays identically either way (a "consent or no play" wall
+      // would not be valid consent under GDPR Art. 7(4)). A missing key =
+      // never asked; Safari ITP purges script-writable storage after 7 days
+      // of Safari use without a visit, so a long-lapsed device may
+      // legitimately be asked again (the consent record is genuinely gone).
+      function setConsent(choice) {
+        try {
+          if (choice === "accepted") {
+            localStorage.setItem("pegasus_analytics_consent", "1");
+            if (!localStorage.getItem("pegasus_device_id")) {
+              localStorage.setItem("pegasus_device_id", newId());
+            }
+          } else { // declined / revoked
+            localStorage.setItem("pegasus_analytics_consent", "0");
+            localStorage.removeItem("pegasus_device_id");
+          }
+          retidToggle.checked = choice === "accepted";
+          enqueue("consent_choice", { choice });
+        } catch (_) {}
+      }
+
+      // Should the crash flow detour through scr-consent? Only when
+      // analytics is live, the device was never asked (missing key —
+      // Safari ITP may have purged it; re-asking is then correct), and it
+      // has at least 3 plays behind it (goodwill, not a door banner).
+      // Returning true also arms the once-per-session latch, since the
+      // caller navigates to the screen immediately.
+      function consentDue() {
+        try {
+          const due = !!apiBase && !consentAsked &&
+            localStorage.getItem("pegasus_analytics_consent") === null &&
+            (parseInt(localStorage.getItem("pegasus_play_count") || "0", 10) || 0) >= 3;
+          if (due) consentAsked = true;
+          return due;
+        } catch (_) {
+          return false;
+        }
+      }
+      // Debug helper (the Settings button, visible while Debug HUD is on):
+      // forget the consent answer + device id and re-arm the per-session
+      // latch, so the next crash re-runs the scr-consent flow without
+      // clearing site data. Leaves pegasus_play_count alone — a test
+      // device is already past the 3-play gate.
+      function resetConsent() {
+        try {
+          localStorage.removeItem("pegasus_analytics_consent");
+          localStorage.removeItem("pegasus_device_id");
+          consentAsked = false;
+          retidToggle.checked = false;
+        } catch (_) {}
+      }
+
+      // Both answers land on the game-over screen — the consent view sits
+      // in the middle of the crash flow, never dead-ends it.
+      document.getElementById("consent-yes").addEventListener("click", () => {
+        setConsent("accepted");
+        showScreen("scr-gameover");
+      });
+      document.getElementById("consent-no").addEventListener("click", () => {
+        setConsent("declined");
+        showScreen("scr-gameover");
+      });
+
+      // Every menu control, generically: ONE delegated listener reporting
+      // the nearest ancestor WITH an id (skipping the menu/screen
+      // containers) — covers settings toggles, watch buttons and any future
+      // button with zero per-feature code. Payloads stay content-free:
+      // element ids and durations only, never text.
+      menuEl.addEventListener("click", e => {
+        try {
+          const el = e.target.closest("[id]");
+          if (!el || el.id === "menu" || el.id.startsWith("scr-")) return;
+          enqueue("ui_click", { target: el.id });
+        } catch (_) {}
+      });
+
+      return {
+        enqueue,
+        configure,
+        pollRuns,
+        consentDue,
+        setConsent,
+        resetConsent,
+        flushNow: () => { drainErrors(); flush(true); },
+        screen: id => {
+          try {
+            const s = String(id).replace(/^scr-/, "");
+            if (s !== lastScreen) {
+              lastScreen = s;
+              enqueue("screen_view", { screen: s });
+            }
+          } catch (_) {}
+        },
+        replayWatch: source =>
+          enqueue("replay_watch", { source, level: currentLevelFile || "builtin" }),
+      };
+    })();
+
+    // "Share anonymous returning-player id" toggle mirrors the consent
+    // choice; turning it off deletes the stored id.
+    const retidToggle = document.getElementById("retid-toggle");
+    retidToggle.checked =
+      localStorage.getItem("pegasus_analytics_consent") === "1" &&
+      !!localStorage.getItem("pegasus_device_id");
+    retidToggle.addEventListener("change", () => {
+      pegAnalytics.setConsent(retidToggle.checked ? "accepted" : "revoked");
+    });
+
+    // Manual reload button in the About screen — same ?fresh= mechanism as
+    // the toast, for when you want the newest build without waiting.
+    const forceReload = document.getElementById("force-reload");
+    forceReload.addEventListener("click", e => {
+      e.stopPropagation();
+      freshReload();
+    });
+
+    // Trigger the check on load, then on every plausible "came back to this
+    // page" signal AND on a slow interval — visibilitychange alone never
+    // fires in an iOS in-app webview that simply stays open, which is
+    // exactly where a stale page lingers longest. The 30 s throttle in
+    // checkVersion keeps the overlapping triggers cheap.
+    checkVersion();
+    setInterval(checkVersion, 60000);
+    window.addEventListener("focus", checkVersion);
+    window.addEventListener("pageshow", checkVersion);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") checkVersion();
+    });
+  </script>
+</body>
+</html>
