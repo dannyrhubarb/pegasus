@@ -2534,15 +2534,32 @@
           if (data) putBoard(stem, "alltime", data.scores || []);
           const scores = getBoard(stem, "alltime") || []; // fresh, else cached
           if (file !== currentLevelFile || !scores.length) return;
-          if (typeof wasm_exports !== "undefined" && wasm_exports.get_best_dist) {
-            if (scores[0].score > wasm_exports.get_best_dist()) {
-              wasm_exports.set_best_dist(scores[0].score);
-            }
-            // Attribute the record under the HUD BEST line — unless the
-            // session's own (unsubmitted) best already beats the board, in
-            // which case the game shows "by you" on its own.
-            if (scores[0].score >= wasm_exports.get_best_dist()) {
-              pushTextToWasm(scores[0].name, "set_best_name");
+          if (typeof wasm_exports !== "undefined") {
+            if (levelIsTime(file)) {
+              // Time level: the all-time board ranks fastest-first and
+              // LOWER wins, so the record only ever lowers the seeded best.
+              if (wasm_exports.get_best_time && wasm_exports.set_best_time) {
+                const cur = wasm_exports.get_best_time();
+                if (cur <= 0 || scores[0].score < cur) {
+                  wasm_exports.set_best_time(scores[0].score);
+                }
+                // Attribute the record under the HUD BEST line — unless the
+                // session's own (unsubmitted) best is already faster, in
+                // which case the game shows "by you" on its own.
+                if (scores[0].score <= wasm_exports.get_best_time()) {
+                  pushTextToWasm(scores[0].name, "set_best_name");
+                }
+              }
+            } else if (wasm_exports.get_best_dist) {
+              if (scores[0].score > wasm_exports.get_best_dist()) {
+                wasm_exports.set_best_dist(scores[0].score);
+              }
+              // Attribute the record under the HUD BEST line — unless the
+              // session's own (unsubmitted) best already beats the board, in
+              // which case the game shows "by you" on its own.
+              if (scores[0].score >= wasm_exports.get_best_dist()) {
+                pushTextToWasm(scores[0].name, "set_best_name");
+              }
             }
           }
           // The ghost is the best run that still carries a replay blob

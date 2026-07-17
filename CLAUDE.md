@@ -506,7 +506,7 @@ generator — all world generation is `Level` methods, so a level IS the world:
 | Key | Values | Effect |
 |-----|--------|--------|
 | `name` | text | Cosmetic (picker label, not in replay headers) |
-| `scoring` | `pads` / `distance` / `time` | Pads: +100 per first landing. Distance: score = max \|x\| reached (`Sim::max_dist`; big HUD readout, `best` beneath). Time: visit EVERY pad — the run ENDS the tick the last pad's landing registers (`Sim.completed`, `TickReport::completed`); score = completion time in seconds (`Sim.run_ticks × PHYSICS_DT`, **lower is better**), HUD shows `visited/total` + a running `TIME m:ss.t` clock at near-headline size (the clock IS the score; frozen at completion). A crash/fuel-out is a DNF — no board entry. Time levels are hand-drawn (finite pad set); `terrain.pads.len()` is the total |
+| `scoring` | `pads` / `distance` / `time` | Pads: +100 per first landing. Distance: score = max \|x\| reached (`Sim::max_dist`; big HUD readout, `best` beneath). Time: visit EVERY pad — the run ENDS the tick the last pad's landing registers (`Sim.completed`, `TickReport::completed`); score = completion time in seconds (`Sim.run_ticks × PHYSICS_DT`, **lower is better**), HUD shows `visited/total` + a running `TIME m:ss.t` clock at near-headline size (the clock IS the score; frozen at completion), with `BEST m:ss.t` + the "by <pilot>" record attribution beneath (`BEST_TIME`, seeded from the global all-time record like the distance BEST — see "Online high scores"). A crash/fuel-out is a DNF — no board entry. Time levels are hand-drawn (finite pad set); `terrain.pads.len()` is the total |
 | `endless` | on/off | On: the cave's periodic harmonics (`cave_center`/`cave_half_width`) are replaced by hash-based **value noise** (`Level::vnoise`, smoothstep-interpolated lattice hashes) with the SAME amplitude bounds — the tunnel never wraps in x, every stretch is unique rock in both directions. The no-pinch / no-blowout guarantee carries over (unit-tested over ±34 km); C1-continuous so colliders/lattice stay seamless. Procedural only (ignored under `terrain`) |
 | `shafts` | on/off | Off: `seg_in_opening` is always false (sealed cave), no shaft colliders load, minimap skips the carve |
 | `obstacles` | on/off | Off: `obstacle_spec` returns None everywhere (pads then skip the boulder-overlap check) |
@@ -1331,6 +1331,10 @@ the real backend. All JS-side in `index.html`:
   level load (and when config.json arrives, and after a successful
   submit) the loaded level's **all-time board** is refreshed; the #1
   score raises the in-game `BEST_DIST` (the HUD BEST = the world record)
+  — on a **time level** the board is fastest-first and LOWER wins, so the
+  #1 instead lowers `BEST_TIME` via `set_best_time` (the time twin of
+  `set_best_dist`; `raise_best_time` mirrors the "by you" flip when a
+  completed run beats it) —
   and the best entry **with a replay** is fetched from CloudFront and
   pushed via `load_ghost_blob` — the racing ghost is the global record
   run, its pilot's callsign following via `set_ghost_name` (drawn under
