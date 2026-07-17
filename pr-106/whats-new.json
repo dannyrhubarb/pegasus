@@ -1,5 +1,10 @@
 [
  {
+  "rev": "30fe49e",
+  "date": "2026-07-17T10:34:59Z",
+  "note": "The Hollows now launches from its own start platform, its clock reads big, and replay scrubbing tracks your pad count exactly"
+ },
+ {
   "rev": "d93dbd7",
   "date": "2026-07-17T08:37:19Z",
   "note": "The Hollows is now a timed challenge — visit all five pads as fast as you can The Rift is now truly endless — its cave never repeats, in either direction"
