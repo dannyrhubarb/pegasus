@@ -384,6 +384,7 @@ pub extern "C" fn load_level(len: u32) {
     if let Ok(text) = std::str::from_utf8(&b[..end]) {
         *PENDING_LEVEL.lock().unwrap() = Some(world::Level::parse(text));
         BEST_DIST.store(0, Ordering::Relaxed);
+        BEST_TIME.store(0, Ordering::Relaxed);
         BEST_NAME.lock().unwrap().clear();
         GHOST_NAME.lock().unwrap().clear();
     }
@@ -432,6 +433,32 @@ fn raise_best_dist(level: &Level, dist: f32) {
     if name.as_str() != "you" {
         *name = "you".to_string();
     }
+}
+
+// Best completion time on the current Time-scoring level, f32 seconds bits
+// (0 = no completion yet). Session-only, like the pre-board BEST; lower is
+// better, raised (well, lowered) only when a completed run ends. Cleared on
+// level load with BEST_DIST.
+static BEST_TIME: AtomicU32 = AtomicU32::new(0);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn get_best_time() -> f32 {
+    f32::from_bits(BEST_TIME.load(Ordering::Relaxed))
+}
+
+fn raise_best_time(secs: f32) {
+    let cur = f32::from_bits(BEST_TIME.load(Ordering::Relaxed));
+    if cur <= 0.0 || secs < cur {
+        BEST_TIME.store(secs.to_bits(), Ordering::Relaxed);
+    }
+}
+
+// m:ss.t for the Time-scoring HUD/banners (tenths — whole seconds read as
+// laggy against the 120 Hz sim).
+fn fmt_run_time(ticks: u32) -> String {
+    let secs = ticks as f32 * PHYSICS_DT;
+    let m = (secs / 60.0).floor();
+    format!("{}:{:04.1}", m as u32, secs - m * 60.0)
 }
 
 #[unsafe(no_mangle)]
@@ -503,7 +530,7 @@ fn report_run_end(rec: &Recording, dist: f32) {
 // so a run that starts and ends within one JS poll window still counts.
 static RUN_START_SEQ: AtomicU32 = AtomicU32::new(0);
 static RUN_END_SEQ: AtomicU32 = AtomicU32::new(0);
-static RUN_END_CAUSE: AtomicU32 = AtomicU32::new(0); // 0 crash / 1 reset / 2 fuel
+static RUN_END_CAUSE: AtomicU32 = AtomicU32::new(0); // 0 crash / 1 reset / 2 fuel / 3 complete
 static RUN_END_TICKS: AtomicU32 = AtomicU32::new(0);
 static RUN_END_DIST: AtomicU32 = AtomicU32::new(0); // f32 bits
 static RUN_END_FUEL: AtomicU32 = AtomicU32::new(0); // f32 bits
@@ -1083,7 +1110,22 @@ async fn main() {
     let mut stick_thrust_t = 0.0f32; // seconds the stick-hold engine has been eligible
     let mut flip_settling = false;   // big flip commanded: engine cold until nose settles
     let mut pad_msg_timer = 0.0f32; // "+100" flash after a first landing
+    // Time level completed: "LEVEL COMPLETE" grace before the game-over
+    // dialog (the completion analogue of CRASH_DIALOG_DELAY — lets the
+    // pilot see the 5/5 and the frozen clock before the dialog covers it).
+    const COMPLETE_DIALOG_DELAY: f32 = 1.6;
+    let mut complete_timer = 0.0f32;
     let mut stick = TouchStick::new();
+    // Hand-drawn terrain: cached ear-clip triangulation + per-polygon world
+    // bboxes for the rock fill (main view + minimap). Keyed on the RENDERED
+    // level's terrain — world_sim can switch to a replay's scratch sim, so
+    // the cache follows whatever world is on screen, not just level loads.
+    struct TerrainMesh {
+        terrain: world::Terrain,
+        tris: Vec<Vec<[Vec2; 3]>>, // per polygon: ear-clip fill triangles
+        bboxes: Vec<(Vec2, Vec2)>, // per polygon: world-space (min, max)
+    }
+    let mut terrain_cache: Option<TerrainMesh> = None;
 
     loop {
         // Apply a level pushed from JS (startup restore or the overlay
@@ -1095,6 +1137,7 @@ async fn main() {
             sim = Sim::new(lvl);
             prev_ship = (SPAWN_X, sim.level.stand_y(SPAWN_X), 0.0);
             crash_timer = 0.0;
+            complete_timer = 0.0;
             shake = 0.0;
             phys_accum = 0.0;
             mode = Mode::Flying;
@@ -1132,8 +1175,12 @@ async fn main() {
         if let Some(rec) = PENDING_WATCH.lock().unwrap().take()
             && let Some(p) = ResimPlayer::new(&rec)
         {
-            watch_return = if sim.crashed { Mode::CrashDialog } else { Mode::Flying };
-            crash_timer = 0.0; // skip any remaining wreck pause
+            // An OVER run (wreck, fuel-out, completed time level) must land
+            // back on the dialog — returning a controls-dead ship to Flying
+            // would soft-lock the run behind the R key.
+            watch_return = if sim.crashed || run_over { Mode::CrashDialog } else { Mode::Flying };
+            crash_timer = 0.0;    // skip any remaining wreck pause
+            complete_timer = 0.0; // …and any remaining completion grace
             watch_rec = Some(rec);
             replay_player = Some(p);
             mode = Mode::Replay;
@@ -1281,6 +1328,7 @@ async fn main() {
         let mut frame_landed = false;
         let mut frame_scored = false;
         let mut frame_fuel_out = false;
+        let mut frame_completed = false;
         let mut frame_heading_torque = 0.0f32;
         // First input starts the run clock. The gate lives HERE, outside
         // Sim::tick — input gathering is frame-level, and the sim must stay
@@ -1324,6 +1372,7 @@ async fn main() {
                 frame_landed = rep.landed;
                 frame_scored |= rep.scored;
                 frame_fuel_out |= rep.fuel_out;
+                frame_completed |= rep.completed;
                 if let Some(imp) = rep.impact {
                     let replace = frame_impact
                         .as_ref()
@@ -1358,6 +1407,8 @@ async fn main() {
                     vx: imp.vx, vy: imp.vy, angvel: imp.angvel,
                     fuel: sim.fuel, hull: sim.hull, glow,
                     land_timer: 0.0, // a destroying tick always zeroes it
+                    visited: sim.visited_mask(),
+                    run_ticks: sim.run_ticks,
                 });
                 // Publish for the online submit flow and the analytics
                 // channel (which also takes short runs) — unless the run
@@ -1366,7 +1417,11 @@ async fn main() {
                 if !run_over {
                     run_over = true;
                     raise_best_dist(&sim.level, sim.max_dist);
-                    report_run_end(&recorder, sim.max_dist);
+                    // Time levels: a crash is a DNF — no board entry (the
+                    // completion time IS the score); analytics still counts.
+                    if sim.level.scoring != Scoring::Time {
+                        report_run_end(&recorder, sim.max_dist);
+                    }
                     report_run_analytics(0, recorder.ticks(), sim.max_dist, sim.fuel, sim.hull);
                 }
             } else {
@@ -1389,6 +1444,26 @@ async fn main() {
                 }
             }
         }
+        // Time level completed (last pad visited): the run is over — the
+        // sim froze the clock and killed the controls. Publish NOW (score =
+        // completion time in seconds; the recorder snapshot ends at the
+        // completing tick) so the submit dialog can't miss it, then hold a
+        // short "LEVEL COMPLETE" grace before the game-over dialog.
+        if frame_completed && mode == Mode::Flying && !sim.crashed && !run_over {
+            run_over = true;
+            let secs = sim.run_ticks as f32 * PHYSICS_DT;
+            raise_best_time(secs);
+            report_run_end(&recorder, secs);
+            report_run_analytics(3, recorder.ticks(), sim.max_dist, sim.fuel, sim.hull);
+            complete_timer = COMPLETE_DIALOG_DELAY;
+        }
+        if complete_timer > 0.0 && !ui_paused {
+            complete_timer -= get_frame_time();
+            if complete_timer <= 0.0 {
+                complete_timer = 0.0;
+                mode = Mode::CrashDialog;
+            }
+        }
         // Out of fuel past the deadline: the run is over. Publish it and go
         // STRAIGHT to the game-over dialog — the "OUT OF FUEL" banner has
         // already been up since the tank emptied, so unlike a crash there's
@@ -1401,7 +1476,9 @@ async fn main() {
         {
             run_over = true;
             raise_best_dist(&sim.level, sim.max_dist);
-            report_run_end(&recorder, sim.max_dist);
+            if sim.level.scoring != Scoring::Time {
+                report_run_end(&recorder, sim.max_dist);
+            }
             report_run_analytics(2, recorder.ticks(), sim.max_dist, sim.fuel, sim.hull);
             mode = Mode::CrashDialog;
         }
@@ -1749,7 +1826,131 @@ async fn main() {
         let col_lo = want_left * SUBCOLS;
         let col_hi = (want_right + 1) * SUBCOLS;
 
+        // Hand-drawn terrain (polygon worlds): every rock polygon is drawn as
+        // an ear-clip-triangulated dark fill plus two faceted edge bands
+        // (rock_edge then rock_mid) extruded INTO the rock along the inward
+        // normal — the outer band edge sits exactly on the polygon edge (=
+        // the collider), same alignment rule as lattice row 0. Lit by the
+        // same radial shader as the procedural walls.
+        if let Some(terr) = &world_sim.level.terrain {
+            if terrain_cache.as_ref().map(|m| &m.terrain) != Some(terr) {
+                let tris: Vec<Vec<[Vec2; 3]>> =
+                    terr.polys.iter().map(|p| triangulate(p)).collect();
+                let bboxes: Vec<(Vec2, Vec2)> = terr
+                    .polys
+                    .iter()
+                    .map(|p| {
+                        let mut lo = vec2(f32::INFINITY, f32::INFINITY);
+                        let mut hi = vec2(f32::NEG_INFINITY, f32::NEG_INFINITY);
+                        for q in p {
+                            lo = lo.min(*q);
+                            hi = hi.max(*q);
+                        }
+                        (lo, hi)
+                    })
+                    .collect();
+                terrain_cache = Some(TerrainMesh { terrain: terr.clone(), tris, bboxes });
+            }
+            let mesh = terrain_cache.as_ref().unwrap();
+            let (tri_polys, bboxes) = (&mesh.tris, &mesh.bboxes);
+            // Visible world rect (+4 m so band jitter never pops at the edge).
+            let half_w = sw / (2.0 * view_scale) + 4.0;
+            let half_h = sh / (2.0 * view_scale) + 4.0;
+            for (pi, poly) in terr.polys.iter().enumerate() {
+                let (lo, hi) = bboxes[pi];
+                if hi.x < cam_x - half_w || lo.x > cam_x + half_w
+                    || hi.y < cam_y - half_h || lo.y > cam_y + half_h {
+                    continue;
+                }
+
+                // Interior fill: flat rock_dark triangles with subtle jitter.
+                let mut verts: Vec<Vertex> = Vec::new();
+                for (ti, t3) in tri_polys[pi].iter().enumerate() {
+                    let h = hash_u32(
+                        (pi as u32).wrapping_mul(2246822519)
+                            ^ (ti as u32).wrapping_mul(2654435761),
+                    );
+                    let b = 0.88 + (h & 0xffff) as f32 / 65535.0 * 0.20;
+                    let c = Color::new(
+                        (rock_dark.r * b).min(1.0),
+                        (rock_dark.g * b).min(1.0),
+                        (rock_dark.b * b).min(1.0),
+                        1.0,
+                    );
+                    for q in t3 {
+                        verts.push(v(w2s(q.x, q.y, sh, cam_x, cam_y), c));
+                    }
+                }
+                draw_flat_mesh(verts);
+
+                // Edge bands: each edge subdivided ~2 m; depth 0 is exactly on
+                // the collider line, deeper points jittered into the rock only
+                // (polygons are CCW, so the inward normal is the edge dir
+                // rotated +90°).
+                const BAND_DEPTHS: [f32; 3] = [0.0, 0.9, 2.6];
+                let mut verts: Vec<Vertex> = Vec::new();
+                let n = poly.len();
+                for i in 0..n {
+                    let (a, b) = (poly[i], poly[(i + 1) % n]);
+                    let e = b - a;
+                    let len = e.length();
+                    if len < 1e-3 {
+                        continue;
+                    }
+                    if a.x.max(b.x) < cam_x - half_w || a.x.min(b.x) > cam_x + half_w
+                        || a.y.max(b.y) < cam_y - half_h || a.y.min(b.y) > cam_y + half_h {
+                        continue;
+                    }
+                    let dir = e / len;
+                    let nrm = vec2(-dir.y, dir.x); // into the rock
+                    let steps = (len / 2.0).ceil().max(1.0) as usize;
+                    let bp = |k: usize, d: usize| -> Vec2 {
+                        let base = a + e * (k as f32 / steps as f32);
+                        if d == 0 {
+                            return base; // locked to the collider line
+                        }
+                        let depth = BAND_DEPTHS[d];
+                        let h = hash_u32(
+                            (pi as u32).wrapping_mul(0x9e37_79b9)
+                                ^ (i as u32).wrapping_mul(73856093)
+                                ^ (k as u32).wrapping_mul(19349663)
+                                ^ (d as u32).wrapping_mul(83492791),
+                        );
+                        let ja = ((h & 0xffff) as f32 / 65535.0 - 0.5) * 0.8;
+                        let jd = (((h >> 16) & 0xffff) as f32 / 65535.0 - 0.5)
+                            * (depth * 0.35);
+                        base + dir * ja + nrm * (depth + jd)
+                    };
+                    for k in 0..steps {
+                        for d in 0..BAND_DEPTHS.len() - 1 {
+                            let s00 = { let q = bp(k,     d);     w2s(q.x, q.y, sh, cam_x, cam_y) };
+                            let s10 = { let q = bp(k + 1, d);     w2s(q.x, q.y, sh, cam_x, cam_y) };
+                            let s11 = { let q = bp(k + 1, d + 1); w2s(q.x, q.y, sh, cam_x, cam_y) };
+                            let s01 = { let q = bp(k,     d + 1); w2s(q.x, q.y, sh, cam_x, cam_y) };
+                            let base = if d == 0 { rock_edge } else { rock_mid };
+                            let key = (i as i64) << 20 ^ k as i64;
+                            let ca = facet_shade(base, key, d, 4, pi as u32);
+                            let cb = facet_shade(base, key, d, 4, (pi as u32) ^ 0x5bd1_e995);
+                            if hash_u32(key as u32 ^ (d as u32).wrapping_mul(2654435761)) & 1 == 0 {
+                                verts.push(v(s00, ca)); verts.push(v(s10, ca)); verts.push(v(s11, ca));
+                                verts.push(v(s00, cb)); verts.push(v(s11, cb)); verts.push(v(s01, cb));
+                            } else {
+                                verts.push(v(s00, ca)); verts.push(v(s10, ca)); verts.push(v(s01, ca));
+                                verts.push(v(s10, cb)); verts.push(v(s11, cb)); verts.push(v(s01, cb));
+                            }
+                        }
+                    }
+                }
+                draw_flat_mesh(verts);
+            }
+        }
+
         for layer in lay_lo..=lay_hi {
+            // Hand-drawn worlds have no procedural cave (their rock is drawn
+            // above); shafts/obstacles below self-gate via their empty maps.
+            if world_sim.level.terrain.is_some() {
+                break;
+            }
             let ly = layer as f32 * V_PERIOD;
             // Vertical culling: facet bands live within ±45 m of the layer line;
             // the inter-layer fill spans [ly, ly + V_PERIOD].
@@ -1992,8 +2193,15 @@ async fn main() {
             // Legs at ±(hw − 0.5), from under the deck down to the floor.
             for side in [-1.0f32, 1.0] {
                 let lx = pad.cx + side * (PAD_HALF_W - 0.5);
-                let ground = pad_layer as f32 * V_PERIOD
-                    + world_sim.level.cave_center(lx) - world_sim.level.cave_half_width(lx);
+                // Hand-drawn worlds have no floor curve to drop the legs to;
+                // hand-placed decks sit close to their floor, so short fixed
+                // legs read right.
+                let ground = if world_sim.level.terrain.is_some() {
+                    pad.y - 1.0
+                } else {
+                    pad_layer as f32 * V_PERIOD
+                        + world_sim.level.cave_center(lx) - world_sim.level.cave_half_width(lx)
+                };
                 let top = w2s(lx, pad.y, sh, cam_x, cam_y);
                 let bot = w2s(lx, ground.min(pad.y), sh, cam_x, cam_y);
                 draw_line(top.x, top.y + deck_h, bot.x, bot.y, 3.0 * dpi,
@@ -2011,6 +2219,32 @@ async fn main() {
             for side in [-1.0f32, 1.0] {
                 let p = w2s(pad.cx + side * (PAD_HALF_W - 0.15), pad.y + 0.12, sh, cam_x, cam_y);
                 draw_circle(p.x, p.y, 2.5 * dpi, bc);
+            }
+        }
+
+        // Neutral start platform (hand-drawn levels): the launch deck the
+        // ship spawns on. Same metal deck as a pad but dimmer and with NO
+        // beacon lights at all — it reads as "home", not "objective" (it
+        // never refuels and never counts).
+        if let Some(sp) = world_sim.level.terrain.as_ref().and_then(|t| t.start) {
+            let top_mid = w2s(sp.x, sp.y, sh, cam_x, cam_y);
+            if top_mid.x > -margin && top_mid.x < sw + margin
+                && top_mid.y > -100.0 && top_mid.y < sh + 100.0
+            {
+                let a = w2s(sp.x - PAD_HALF_W, sp.y, sh, cam_x, cam_y);
+                let b = w2s(sp.x + PAD_HALF_W, sp.y, sh, cam_x, cam_y);
+                let deck_h = 0.22 * view_scale;
+                let deck = Color::from_rgba(70, 78, 92, 255);
+                draw_triangle(a, b, vec2(b.x, b.y + deck_h), deck);
+                draw_triangle(a, vec2(b.x, b.y + deck_h), vec2(a.x, a.y + deck_h), deck);
+                draw_line(a.x, a.y, b.x, b.y, 2.0 * dpi, Color::from_rgba(150, 165, 190, 255));
+                for side in [-1.0f32, 1.0] {
+                    let lx = sp.x + side * (PAD_HALF_W - 0.5);
+                    let top = w2s(lx, sp.y, sh, cam_x, cam_y);
+                    let bot = w2s(lx, sp.y - 1.0, sh, cam_x, cam_y);
+                    draw_line(top.x, top.y + deck_h, bot.x, bot.y, 3.0 * dpi,
+                        Color::from_rgba(60, 68, 82, 255));
+                }
             }
         }
 
@@ -2188,6 +2422,11 @@ async fn main() {
                 Scoring::Pads => format!(
                     "score={}  x={:.0}  lvl={}  {:.0}m/{}m   [R] reset   FPS: {:.0}",
                     world_sim.score, cam_x, ship_layer, cave_x, PERIOD as i32, smooth_fps),
+                Scoring::Time => format!(
+                    "pads={}/{}  t={}  x={:.0}   [R] reset   FPS: {:.0}",
+                    world_sim.visited_pads.len(),
+                    world_sim.level.terrain.as_ref().map_or(0, |t| t.pads.len()),
+                    fmt_run_time(world_sim.run_ticks), cam_x, smooth_fps),
             };
             draw_text(&hud, safe_left + 10.0 * ui, hud_y, hud_fs, WHITE);
             let hud_w = measure_text(&hud, None, hud_fs as u16, 1.0).width;
@@ -2225,6 +2464,8 @@ async fn main() {
             draw_rectangle(0.0, 0.0, sw, sh, Color::from_rgba(0, 0, 0, 130));
             let (msg, col) = if sim.crashed {
                 ("CRASHED", Color::from_rgba(255, 90, 60, 255))
+            } else if sim.completed {
+                ("LEVEL COMPLETE", Color::from_rgba(120, 255, 160, 255))
             } else {
                 ("OUT OF FUEL", Color::from_rgba(255, 180, 60, 255))
             };
@@ -2259,12 +2500,17 @@ async fn main() {
             // longer displayed. Throttle meter: see #67.)
             let inp = replay_player.as_ref().map(|p| p.current_input()).unwrap_or_default();
             let (isx, isy) = inp.steer_f32();
-            // The OUT OF FUEL banner replays too — from the SCRATCH sim's
-            // fuel (the state the replay is showing), exactly like live
-            // play: up from the tick the tank empties until the (replayed)
-            // crash, and through a fuel-out ending's freeze frame. Not part
-            // of the auto-hiding transport GUI — it's game state.
-            if replay_player.as_ref().is_some_and(|p| p.sim.fuel <= 0.0 && !p.sim.crashed) {
+            // The OUT OF FUEL / LEVEL COMPLETE banners replay too — from
+            // the SCRATCH sim's state (what the replay is showing), exactly
+            // like live play. Not part of the auto-hiding transport GUI —
+            // it's game state.
+            if replay_player.as_ref().is_some_and(|p| p.sim.completed) {
+                let msg = "LEVEL COMPLETE";
+                let fs = 48.0 * ui;
+                let dims = measure_text(msg, None, fs as u16, 1.0);
+                draw_text(msg, (sw - dims.width) / 2.0, sh * 0.42, fs,
+                    Color::from_rgba(120, 255, 160, 255));
+            } else if replay_player.as_ref().is_some_and(|p| p.sim.fuel <= 0.0 && !p.sim.crashed) {
                 let msg = "OUT OF FUEL";
                 let fs = 48.0 * ui;
                 let dims = measure_text(msg, None, fs as u16, 1.0);
@@ -2289,6 +2535,12 @@ async fn main() {
                 draw_stick(stick_park, vec2(isx, isy) * STICK_TRAVEL,
                     inp.stick_held != 0, 1.0);
             }
+        } else if complete_timer > 0.0 {
+            let msg = format!("LEVEL COMPLETE  {}", fmt_run_time(sim.run_ticks));
+            let fs = 64.0 * ui;
+            let dims = measure_text(&msg, None, fs as u16, 1.0);
+            draw_text(&msg, (sw - dims.width) / 2.0, sh * 0.42, fs,
+                Color::from_rgba(120, 255, 160, 255));
         } else if crashed {
             let msg = "CRASHED";
             let fs = 96.0 * ui;
@@ -2304,7 +2556,12 @@ async fn main() {
             draw_text(msg, (sw - dims.width) / 2.0, sh * 0.42, fs,
                 Color::from_rgba(255, 180, 60, 255));
         } else if pad_msg_timer > 0.0 {
-            let msg = format!("+{PAD_POINTS}");
+            let msg = if sim.level.scoring == Scoring::Time {
+                let total = sim.level.terrain.as_ref().map_or(0, |t| t.pads.len());
+                format!("{}/{}", sim.visited_pads.len(), total)
+            } else {
+                format!("+{PAD_POINTS}")
+            };
             let fs = 64.0 * ui;
             let dims = measure_text(&msg, None, fs as u16, 1.0);
             let alpha = (pad_msg_timer / 1.8 * 255.0) as u8;
@@ -2455,6 +2712,7 @@ async fn main() {
             // teleport for a frame.
             prev_ship = (SPAWN_X, sim.level.stand_y(SPAWN_X), 0.0);
             crash_timer = 0.0;
+            complete_timer = 0.0;
             shake = 0.0;
             mode = Mode::Flying;
             run_started = false;
@@ -2470,7 +2728,10 @@ async fn main() {
                 // (The fresh sim carries the same level, so its clone is
                 // fine for the best-raise check.)
                 raise_best_dist(&sim.level, ended_dist);
-                report_run_end(&ended, ended_dist);
+                // Time levels: an abandoned attempt has no score to submit.
+                if sim.level.scoring != Scoring::Time {
+                    report_run_end(&ended, ended_dist);
+                }
                 report_run_analytics(1, ended.ticks(), ended_dist, ended_fuel, ended_hull);
             }
             // The ghost re-simulates the BEST run (the global record,
@@ -2510,6 +2771,28 @@ async fn main() {
                 mm_oy + mm_h - (wy - cam_y + MM_HALF_Y) / (2.0 * MM_HALF_Y) * mm_h
             };
 
+            // Hand-drawn worlds: dark open space, rock polygons drawn on top
+            // from the cached triangulation (verts clamped to the map box,
+            // same rule as the obstacle shapes below).
+            if world_sim.level.terrain.is_some() {
+                draw_rectangle(mm_ox, mm_oy, mm_w, mm_h, mm_dark);
+                if let Some(mesh) = &terrain_cache {
+                    for (pi, tris) in mesh.tris.iter().enumerate() {
+                        let (lo, hi) = mesh.bboxes[pi];
+                        if hi.x < cam_x - MM_HALF_X || lo.x > cam_x + MM_HALF_X
+                            || hi.y < cam_y - MM_HALF_Y || lo.y > cam_y + MM_HALF_Y {
+                            continue;
+                        }
+                        for t3 in tris {
+                            let p: Vec<Vec2> = t3.iter().map(|q| vec2(
+                                to_mm_x(q.x).clamp(mm_ox, mm_ox + mm_w),
+                                to_mm_y(q.y).clamp(mm_oy, mm_oy + mm_h),
+                            )).collect();
+                            draw_triangle(p[0], p[1], p[2], rock_mid);
+                        }
+                    }
+                }
+            } else {
             // Fill with rock, then carve the cave interior of every layer in view,
             // sampled in columns around the ship.
             draw_rectangle(mm_ox, mm_oy, mm_w, mm_h, rock_mid);
@@ -2574,6 +2857,7 @@ async fn main() {
                     }
                 }
             }
+            } // end procedural minimap (cave carve + shafts)
 
             // Pad markers on the minimap: bright line at deck height, green until
             // visited, blue-grey after.
@@ -2590,6 +2874,17 @@ async fn main() {
                     Color::from_rgba(90, 240, 130, 255)
                 };
                 draw_line(x0, y, x1, y, 2.0 * dpi, c);
+            }
+
+            // Start platform: neutral grey line, matching its in-world deck.
+            if let Some(sp) = world_sim.level.terrain.as_ref().and_then(|t| t.start)
+                && (sp.x - cam_x).abs() <= MM_HALF_X + 5.0
+                && (sp.y - cam_y).abs() <= MM_HALF_Y + 5.0
+            {
+                let y = to_mm_y(sp.y).clamp(mm_oy, mm_oy + mm_h);
+                let x0 = to_mm_x(sp.x - PAD_HALF_W).clamp(mm_ox, mm_ox + mm_w);
+                let x1 = to_mm_x(sp.x + PAD_HALF_W).clamp(mm_ox, mm_ox + mm_w);
+                draw_line(x0, y, x1, y, 2.0 * dpi, Color::from_rgba(145, 165, 190, 220));
             }
 
             // Obstacle shapes on the minimap — actual polygon, not just a dot.
@@ -2654,6 +2949,16 @@ async fn main() {
                 format!("BEST {:.0} m", get_best_dist()),
             ),
             Scoring::Pads => (format!("{}", world_sim.score), "SCORE".to_string()),
+            // Time level: pads visited over the total, with the run clock
+            // beneath (frozen by the sim once the level completes).
+            Scoring::Time => (
+                format!(
+                    "{}/{}",
+                    world_sim.visited_pads.len(),
+                    world_sim.level.terrain.as_ref().map_or(0, |t| t.pads.len())
+                ),
+                format!("TIME {}", fmt_run_time(world_sim.run_ticks)),
+            ),
         };
         // Left-aligned to the HUD column's left edge (`mm_ox`) plus a margin,
         // shrunk to the minimap width so a long number stays inside the column.
@@ -2769,8 +3074,21 @@ async fn main() {
         // left-aligned under the minimap column (see sizing above).
         let ro_y = hg_y + fg_h + 14.0 * ui + big_fs;
         draw_text(&big, ro_x, ro_y, big_fs, WHITE);
-        draw_text(&small, ro_x, ro_y + small_fs + 4.0 * ui,
-            small_fs, Color::from_rgba(150, 180, 220, 220));
+        // On a time level the clock IS the score, so its line draws at
+        // near-headline size (and brighter); elsewhere the secondary line
+        // is the small BEST/SCORE label.
+        let small_draw_fs = if world_sim.level.scoring == Scoring::Time {
+            big_fs * 0.62
+        } else {
+            small_fs
+        };
+        let small_col = if world_sim.level.scoring == Scoring::Time {
+            Color::from_rgba(190, 215, 245, 245)
+        } else {
+            Color::from_rgba(150, 180, 220, 220)
+        };
+        draw_text(&small, ro_x, ro_y + small_draw_fs + 4.0 * ui,
+            small_draw_fs, small_col);
         // Record attribution under the BEST line ("by <pilot>" — or "by you"
         // once the record falls); empty name = no line (offline, pads).
         if world_sim.level.scoring == Scoring::Distance {
@@ -2783,8 +3101,17 @@ async fn main() {
                 if by_dim.width > mm_w - ro_margin {
                     by_fs *= (mm_w - ro_margin) / by_dim.width;
                 }
-                draw_text(&by, ro_x, ro_y + small_fs + 4.0 * ui + by_fs + 4.0 * ui,
+                draw_text(&by, ro_x, ro_y + small_draw_fs + 4.0 * ui + by_fs + 4.0 * ui,
                     by_fs, Color::from_rgba(130, 155, 190, 200));
+            }
+        } else if world_sim.level.scoring == Scoring::Time {
+            // Session-best completion time in the attribution line's slot.
+            let best = get_best_time();
+            if best > 0.0 {
+                let bt = format!("BEST {}", fmt_run_time((best / PHYSICS_DT).round() as u32));
+                let bt_fs = small_fs;
+                draw_text(&bt, ro_x, ro_y + small_draw_fs + 4.0 * ui + bt_fs + 4.0 * ui,
+                    bt_fs, Color::from_rgba(130, 155, 190, 200));
             }
         }
 
@@ -2996,6 +3323,8 @@ mod tests {
                     vx: imp.vx, vy: imp.vy, angvel: imp.angvel,
                     fuel: s.fuel, hull: s.hull, glow: 0.0,
                     land_timer: 0.0,
+                    visited: s.visited_mask(),
+                    run_ticks: s.run_ticks,
                 });
                 break;
             }
@@ -3474,6 +3803,8 @@ mod tests {
                     vx: imp.vx, vy: imp.vy, angvel: imp.angvel,
                     fuel: sim.fuel, hull: sim.hull, glow: input.throttle_f32(),
                     land_timer: 0.0,
+                    visited: sim.visited_mask(),
+                    run_ticks: sim.run_ticks,
                 });
                 break;
             }

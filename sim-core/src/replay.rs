@@ -25,9 +25,20 @@ pub const REPLAY_MAGIC: [u8; 4] = *b"PGRP";
 // the atan2→Rotation::new round-trip cost sub-mm drift on keyframe restore)
 // plus land_timer (pad-settle progress, it gates refuel/repair timing).
 // No backward compatibility while the game is iterating: deserialize rejects
-// other versions, so pre-v3 stored blobs simply stop decoding (decode returns
+// pre-v3 versions, so old stored blobs simply stop decoding (decode returns
 // None — high-score watch/ghost buttons no-op, nothing crashes).
+// v4: the LevelParams block gains a flags byte (bit 0 reserved, bit 1 =
+// hand-drawn Terrain present) followed by the Terrain block (rock
+// polygons, pads, optional start platform, spawn ground) when bit 1 is set,
+// and every keyframe appends visited(u64) + run_ticks(u32) — see the
+// Keyframe doc. Written ONLY when the
+// level uses a post-v3 feature (terrain or time scoring) — a
+// legacy procedural recording still serializes as byte-identical v3, so
+// every existing blob keeps decoding and the backend keeps verifying legacy
+// submissions without a re-pin. (Runs on the NEW levels DO need the backend
+// re-pinned to a sim-core rev that understands v4.)
 pub const REPLAY_FORMAT_VERSION: u16 = 3;
+pub const REPLAY_FORMAT_VERSION_EXT: u16 = 4;
 
 // Resolved control values in effect for a physics step, quantized for
 // storage. "Resolved" = after the input-combining logic (stick ramp gates,
@@ -98,6 +109,16 @@ pub struct Keyframe {
     pub hull: f32,
     pub glow: f32,
     pub land_timer: f32, // pad-settle progress — it gates refuel/repair timing
+    // v4-only game-logic state (serialized only in the extended format; a
+    // v3 read leaves visited = 0 and run_ticks = tick):
+    // - visited: hand-drawn pad-visit bitmask (bit i = terrain pad i), so a
+    //   replay SEEK restores the x/5 counter, beacon colors and the
+    //   completed flag instead of losing them with the rebuilt scratch sim.
+    //   Procedural levels keep 0 — their (slot, layer) keys don't bitmask.
+    // - run_ticks: the run clock, which FREEZES at completion and therefore
+    //   can lag the keyframe tick (the post-completion grace keeps ticking).
+    pub visited: u64,
+    pub run_ticks: u32,
 }
 
 // Every constant that shapes the simulation, so a replay re-runs under the
@@ -123,17 +144,26 @@ pub struct SimParams {
 }
 
 // The world-shaping half of the header: everything a Level contributes to
-// physics (the cave/obstacle/pad generator parameters), so resim rebuilds
-// the exact world the run was flown in. The level NAME is cosmetic and
-// deliberately not part of this — two levels with equal params are the same
-// world. Conversions to/from `world::Level` live in world.rs.
-#[derive(Clone, Copy, PartialEq, Debug)]
+// physics (the cave/obstacle/pad generator parameters — or, for hand-drawn
+// levels, the full Terrain), so resim rebuilds the exact world the run was
+// flown in. The level NAME is cosmetic and deliberately not part of this —
+// two levels with equal params are the same world. Conversions to/from
+// `world::Level` live in world.rs.
+#[derive(Clone, PartialEq, Debug)]
 pub struct LevelParams {
-    pub scoring: u8, // 0 = pads, 1 = distance (display-only, kept for context)
+    pub scoring: u8, // 0 = pads, 1 = distance, 2 = time (run ends at all pads visited)
     pub shafts: u8,
     pub obstacles: u8,
     pub pad_spacing: f32,
     pub seed: u32,
+    pub terrain: Option<crate::world::Terrain>, // Some = hand-drawn world (format v4)
+}
+
+impl LevelParams {
+    // Does this level use any capability the v3 layout can't express?
+    fn needs_ext_format(&self) -> bool {
+        self.terrain.is_some() || self.scoring >= 2
+    }
 }
 
 impl SimParams {
@@ -241,14 +271,26 @@ impl Recording {
     // --- Serialization (little-endian) ---
     // Header: magic(4) version(2) build_id(4) params(15×4)
     //         level: scoring(1) shafts(1) obstacles(1) pad_spacing(4) seed(4)
-    //         ticks(4) n_events(4) n_keyframes(4)                 = 93 B
+    //         [v4 only, right after seed: flags(1) — bit 0 reserved,
+    //          bit 1 terrain present; if bit 1: terrain — n_polys(2),
+    //          per poly n_verts(2) + verts(2×4 each); n_pads(2) +
+    //          pads(2×4 each); has_start(1) [+ start 2×4]; spawn_y(4)]
+    //         ticks(4) n_events(4) n_keyframes(4)      = 93 B (v3, no extras)
     // Event:  tick(4) throttle(1) rot(1) steer_x(1) steer_y(1) held(1) = 9 B
-    // Keyframe: tick(4) + 11×f32                                      = 48 B
+    // Keyframe: tick(4) + 11×f32                          = 48 B (v3)
+    //           v4 appends visited(8) + run_ticks(4)      = 60 B
+    // The version is picked per recording: a legacy procedural level writes
+    // the byte-identical v3 layout; terrain / time-scored levels write v4.
 
     pub fn serialize(&self, build_id: u32) -> Vec<u8> {
         let mut out = Vec::with_capacity(93 + self.events.len() * 9 + self.keyframes.len() * 48);
         out.extend_from_slice(&REPLAY_MAGIC);
-        out.extend_from_slice(&REPLAY_FORMAT_VERSION.to_le_bytes());
+        let version = if self.level.needs_ext_format() {
+            REPLAY_FORMAT_VERSION_EXT
+        } else {
+            REPLAY_FORMAT_VERSION
+        };
+        out.extend_from_slice(&version.to_le_bytes());
         out.extend_from_slice(&build_id.to_le_bytes());
         for f in self.params.to_array() {
             out.extend_from_slice(&f.to_le_bytes());
@@ -258,6 +300,31 @@ impl Recording {
         out.push(self.level.obstacles);
         out.extend_from_slice(&self.level.pad_spacing.to_le_bytes());
         out.extend_from_slice(&self.level.seed.to_le_bytes());
+        if version == REPLAY_FORMAT_VERSION_EXT {
+            let flags = if self.level.terrain.is_some() { 2 } else { 0 };
+            out.push(flags);
+        }
+        if let Some(t) = &self.level.terrain {
+            out.extend_from_slice(&(t.polys.len() as u16).to_le_bytes());
+            for poly in &t.polys {
+                out.extend_from_slice(&(poly.len() as u16).to_le_bytes());
+                for p in poly {
+                    out.extend_from_slice(&p.x.to_le_bytes());
+                    out.extend_from_slice(&p.y.to_le_bytes());
+                }
+            }
+            out.extend_from_slice(&(t.pads.len() as u16).to_le_bytes());
+            for p in &t.pads {
+                out.extend_from_slice(&p.x.to_le_bytes());
+                out.extend_from_slice(&p.y.to_le_bytes());
+            }
+            out.push(t.start.is_some() as u8);
+            if let Some(sp) = &t.start {
+                out.extend_from_slice(&sp.x.to_le_bytes());
+                out.extend_from_slice(&sp.y.to_le_bytes());
+            }
+            out.extend_from_slice(&t.spawn_y.to_le_bytes());
+        }
         out.extend_from_slice(&self.ticks.to_le_bytes());
         out.extend_from_slice(&(self.events.len() as u32).to_le_bytes());
         out.extend_from_slice(&(self.keyframes.len() as u32).to_le_bytes());
@@ -275,6 +342,10 @@ impl Recording {
                       k.fuel, k.hull, k.glow, k.land_timer] {
                 out.extend_from_slice(&f.to_le_bytes());
             }
+            if version == REPLAY_FORMAT_VERSION_EXT {
+                out.extend_from_slice(&k.visited.to_le_bytes());
+                out.extend_from_slice(&k.run_ticks.to_le_bytes());
+            }
         }
         out
     }
@@ -284,7 +355,8 @@ impl Recording {
         if r.bytes(4)? != REPLAY_MAGIC {
             return Err("bad magic");
         }
-        if r.u16()? != REPLAY_FORMAT_VERSION {
+        let version = r.u16()?;
+        if version != REPLAY_FORMAT_VERSION && version != REPLAY_FORMAT_VERSION_EXT {
             return Err("unsupported version");
         }
         let build_id = r.u32()?;
@@ -293,13 +365,43 @@ impl Recording {
             *f = r.f32()?;
         }
         let params = SimParams::from_array(a);
-        let level = LevelParams {
+        let mut level = LevelParams {
             scoring: r.u8()?,
             shafts: r.u8()?,
             obstacles: r.u8()?,
             pad_spacing: r.f32()?,
             seed: r.u32()?,
+            terrain: None,
         };
+        if version == REPLAY_FORMAT_VERSION_EXT {
+            let flags = r.u8()?;
+            if flags & 2 != 0 {
+                // Same hostile-count rule as events/keyframes below: cap
+                // every Vec::with_capacity by what the remaining bytes
+                // could hold.
+                let n_polys = r.u16()? as usize;
+                let mut polys = Vec::with_capacity(n_polys.min(r.remaining() / 2));
+                for _ in 0..n_polys {
+                    let n_verts = r.u16()? as usize;
+                    let mut poly = Vec::with_capacity(n_verts.min(r.remaining() / 8));
+                    for _ in 0..n_verts {
+                        poly.push(glam::vec2(r.f32()?, r.f32()?));
+                    }
+                    polys.push(poly);
+                }
+                let n_pads = r.u16()? as usize;
+                let mut pads = Vec::with_capacity(n_pads.min(r.remaining() / 8));
+                for _ in 0..n_pads {
+                    pads.push(glam::vec2(r.f32()?, r.f32()?));
+                }
+                let start = (r.u8()? != 0)
+                    .then(|| Ok::<_, &'static str>(glam::vec2(r.f32()?, r.f32()?)))
+                    .transpose()?;
+                let spawn_y = r.f32()?;
+                level.terrain =
+                    Some(crate::world::Terrain { polys, pads, start, spawn_y });
+            }
+        }
         let ticks = r.u32()?;
         let n_events = r.u32()? as usize;
         let n_keyframes = r.u32()? as usize;
@@ -321,17 +423,24 @@ impl Recording {
                 },
             });
         }
-        let mut keyframes = Vec::with_capacity(n_keyframes.min(r.remaining() / 48));
+        let kf_size = if version == REPLAY_FORMAT_VERSION_EXT { 60 } else { 48 };
+        let mut keyframes = Vec::with_capacity(n_keyframes.min(r.remaining() / kf_size));
         for _ in 0..n_keyframes {
             let tick = r.u32()?;
             let mut f = [0f32; 11];
             for v in &mut f {
                 *v = r.f32()?;
             }
+            let (visited, run_ticks) = if version == REPLAY_FORMAT_VERSION_EXT {
+                (r.u64()?, r.u32()?)
+            } else {
+                (0, tick) // pre-extension state: the clock never froze
+            };
             keyframes.push(Keyframe {
                 tick,
                 x: f[0], y: f[1], rot_re: f[2], rot_im: f[3], vx: f[4], vy: f[5],
                 angvel: f[6], fuel: f[7], hull: f[8], glow: f[9], land_timer: f[10],
+                visited, run_ticks,
             });
         }
         let last_input = events.last().map(|e| e.input);
@@ -365,6 +474,9 @@ impl<'a> Reader<'a> {
     fn u32(&mut self) -> Result<u32, &'static str> {
         Ok(u32::from_le_bytes(self.bytes(4)?.try_into().unwrap()))
     }
+    fn u64(&mut self) -> Result<u64, &'static str> {
+        Ok(u64::from_le_bytes(self.bytes(8)?.try_into().unwrap()))
+    }
     fn f32(&mut self) -> Result<f32, &'static str> {
         Ok(f32::from_le_bytes(self.bytes(4)?.try_into().unwrap()))
     }
@@ -397,7 +509,10 @@ mod tests {
     }
 
     fn lparams() -> LevelParams {
-        LevelParams { scoring: 0, shafts: 1, obstacles: 1, pad_spacing: 130.0, seed: 0 }
+        LevelParams {
+            scoring: 0, shafts: 1, obstacles: 1, pad_spacing: 130.0, seed: 0,
+            terrain: None,
+        }
     }
 
     fn kf(tick: u32) -> Keyframe {
@@ -406,6 +521,9 @@ mod tests {
             x: tick as f32 * 0.1, y: 5.0, rot_re: 0.955, rot_im: 0.296,
             vx: 1.0, vy: -0.5, angvel: 0.0, fuel: 90.0, hull: 100.0,
             glow: 0.7, land_timer: 0.25,
+            // v3-lossless values (a v3 read yields exactly these); the v4
+            // test overrides them to prove the extended fields round-trip.
+            visited: 0, run_ticks: tick,
         }
     }
 
@@ -501,6 +619,63 @@ mod tests {
         assert_eq!(back.params, rec.params);
         assert_eq!(back.level, rec.level);
         assert_eq!(back.ticks(), rec.ticks());
+        assert_eq!(back.events, rec.events);
+        assert_eq!(back.keyframes, rec.keyframes);
+    }
+
+    #[test]
+    fn time_levels_roundtrip_as_v4() {
+        // A time-scored level must force the extended format (its scoring
+        // value is a post-v3 feature) and round-trip exactly.
+        let lp = LevelParams { scoring: 2, ..lparams() };
+        let mut rec = Recording::new(params(), lp.clone(), u32::MAX);
+        rec.push_keyframe(kf(0));
+        let blob = rec.serialize(3);
+        assert_eq!(u16::from_le_bytes([blob[4], blob[5]]), REPLAY_FORMAT_VERSION_EXT);
+        let (back, _) = Recording::deserialize(&blob).expect("deserialize v4");
+        assert_eq!(back.level, lp);
+    }
+
+    #[test]
+    fn terrain_levels_roundtrip_as_v4_and_procedural_stays_v3() {
+        // A legacy procedural recording must serialize byte-compatible v3
+        // (existing stored blobs and the deployed backend keep working); a
+        // hand-drawn level rides its full Terrain in a v4 blob and
+        // round-trips exactly.
+        let mut rec = Recording::new(params(), lparams(), u32::MAX);
+        rec.push_keyframe(kf(0));
+        let blob = rec.serialize(1);
+        assert_eq!(u16::from_le_bytes([blob[4], blob[5]]), REPLAY_FORMAT_VERSION);
+
+        let terrain = crate::world::Terrain {
+            polys: vec![
+                vec![glam::vec2(-10.0, -5.0), glam::vec2(10.0, -5.0), glam::vec2(0.0, -1.0)],
+                vec![
+                    glam::vec2(-8.0, 8.0), glam::vec2(8.0, 8.0),
+                    glam::vec2(8.0, 12.0), glam::vec2(-8.0, 12.0),
+                ],
+            ],
+            pads: vec![glam::vec2(0.0, -0.5), glam::vec2(5.0, 9.0)],
+            start: Some(glam::vec2(-3.0, -0.5)),
+            spawn_y: -0.5,
+        };
+        let lp = LevelParams { terrain: Some(terrain), ..lparams() };
+        let mut rec = Recording::new(params(), lp.clone(), u32::MAX);
+        rec.push_keyframe(kf(0));
+        for _ in 0..KEYFRAME_EVERY {
+            if rec.record_tick(InputState { throttle: 200, ..Default::default() }) {
+                // Non-trivial game-logic state: only v4 carries it.
+                let mut k = kf(rec.ticks());
+                k.visited = 0b10101;
+                k.run_ticks = rec.ticks() - 7;
+                rec.push_keyframe(k);
+            }
+        }
+        let blob = rec.serialize(7);
+        assert_eq!(u16::from_le_bytes([blob[4], blob[5]]), REPLAY_FORMAT_VERSION_EXT);
+        let (back, build_id) = Recording::deserialize(&blob).expect("deserialize v4");
+        assert_eq!(build_id, 7);
+        assert_eq!(back.level, lp);
         assert_eq!(back.events, rec.events);
         assert_eq!(back.keyframes, rec.keyframes);
     }
