@@ -88,6 +88,7 @@ pub struct Level {
     pub obstacles: bool,
     pub pad_spacing: f32,
     pub seed: u32,
+    pub endless: bool, // no x-wrap: value-noise cave that never repeats
     pub terrain: Option<Terrain>, // Some = hand-drawn world, procedural gen off
 }
 
@@ -101,6 +102,7 @@ impl Level {
             obstacles: true,
             pad_spacing: PAD_SPACING,
             seed: 0,
+            endless: false,
             terrain: None,
         }
     }
@@ -143,6 +145,7 @@ impl Level {
                     }
                 }
                 "shafts" => lvl.shafts = on,
+                "endless" => lvl.endless = on,
                 "obstacles" => lvl.obstacles = on,
                 "pad_spacing" => {
                     if let Ok(f) = v.parse::<f32>() {
@@ -228,6 +231,7 @@ impl Level {
             obstacles: self.obstacles as u8,
             pad_spacing: self.pad_spacing,
             seed: self.seed,
+            endless: self.endless as u8,
             terrain: self.terrain.clone(),
         }
     }
@@ -246,19 +250,59 @@ impl Level {
             obstacles: p.obstacles != 0 && p.terrain.is_none(),
             pad_spacing: p.pad_spacing,
             seed: p.seed,
+            endless: p.endless != 0,
             terrain: p.terrain.clone(),
         }
     }
 }
 
 impl Level {
+    // Signed value noise in [-1, 1]: smoothstep-interpolated hashes on an
+    // integer lattice of `wavelength`-sized cells. The endless cave's
+    // analogue of one harmonic term — the SAME amplitude bounds (so every
+    // flyability guarantee carries over) but keyed on the cell index, so
+    // the curve never repeats. C1-continuous, pure function of x.
+    fn vnoise(&self, salt: u32, x: f32, wavelength: f32) -> f32 {
+        let t = x / wavelength;
+        let i = t.floor();
+        let f = t - i;
+        let h = |c: i64| {
+            (hash_u32(
+                (c as u32)
+                    ^ self.seed.wrapping_mul(0x9e37_79b9)
+                    ^ salt.wrapping_mul(0x85eb_ca6b),
+            ) & 0xffff) as f32
+                / 65535.0
+                * 2.0
+                - 1.0
+        };
+        let (a, b) = (h(i as i64), h(i as i64 + 1));
+        a + (b - a) * (f * f * (3.0 - 2.0 * f))
+    }
+
     pub fn cave_center(&self, x: f32) -> f32 {
+        if self.endless {
+            // Endless mode: no PERIOD — value-noise terms mirroring the
+            // harmonic amplitudes below, hashed per cell so the cave goes
+            // on forever without wrapping.
+            return self.vnoise(1, x, 210.0) * 14.0  // big slow sweep
+                + self.vnoise(2, x, 70.0) * 5.0     // medium curves
+                + self.vnoise(3, x, 26.0) * 3.0;    // tighter wiggles
+        }
         (x * BASE + self.phase(1)).sin()       * 14.0   // 1st harmonic  — big slow sweep
         + (x * BASE * 3.0 + self.phase(2)).cos() *  5.0 // 3rd harmonic  — medium curves
         + (x * BASE * 7.0 + self.phase(3)).sin() *  3.0 // 7th harmonic  — tighter wiggles
     }
 
     pub fn cave_half_width(&self, x: f32) -> f32 {
+        if self.endless {
+            // Same bounds as the harmonics: [2.5, 12.5] — no seed and no
+            // stretch of x can pinch the endless cave shut either.
+            return 6.5
+                + self.vnoise(4, x, 130.0) * 2.5        // narrows / widens slowly
+                + self.vnoise(5, x, 47.0) * 1.5         // medium variation
+                + self.vnoise(6, x, 19.0).abs() * 2.0;  // pinch points (abs keeps it positive)
+        }
         6.5
         + (x * BASE * 2.0 + self.phase(4)).sin()      * 2.5  // narrows / widens slowly
         + (x * BASE * 5.0 + self.phase(5)).cos()      * 1.5  // medium variation
@@ -333,6 +377,7 @@ pub fn shipped_levels() -> Vec<(&'static str, Level)> {
         ("caves", Level::parse(include_str!("../../levels/caves.level"))),
         ("expanse", Level::parse(include_str!("../../levels/expanse.level"))),
         ("glide", Level::parse(include_str!("../../levels/glide.level"))),
+        ("rift", Level::parse(include_str!("../../levels/rift.level"))),
         ("hollows", Level::parse(include_str!("../../levels/hollows.level"))),
     ]
 }

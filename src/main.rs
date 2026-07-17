@@ -3684,6 +3684,38 @@ mod tests {
     }
 
     #[test]
+    fn endless_levels_never_wrap_and_never_pinch() {
+        let lvl = Level::parse(
+            "name = E\nscoring = distance\nshafts = off\nendless = on\nseed = 20260717",
+        );
+        assert!(lvl.endless);
+        // Not periodic: the legacy PERIOD must not repeat the endless cave.
+        let mut differs = 0;
+        for i in 0..200 {
+            let x = i as f32 * 37.0;
+            if (lvl.cave_center(x + PERIOD) - lvl.cave_center(x)).abs() > 0.5 {
+                differs += 1;
+            }
+        }
+        assert!(differs > 150, "endless cave looks periodic: {differs}/200 samples differ");
+        // The harmonic amplitude bounds carry over — no pinch, no blowout —
+        // far beyond the old wrap distance in both directions.
+        for i in -20_000..20_000 {
+            let x = i as f32 * 1.7;
+            let hw = lvl.cave_half_width(x);
+            assert!((2.49..=12.51).contains(&hw), "half width {hw} out of bounds at x={x}");
+        }
+        // C1 value noise: no jumps between nearby samples (collider chain
+        // and lattice row 0 stay visually continuous).
+        for i in -4_000..4_000 {
+            let x = i as f32 * 1.5;
+            let dc = (lvl.cave_center(x + 0.1) - lvl.cave_center(x)).abs();
+            let dh = (lvl.cave_half_width(x + 0.1) - lvl.cave_half_width(x)).abs();
+            assert!(dc < 0.5 && dh < 0.5, "cave jumps at x={x}: dc={dc} dh={dh}");
+        }
+    }
+
+    #[test]
     fn shipped_levels_map_stays_in_sync_with_the_manifest() {
         // The backend verifier params-checks submissions against
         // world::shipped_levels() — a level listed in the manifest but
