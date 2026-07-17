@@ -1,8 +1,10 @@
 # Level — The Hollows: the first hand-drawn world (Across / Elasto Mania
 # style). No procedural generator: every `poly` line below is a solid rock
 # mass drawn by hand, and the playable space is what's left open — five
-# chambers joined by tunnels, each chamber holding a landing pad to visit
-# (+100 on the first touch-down; collectibles may replace pads here later).
+# chambers joined by tunnels, each chamber holding a landing pad.
+# TIME-scored: the clock starts at your first input, the HUD counts pads
+# x/5, and touching down on the last unvisited pad ends the level — best
+# (lowest) time wins. (Collectibles may replace pads here later.)
 #
 # Map (side view, y up):                 ┌────────────────────────┐
 #   upper chamber (x -20..20, y 32..50) ─┤ tunnel ├─ attic (30..58)
@@ -12,7 +14,7 @@
 # Rock polygons may overlap (buried edges are unreachable); the outer frame
 # is four fat slabs. Tunnels are kept ≥ 6.5 m tall — the ship is ~1.5 m.
 name = The Hollows
-scoring = pads
+scoring = time
 shafts = off
 obstacles = off
 spawn_y = -0.5

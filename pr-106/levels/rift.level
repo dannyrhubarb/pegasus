@@ -1,11 +1,12 @@
-# Level — The Rift: a brand-new infinite procedural cave. A non-zero seed
-# re-phases every cave harmonic and re-keys every slot hash, so the whole
-# world — curves, pinches, boulders, pads and shaft positions — is different
-# from the legacy cave. Everything is on: vertical shafts to climb, boulders
-# to dodge, refueling pads a little farther apart than usual.
+# Level — The Rift: the endless procedural cave. `endless = on` swaps the
+# periodic cave harmonics for hash-based value noise with the same amplitude
+# bounds — the tunnel never wraps around, every kilometre is new rock in
+# BOTH directions. No shafts (one long unique tunnel, like The Expanse),
+# boulders on, refueling pads a little farther apart than usual.
 name = The Rift
 scoring = distance
-shafts = on
+shafts = off
 obstacles = on
+endless = on
 pad_spacing = 150
 seed = 20260717
