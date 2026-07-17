@@ -23,11 +23,11 @@ obstacles = off
 # it is NOT one of the pads to visit (and it doesn't refuel).
 start = 0,-0.5
 
-# The five pads to visit: west chamber, east chamber, a perch on the east
+# The five pads to visit: west chamber, east chamber, a perch on the west
 # tunnel's sill (a mid-transit pit stop), upper chamber, attic.
 pad = -45,-0.4
 pad = 45,0.6
-pad = 22,3.7
+pad = -22,2.8
 pad = 12,32.9
 pad = 53,36.6
 

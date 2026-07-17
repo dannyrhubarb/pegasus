@@ -1,5 +1,10 @@
 [
  {
+  "rev": "f9fad9f",
+  "date": "2026-07-17T11:25:33Z",
+  "note": "The Hollows' tunnel perch moved to the west passage, and the start platform lost its lights"
+ },
+ {
   "rev": "30fe49e",
   "date": "2026-07-17T10:34:59Z",
   "note": "The Hollows now launches from its own start platform, its clock reads big, and replay scrubbing tracks your pad count exactly"
