@@ -511,7 +511,7 @@ generator — all world generation is `Level` methods, so a level IS the world:
 | `shafts` | on/off | Off: `seg_in_opening` is always false (sealed cave), no shaft colliders load, minimap skips the carve |
 | `obstacles` | on/off | Off: `obstacle_spec` returns None everywhere (pads then skip the boulder-overlap check) |
 | `pad_spacing` | 40–2000 (clamped) | Metres between pad slots (`PAD_SPACING = 130` is the default) |
-| `seed` | u32 | **0 = the legacy world bit-for-bit** (zero harmonic phases, untouched slot hashes — pinned by the pre-Level unit tests still passing unchanged). Any other seed re-phases the cave harmonics and re-keys every slot hash. The half-width harmonics guarantee ≥ 2.5 m clearance for ANY phases (unit-tested), so no seed can pinch the cave shut |
+| `seed` | u32 / `random` | **0 = the legacy world bit-for-bit** (zero harmonic phases, untouched slot hashes — pinned by the pre-Level unit tests still passing unchanged). Any other seed re-phases the cave harmonics and re-keys every slot hash. The half-width harmonics guarantee ≥ 2.5 m clearance for ANY phases (unit-tested), so no seed can pinch the cave shut. **`seed = random`** (`Level::random_seed`, 2026-07): the game rolls a fresh CONCRETE seed at every level load AND every restart (`with_rolled_seed` in main.rs — frame-side wall clock × counter, never 0; nondeterminism stays out of sim.rs), so each attempt flies brand-new rock. The flag is metadata only: world gen reads `seed`, `LevelParams` carries the rolled concrete value (not the flag), so replays/ghost/verification re-sim the exact world flown. The identical-re-push no-op uses `Level::same_file_as` (seed-neutralized for random levels) instead of `==`. The racing ghost is naturally inert on such levels — a pushed ghost's recorded seed never matches the fresh world, so the existing params equality drops it (BEST/record name still work) |
 | `poly` | `x,y x,y …` | **Hand-drawn terrain** (Across / Elasto Mania model): one SOLID ROCK polygon per line (≥ 3 verts, concave OK, overlaps OK — buried edges are unreachable; winding normalized to CCW on parse). Any `poly` line puts the level in hand-drawn mode: `Level.terrain = Some(Terrain)`, procedural gen off (shafts/obstacles forced off), every edge a segment collider loaded ONCE (no sliding window — hand-drawn maps are finite; `Sim.terrain_loaded` guards the one-shot insert, fixed file order keeps Rapier handle numbering deterministic) |
 | `pad` | `x,y` | Hand-placed pad (deck centre x, deck top y) — terrain levels only; keyed `(index, 0)` in `Sim.pads`, same landing/refuel/score logic |
 | `start` | `x,y` | Terrain levels: a NEUTRAL start platform under the spawn — a plain high-friction deck NOT in `Sim.pads` (no visit/refuel/score fires there), so a Time level's launch spot isn't a freebie visit. Defines the spawn ground (`spawn_y = start.y`); drawn as a dimmer, light-less deck, grey on the minimap |
@@ -523,7 +523,11 @@ legacy world). Shipped levels (pinned by `include_str!` tests): **The
 Expanse** (no shafts, boulders), **The Glide** (no shafts, no boulders),
 **The Rift** (2026-07: an **endless** procedural cave — `endless = on`
 value-noise cave that never wraps, no shafts, boulders, `seed =
-20260717`, pads every ~150 m) — both distance-scored — plus **The
+20260717`, pads every ~150 m), **The Flux** (2026-07: The Rift's
+shapeshifting twin — identical knobs but `seed = random`, so every load
+and every restart rolls a brand-new endless cave; no racing ghost by
+nature, but full replays/boards — see the `seed` row above) — all
+distance-scored — plus **The
 Hollows** (2026-07: the first HAND-DRAWN level — five chambers joined by
 tunnels, five pads scattered through them (incl. a perch on the west
 tunnel's sill) plus a neutral `start` platform in the spawn chamber,
@@ -592,10 +596,12 @@ levels keep their old session-state semantics — mask 0).
 Hand-drawn replays are thereby self-contained
 (`resim_reproduces_on_a_hand_drawn_level_bit_exactly` round-trips through
 serialize/deserialize). **Backend caveat**: the deployed verifier's pinned
-sim-core rejects v4 until re-pinned — submissions on the endless /
-hand-drawn / time-scored levels are silently discarded server-side until
-the backend re-pin + redeploy; the legacy procedural levels are
-unaffected.
+sim-core must understand the recording format and know each shipped
+level's params (THE REPIN RULE in the backend repo's CLAUDE.md). The
+2026-07-17 backend repin covers v4 + the Rift/Hollows params check; a
+newly shipped level verifies immediately as an unknown stem (the level
+check is skipped by design, physics still fully verified) and gains its
+params pinning at the next repin.
 
 ## Rendering architecture
 - **High-DPI**: `high_dpi: true` in `window_conf`. The code treats
@@ -1400,7 +1406,7 @@ commit the refreshed page.
 - **Always open a PR** after pushing a feature branch — standing instruction
   from the owner (no need to ask first). The PR also produces a phone-testable
   preview deployment at `pr-<n>/`.
-- Development branch: `claude/two-new-game-levels-eienet` (current); previous: `claude/android-back-button-nav-0tgzdd`
+- Development branch: `claude/random-rift-level-type-m6axqa` (current); previous: `claude/two-new-game-levels-eienet`
 - Merges to `main` via rebase PRs using the GitHub MCP tools (`mcp__github__create_pull_request`, `mcp__github__merge_pull_request`).
 - **Curate the branch before merging.** Rebase merges land every branch
   commit on `main` verbatim, so branch noise becomes permanent history.
