@@ -1,5 +1,15 @@
 [
  {
+  "rev": "84f48f5",
+  "date": "2026-07-17T13:41:41+02:00",
+  "note": "New level The Rift — an endless cave that never repeats, in either direction, boulders all the way down"
+ },
+ {
+  "rev": "18337ee",
+  "date": "2026-07-17T13:41:41+02:00",
+  "note": "New level The Hollows — a hand-drawn cavern of five chambers: race the clock to land on all five pads"
+ },
+ {
   "rev": "a2dfd98",
   "date": "2026-07-17T00:23:03+02:00",
   "note": "The game now opens straight to the main menu"
