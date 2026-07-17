@@ -503,7 +503,9 @@
       -webkit-user-select: none;
     }
     .rowlist .row:hover { background: rgba(52, 231, 255, 0.12); }
-    .rowlist .row .lname { flex: 1; text-align: left; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+    .rowlist .row .lcol { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; text-align: left; }
+    .rowlist .row .lname { font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+    .rowlist .row .ldesc { color: var(--dim); font-size: 0.72em; letter-spacing: 0.03em; line-height: 1.35; }
     .rowlist .row .lbest {
       color: var(--dim);
       font-size: 0.85em;
@@ -2057,6 +2059,7 @@
     const scoresLevelEl = document.getElementById("scores-level");
     const levelTexts = {};        // file -> level text
     const levelNames = {};        // file -> display name
+    const levelDescs = {};        // file -> one-line picker description
     const levelFiles = [];        // manifest order
     let currentLevelFile = null;  // the level LOADED in the game
     let scoresFile = null;        // the level whose board scr-scores shows
@@ -2101,9 +2104,19 @@
       for (const file of levelFiles) {
         const row = document.createElement("div");
         row.className = "row";
+        // Title + (optional) one-line description, stacked in the left column.
+        const col = document.createElement("span");
+        col.className = "lcol";
         const name = document.createElement("span");
         name.className = "lname";
         name.textContent = levelNames[file];
+        col.appendChild(name);
+        if (levelDescs[file]) {
+          const desc = document.createElement("span");
+          desc.className = "ldesc";
+          desc.textContent = levelDescs[file];
+          col.appendChild(desc);
+        }
         const best = document.createElement("span");
         best.className = "lbest";
         const bd = document.createElement("span");
@@ -2112,7 +2125,7 @@
         best.append(bd, by);
         levelBestEls[file] = { d: bd, by };
         setLevelBest(file);
-        row.append(name, best);
+        row.append(col, best);
         if (levelPickerMode === "scores") {
           // Drill-down affordance: tapping a row opens that level's board.
           const chev = document.createElement("span");
@@ -2174,6 +2187,10 @@
             levelTexts[file] = text;
             levelNames[file] =
               ((text.match(/^\s*name\s*=\s*(.+)$/m) || [])[1] || file).trim();
+            // Optional cosmetic `description =` line — shown under the
+            // title in the level picker (the wasm parser ignores the key).
+            levelDescs[file] =
+              ((text.match(/^\s*description\s*=\s*(.+)$/m) || [])[1] || "").trim();
             levelFiles.push(file);
           } catch (e) { /* skip an unfetchable level */ }
         }
