@@ -1255,8 +1255,14 @@ session-only BEST). Previews get the same config, so a PR preview talks to
 the real backend. All JS-side in `index.html`:
 - **Submit is always an explicit choice**: `maybeSubmitOnline` hooks
   `collectEndedRun` — every publishable run that ended in a game over
-  (destroying crash or out-of-fuel; ≥ 1 m; the game
+  (destroying crash, out-of-fuel, or a completed time level; score ≥ 1 —
+  metres, or seconds on a time level; the game
   already drops runs < `GHOST_MIN_SECS`) is held in `pendingSubmit`, and
+  the accept gate is ui-state 1/2 OR analytics cause 3 — a completion
+  publishes DURING the 1.6 s "LEVEL COMPLETE" grace at state 0 (flying),
+  so the state gate alone dropped it (the 500 ms collect poll consumes
+  `run_seq` before state 2 shows; bug found live on The Hollows,
+  2026-07-17). Reset-ended runs (cause 1) stay excluded, and
   the ui-state poll shows the SUBMIT SCORE dialog (`#scr-name`) **instead
   of** the game-over screen: submit → save name + POST
   `{level: <file stem>, name, score, replay}` to `/v1/scores` → game-over;
