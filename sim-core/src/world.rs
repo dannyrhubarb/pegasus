@@ -407,7 +407,6 @@ pub fn shipped_levels() -> Vec<(&'static str, Level)> {
         ("caves", Level::parse(include_str!("../../levels/caves.level"))),
         ("expanse", Level::parse(include_str!("../../levels/expanse.level"))),
         ("glide", Level::parse(include_str!("../../levels/glide.level"))),
-        ("rift", Level::parse(include_str!("../../levels/rift.level"))),
         ("flux", Level::parse(include_str!("../../levels/flux.level"))),
         ("hollows", Level::parse(include_str!("../../levels/hollows.level"))),
     ]
