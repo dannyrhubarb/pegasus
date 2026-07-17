@@ -1,5 +1,25 @@
 [
  {
+  "rev": "a7c89d3",
+  "date": "2026-07-18T00:43:38+02:00",
+  "note": "Retired The Caves — four distinct worlds remain"
+ },
+ {
+  "rev": "b776412",
+  "date": "2026-07-18T00:43:38+02:00",
+  "note": "Retired The Rift — The Flux carries the endless cave on, reshuffled every attempt"
+ },
+ {
+  "rev": "6dee267",
+  "date": "2026-07-18T00:43:38+02:00",
+  "note": "The Hollows time trial now leads the level list"
+ },
+ {
+  "rev": "10d4e7b",
+  "date": "2026-07-18T00:43:38+02:00",
+  "note": "The level picker now describes each level under its name"
+ },
+ {
   "rev": "47acd3f",
   "date": "2026-07-17T23:27:41+02:00",
   "note": "Time trial levels now show the world-record time and who holds it while you fly"
