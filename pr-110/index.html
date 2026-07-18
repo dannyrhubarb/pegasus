@@ -1035,11 +1035,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">d75a75c-pr-110</div>
+        <div class="info-value" id="git-rev">e768384-pr-110</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-18T23:16:54Z</div>
+        <div class="info-value" id="build-time">2026-07-18T23:29:05Z</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors, which site
@@ -1437,9 +1437,12 @@
       closeMenu(); // state flips to replay; the poll below brings us back
     });
     document.getElementById("btn-gomenu").addEventListener("click", () => {
-      // Back from the game-over screen: end the run (the fresh ship waits
-      // behind the menu) and return to the level picker — or home when
-      // there's no level list.
+      // Back from the game-over screen: on an editor draft, back means back
+      // to the EDITOR (like the in-flight ✕ — hardware back rides this
+      // button too via the .mbtn.back rule). Otherwise end the run (the
+      // fresh ship waits behind the menu) and return to the level picker —
+      // or home when there's no level list.
+      if (isCustomLevel(currentLevelFile)) { location.href = "editor.html"; return; }
       call("ui_command", 1);
       levelFiles.length ? openLevelPicker("fly") : showScreen("scr-home");
     });
@@ -1930,7 +1933,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "d75a75c-pr-110";
+    const wasmRev = "e768384-pr-110";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
