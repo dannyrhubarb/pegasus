@@ -1,5 +1,10 @@
 [
  {
+  "rev": "5a8122d",
+  "date": "2026-07-18T23:10:29Z",
+  "note": "Trying out an editor draft now returns you straight to the editor with the ✕ button"
+ },
+ {
   "rev": "082a6a1",
   "date": "2026-07-18T22:33:24Z",
   "note": "Level editor can now group elements to move them together, and lock finished parts so they can't be nudged by accident"
