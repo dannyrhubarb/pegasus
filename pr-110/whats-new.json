@@ -1,5 +1,10 @@
 [
  {
+  "rev": "eb2548f",
+  "date": "2026-07-18T10:46:35Z",
+  "note": "Carved holes are now editable — select a cut to move or reshape it, delete it to restore the rock"
+ },
+ {
   "rev": "51c8ea6",
   "date": "2026-07-18T08:31:38Z",
   "note": "Carved caves no longer show seam lines through the rock"
