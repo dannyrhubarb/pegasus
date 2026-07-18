@@ -61,6 +61,8 @@
   .btn:active { transform: translateY(1px); }
   .btn.tool.on { border-color: var(--cyan); color: var(--cyan);
                  box-shadow: 0 0 8px rgba(70,240,255,0.25) inset; }
+  .btn.shp.on { border-color: var(--amber); color: var(--amber);
+                box-shadow: 0 0 8px rgba(255,181,69,0.2) inset; }
   .btn.warn { border-color: #5a3020; color: var(--amber); }
   .btn.go { border-color: #1d5a38; color: var(--green); }
   .btn.danger { border-color: #5a2020; color: var(--red); }
@@ -128,6 +130,11 @@
     <button class="btn tool" id="t-carve">CARVE</button>
     <button class="btn tool" id="t-pad">PAD</button>
     <button class="btn tool" id="t-start">START</button>
+    <div class="sep"></div>
+    <!-- Shape mode for DRAW ROCK / CARVE: freeform, rectangle, circle -->
+    <button class="btn shp on" id="s-free" title="Freeform polygon">FREE</button>
+    <button class="btn shp" id="s-rect" title="Rectangle (drag or tap two corners)">RECT</button>
+    <button class="btn shp" id="s-circ" title="Circle (drag from the centre)">CIRC</button>
     <div class="sep"></div>
     <button class="btn" id="b-undo" title="Ctrl+Z">&#8630;</button>
     <button class="btn" id="b-redo" title="Ctrl+Shift+Z">&#8631;</button>
@@ -282,9 +289,11 @@ function syncUndoBtns() {
 
 // ---------- tools / selection ----------
 let tool = "select";           // select | draw | carve | pad | start
-let sel = null;                // {kind:'poly'|'pad'|'start', idx, vert:n|null}
+let sel = null;                // {kind:'poly'|'hole'|'pad'|'start', idx, vert:n|null}
 let drawing = null;            // in-progress polygon: [[x,y],...]
 let pendingKind = "draw";      // what `drawing` becomes: 'draw' = rock, 'carve' = a cut
+let shape = "free";            // draw/carve input: free | rect | circle
+let shapeAnchor = null;        // rect/circle tap-tap: the placed corner/centre
 let snapOn = true;
 let hoverClose = false;        // draw/carve: cursor near the closing vertex
 
@@ -308,11 +317,33 @@ function setTool(t) {
 for (const k in toolBtns)
   document.getElementById(toolBtns[k]).addEventListener("click", () => setTool(k));
 
+// Shape mode applies to DRAW ROCK and CARVE; picking one from another tool
+// jumps into DRAW ROCK (the most likely intent).
+const shapeBtns = { free: "s-free", rect: "s-rect", circle: "s-circ" };
+function setShape(s) {
+  shape = s;
+  shapeAnchor = null;
+  for (const k in shapeBtns)
+    document.getElementById(shapeBtns[k]).classList.toggle("on", k === s);
+  if (tool !== "draw" && tool !== "carve") setTool("draw");
+  else { setHint(); syncContextBtns(); draw(); }
+}
+for (const k in shapeBtns)
+  document.getElementById(shapeBtns[k]).addEventListener("click", () => setShape(k));
+
 function setHint() {
+  const shapeHints = {
+    rect: "drag corner to corner · or tap two corners",
+    circle: "drag outward from the centre · or tap centre, then edge",
+  };
   const hints = {
     select: "tap: select · drag: move · drag empty: pan · wheel/pinch: zoom",
-    draw: "tap: add vertex · drag: freehand · finish on the first vertex · two fingers: pan/zoom",
-    carve: "cut a hole: tap vertices or drag freehand · cuts stay editable — select to move/reshape, delete to restore",
+    draw: shape === "free"
+      ? "tap: add vertex · drag: freehand · finish on the first vertex · two fingers: pan/zoom"
+      : "draw rock — " + shapeHints[shape],
+    carve: shape === "free"
+      ? "cut a hole: tap vertices or drag freehand · cuts stay editable — select to move/reshape, delete to restore"
+      : "cut a hole — " + shapeHints[shape],
     pad: "tap: place a landing pad · drag: pan",
     start: "tap: place the start platform — the level re-centres so it becomes x = 0",
   };
@@ -324,11 +355,13 @@ function syncContextBtns() {
   const closeBtn = document.getElementById("b-close");
   closeBtn.style.display = drawing && drawing.length >= 3 ? "" : "none";
   closeBtn.textContent = pendingKind === "carve" ? "APPLY CUT" : "CLOSE POLY";
-  document.getElementById("b-cancel").style.display = drawing ? "" : "none";
+  document.getElementById("b-cancel").style.display =
+    drawing || shapeAnchor ? "" : "none";
 }
 
 function cancelDraw() {
   drawing = null;
+  shapeAnchor = null;
   hoverClose = false;
   syncContextBtns();
 }
@@ -527,7 +560,45 @@ function applyCarve() {
   if (!drawing || drawing.length < 3) return;
   pushUndo();
   doc.holes.push(drawing.slice());
-  cancelDraw(); // stay in the carve tool — cuts tend to come in batches
+  cancelDraw();
+  // Finishing hands over to SELECT with the fresh cut selected — ready to
+  // nudge it (same convention as closing a rock polygon).
+  setTool("select");
+  sel = { kind: "hole", idx: doc.holes.length - 1, vert: null };
+  syncContextBtns();
+  commit();
+}
+
+// rect/circle shapes (the RECT/CIRC modes of DRAW ROCK and CARVE): built
+// from an anchor (first corner / centre) + a second point, polygonized so
+// the rest of the pipeline sees an ordinary polygon.
+function makeShapePoly(a, b) {
+  if (shape === "rect") {
+    const q = snapPt(b);
+    if (Math.abs(q[0] - a[0]) < 0.2 || Math.abs(q[1] - a[1]) < 0.2) return null;
+    return [[a[0], a[1]], [q[0], a[1]], [q[0], q[1]], [a[0], q[1]]];
+  }
+  let r = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  r = snapOn ? Math.max(SNAP_STEP, Math.round(r / SNAP_STEP) * SNAP_STEP)
+             : Math.round(r * 100) / 100;
+  if (r < 0.3) return null;
+  const n = Math.max(12, Math.min(48, Math.round(2 * Math.PI * r / 1.2)));
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const t = i / n * 2 * Math.PI;
+    out.push([round2(a[0] + Math.cos(t) * r), round2(a[1] + Math.sin(t) * r)]);
+  }
+  return out;
+}
+function commitShapePoly(poly) {
+  pushUndo();
+  const isCarve = tool === "carve";
+  (isCarve ? doc.holes : doc.polys).push(poly);
+  shapeAnchor = null;
+  setTool("select");
+  sel = { kind: isCarve ? "hole" : "poly",
+          idx: (isCarve ? doc.holes : doc.polys).length - 1, vert: null };
+  syncContextBtns();
   commit();
 }
 
@@ -734,7 +805,7 @@ cv.addEventListener("pointermove", e => {
       hoverClose = distPx(sx, sy, w2sx(drawing[0][0]), w2sy(drawing[0][1])) < CLOSE_PX;
       if (was !== hoverClose) draw();
     }
-    if (drawing) { drawCursor = [s2wx(sx), s2wy(sy)]; draw(); }
+    if (drawing || shapeAnchor) { drawCursor = [s2wx(sx), s2wy(sy)]; draw(); }
     return;
   }
   info.sx = sx; info.sy = sy;
@@ -760,7 +831,14 @@ cv.addEventListener("pointermove", e => {
 
   if (gesture.type === "maybe-tap" &&
       distPx(sx, sy, gesture.sx, gesture.sy) > TAP_PX) {
-    if (tool === "draw" || tool === "carve") {
+    if ((tool === "draw" || tool === "carve") && shape !== "free") {
+      // Rect/circle: the drag is a rubber band from the (snapped) press
+      // point. A pending tap-tap anchor is superseded by the drag.
+      shapeAnchor = null;
+      gesture = { type: "shape",
+                  a: snapPt([s2wx(gesture.sx), s2wy(gesture.sy)]),
+                  b: [s2wx(sx), s2wy(sy)] };
+    } else if (tool === "draw" || tool === "carve") {
       // Freehand: the drag IS the stroke (pan with two fingers / middle
       // mouse / wheel). Sampled points get RDP-simplified on release.
       if (!drawing) { drawing = []; pendingKind = tool; }
@@ -773,6 +851,11 @@ cv.addEventListener("pointermove", e => {
   }
 
   switch (gesture.type) {
+    case "shape": {
+      gesture.b = [s2wx(sx), s2wy(sy)];
+      draw();
+      break;
+    }
     case "stroke": {
       const last = gesture.pts[gesture.pts.length - 1];
       const wp = [s2wx(sx), s2wy(sy)];
@@ -830,6 +913,13 @@ function endPointer(e) {
   gesture = null;
   if (!wasGesture) return;
 
+  if (wasGesture.type === "shape") {
+    const poly = makeShapePoly(wasGesture.a, [s2wx(sx), s2wy(sy)]);
+    if (poly) commitShapePoly(poly);
+    else { syncContextBtns(); draw(); } // too small: treat as a fizzle
+    return;
+  }
+
   if (wasGesture.type === "stroke") {
     // Simplify the sampled stroke to a sane vertex count (tolerance follows
     // the zoom: ~2.5 px of deviation, clamped to 5–60 cm in the world) and
@@ -861,6 +951,20 @@ function endPointer(e) {
     // A clean tap: act per tool.
     if (tool === "select") {
       if (wasGesture.deselect) { sel = null; syncContextBtns(); draw(); }
+    } else if ((tool === "draw" || tool === "carve") && shape !== "free") {
+      // Tap-tap shapes: first tap anchors the corner/centre, second commits.
+      const p = snapPt([s2wx(sx), s2wy(sy)]);
+      if (!shapeAnchor) {
+        shapeAnchor = p;
+        drawCursor = null;
+        syncContextBtns();
+        draw();
+      } else {
+        const poly = makeShapePoly(shapeAnchor, p);
+        shapeAnchor = null;
+        if (poly) commitShapePoly(poly);
+        else { syncContextBtns(); draw(); }
+      }
     } else if (tool === "draw" || tool === "carve") {
       if (drawing && drawing.length >= 3 &&
           distPx(sx, sy, w2sx(drawing[0][0]), w2sy(drawing[0][1])) < CLOSE_PX) {
@@ -939,7 +1043,7 @@ window.addEventListener("keydown", e => {
   else if (mod && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); }
   else if (e.key === "Escape") {
     if (modalOpen()) closeModal();
-    else if (drawing) { cancelDraw(); draw(); }
+    else if (drawing || shapeAnchor) { cancelDraw(); draw(); }
     else { sel = null; syncContextBtns(); draw(); }
   } else if (e.key === "Enter" && drawing) finishPending();
   else if ((e.key === "Delete" || e.key === "Backspace")) {
@@ -1117,6 +1221,30 @@ function draw() {
       ctx.fillStyle = j === 0 && hoverClose ? "#57ff9a" : col;
       ctx.beginPath(); ctx.arc(w2sx(p[0]), w2sy(p[1]), j === 0 ? 7 : 4, 0, 7); ctx.fill();
     });
+  }
+
+  // Rect/circle preview: rubber band while dragging, or anchored after the
+  // first tap-tap corner/centre (drawCursor follows the hover).
+  let shapePrev = null;
+  if (gesture && gesture.type === "shape") shapePrev = [gesture.a, gesture.b];
+  else if (shapeAnchor) shapePrev = [shapeAnchor, drawCursor];
+  if (shapePrev) {
+    const col = tool === "carve" ? "#ff5d5d" : "#ffb545";
+    if (shapePrev[1]) {
+      const poly = makeShapePoly(shapePrev[0], shapePrev[1]);
+      if (poly) {
+        ctx.strokeStyle = col;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 5]);
+        tracePoly(ctx, poly);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.arc(w2sx(shapePrev[0][0]), w2sy(shapePrev[0][1]), 5, 0, 7);
+    ctx.fill();
   }
 
   // Pads and the start platform: a deck line with legs, like the game.

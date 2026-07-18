@@ -1,5 +1,10 @@
 [
  {
+  "rev": "546925e",
+  "date": "2026-07-18T20:50:36Z",
+  "note": "Level editor gains rectangle and circle tools for drawing and carving, and finishing a shape drops you straight into select mode"
+ },
+ {
   "rev": "eb2548f",
   "date": "2026-07-18T10:46:35Z",
   "note": "Carved holes are now editable — select a cut to move or reshape it, delete it to restore the rock"
