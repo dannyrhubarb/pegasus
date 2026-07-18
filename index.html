@@ -1035,11 +1035,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">a7c89d3</div>
+        <div class="info-value" id="git-rev">24f7e00</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-17T22:44:42Z</div>
+        <div class="info-value" id="build-time">2026-07-18T23:34:28Z</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors, which site
@@ -1437,9 +1437,12 @@
       closeMenu(); // state flips to replay; the poll below brings us back
     });
     document.getElementById("btn-gomenu").addEventListener("click", () => {
-      // Back from the game-over screen: end the run (the fresh ship waits
-      // behind the menu) and return to the level picker — or home when
-      // there's no level list.
+      // Back from the game-over screen: on an editor draft, back means back
+      // to the EDITOR (like the in-flight ✕ — hardware back rides this
+      // button too via the .mbtn.back rule). Otherwise end the run (the
+      // fresh ship waits behind the menu) and return to the level picker —
+      // or home when there's no level list.
+      if (isCustomLevel(currentLevelFile)) { location.href = "editor.html"; return; }
       call("ui_command", 1);
       levelFiles.length ? openLevelPicker("fly") : showScreen("scr-home");
     });
@@ -1460,7 +1463,13 @@
       }, { passive: false });
     }
     const exitReplayBtn = document.getElementById("exit-replay-btn");
-    onTap(pauseBtn, () => showScreen("scr-pause"));
+    onTap(pauseBtn, () => {
+      // Test-flying an editor draft: ✕ returns to the editor (the fly →
+      // tweak loop), not the pause screen. Hardware back rides the same
+      // button via uiBack, so it leaves for the editor too.
+      if (isCustomLevel(currentLevelFile)) { location.href = "editor.html"; return; }
+      showScreen("scr-pause");
+    });
     onTap(restartBtn, () => call("ui_command", 1));
     onTap(exitReplayBtn, () => call("ui_command", 3));
 
@@ -1924,7 +1933,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "a7c89d3";
+    const wasmRev = "24f7e00";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -2175,27 +2184,59 @@
       }
     }
 
+    // --- Custom draft level (from the level editor, editor.html) ---
+    // The editor is deliberately UNLINKED from the game menu: it lives at
+    // its own path (editor.html, deployed but nowhere referenced in the UI)
+    // and hands drafts over via localStorage (pegasus_custom_level) +
+    // ./?custom=1. The draft is registered under a pseudo-file that is
+    // NEVER added to levelFiles, so no picker row exists; the in-flight ✕
+    // corner button returns to the editor instead of opening the pause
+    // screen (the test-fly round trip), and drafts stay strictly LOCAL: no
+    // global boards, no score submits, no ghost (guards in
+    // maybeSubmitOnline / applyGlobalRecord / renderGlobalScores).
+    const CUSTOM_LEVEL_FILE = "custom-draft.level";
+    const isCustomLevel = file => file === CUSTOM_LEVEL_FILE;
+    function customLevelText() {
+      try {
+        const t = localStorage.getItem("pegasus_custom_level");
+        return t && /^\s*poly\s*=/m.test(t) ? t : null; // editor output only
+      } catch (e) { return null; }
+    }
+
     fetch("levels/manifest.json?nocache=" + Date.now(), { cache: "no-store" })
       .then(r => (r.ok ? r.json() : null))
+      .catch(() => null) // local dev without a server: built-in level (+ draft)
       .then(async m => {
-        if (!m || !Array.isArray(m.levels)) return;
-        for (const file of m.levels) {
-          try {
-            const r = await fetch("levels/" + file + "?nocache=" + Date.now(), { cache: "no-store" });
-            if (!r.ok) continue;
-            const text = await r.text();
-            levelTexts[file] = text;
-            levelNames[file] =
-              ((text.match(/^\s*name\s*=\s*(.+)$/m) || [])[1] || file).trim();
-            // Optional cosmetic `description =` line — shown under the
-            // title in the level picker (the wasm parser ignores the key).
-            levelDescs[file] =
-              ((text.match(/^\s*description\s*=\s*(.+)$/m) || [])[1] || "").trim();
-            levelFiles.push(file);
-          } catch (e) { /* skip an unfetchable level */ }
+        if (m && Array.isArray(m.levels)) {
+          for (const file of m.levels) {
+            try {
+              const r = await fetch("levels/" + file + "?nocache=" + Date.now(), { cache: "no-store" });
+              if (!r.ok) continue;
+              const text = await r.text();
+              levelTexts[file] = text;
+              levelNames[file] =
+                ((text.match(/^\s*name\s*=\s*(.+)$/m) || [])[1] || file).trim();
+              // Optional cosmetic `description =` line — shown under the
+              // title in the level picker (the wasm parser ignores the key).
+              levelDescs[file] =
+                ((text.match(/^\s*description\s*=\s*(.+)$/m) || [])[1] || "").trim();
+              levelFiles.push(file);
+            } catch (e) { /* skip an unfetchable level */ }
+          }
+        }
+        if (levelFiles.length) levelNone.style.display = "none";
+        // ?custom=1 (the editor's TEST FLY) boots straight into the draft —
+        // no picker row, no persisted selection; works even with no
+        // manifest (local dev).
+        const custom = new URLSearchParams(location.search).has("custom")
+          ? customLevelText() : null;
+        if (custom) {
+          levelTexts[CUSTOM_LEVEL_FILE] = custom;
+          pushLevel(CUSTOM_LEVEL_FILE);
+          closeMenu();
+          return;
         }
         if (!levelFiles.length) return;
-        levelNone.style.display = "none";
         // Pre-load a world behind the menu: the saved selection, else the
         // first manifest level. There is no "default level" the player can
         // fly unpicked — Fly always goes through the picker — this just
@@ -2206,7 +2247,7 @@
         const start = levelTexts[saved] !== undefined ? saved : levelFiles[0];
         pushLevel(start);
       })
-      .catch(() => {}); // local dev without a server: keep the built-in level
+      .catch(() => {});
 
     // --- High scores (global-only) ---
     // The game publishes every ended run (crash, or a manual reset while
@@ -2435,6 +2476,7 @@
     }
 
     function maybeSubmitOnline(file, entry) {
+      if (isCustomLevel(file)) return; // drafts are local-only, never submitted
       // No replay (or one over the server's 512 KiB decoded cap ≈ 699k
       // base64 chars — multi-hour runs only) means the server can't verify
       // the run, so it isn't submittable at all; don't offer the dialog.
@@ -2548,7 +2590,7 @@
     // drop a wrong-level ghost itself, but skip the wasted push).
     let ghostLoadedPath = null; // replayPath already in the game (skip refetch)
     function applyGlobalRecord(file) {
-      if (!backendCfg || !file || file !== currentLevelFile) return;
+      if (!backendCfg || !file || file !== currentLevelFile || isCustomLevel(file)) return;
       const stem = levelStem(file);
       fetch(backendCfg.apiBaseUrl + "/v1/levels/" + encodeURIComponent(stem)
             + "/scores?period=alltime", { cache: "no-store" })
@@ -2650,6 +2692,15 @@
     function renderGlobalScores() {
       if (overlay !== "scr-scores") return;
       const file = scoresFile || currentLevelFile;
+      if (isCustomLevel(file)) {
+        // Drafts never touch the backend — no board to show or fetch.
+        scoresList.textContent = "";
+        renderedBoardJson = null;
+        scoresEmpty.style.display = "none";
+        scoresStatus.textContent = "Draft levels have no global board";
+        scoresStatus.style.display = "";
+        return;
+      }
       if (!backendCfg || !file) {
         // Offline build (or the config fetch hasn't landed): scores are
         // global-only, so there is nothing to show.
@@ -2702,6 +2753,7 @@
     function prefetchGlobalBests() {
       if (!backendCfg) return;
       for (const file of levelFiles) {
+        if (isCustomLevel(file)) continue; // no board behind a draft
         const stem = levelStem(file);
         fetch(backendCfg.apiBaseUrl + "/v1/levels/" + encodeURIComponent(stem) + "/scores?period=alltime",
               { cache: "no-store" })
