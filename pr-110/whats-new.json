@@ -1,5 +1,10 @@
 [
  {
+  "rev": "ffadd6a",
+  "date": "2026-07-18T22:00:02Z",
+  "note": "Level editor cuts and rock now stack in order — draw rock inside a carved chamber to make floating islands, then carve through those too"
+ },
+ {
   "rev": "9f69196",
   "date": "2026-07-18T21:38:59Z",
   "note": "Level editor vertices are much easier to grab on touch screens, and the canvas no longer shifts when you select something"

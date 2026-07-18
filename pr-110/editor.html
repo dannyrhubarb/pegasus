@@ -206,23 +206,44 @@ function starterDoc() {
   return {
     name: "My Level",
     scoring: "time",
-    polys: [
-      [[-40, -9], [40, -9], [40, -2], [-40, -2]],
-      [[-40, 13], [40, 13], [40, 20], [-40, 20]],
-      [[-44, -9], [-38, -9], [-38, 20], [-44, 20]],
-      [[38, -9], [44, -9], [44, 20], [38, 20]],
+    // Ordered operation stack — NEWEST WINS: rock ops add, cut ops remove.
+    // Drawing rock over a carved area fills it back in; carving through
+    // that rock opens it again — layers compose like paint strokes. Every
+    // op stays an editable object; compiledPolys bakes the stack into
+    // plain `poly` lines at export (a cut only affects rock BELOW it).
+    ops: [
+      { t: "rock", p: [[-40, -9], [40, -9], [40, -2], [-40, -2]] },
+      { t: "rock", p: [[-40, 13], [40, 13], [40, 20], [-40, 20]] },
+      { t: "rock", p: [[-44, -9], [-38, -9], [-38, 20], [-44, 20]] },
+      { t: "rock", p: [[38, -9], [44, -9], [44, 20], [38, 20]] },
     ],
-    holes: [],    // subtractive cuts — editable objects, baked at export
     pads: [[-20, -1.8], [20, -1.8]],
     start: [0, -1.8],
     spawnY: null, // explicit spawn_y (only meaningful with no start platform)
   };
 }
 
+// Accept any historical document shape: the flat polys+holes model (and the
+// polys-only one before it) becomes the equivalent op stack — all rock
+// first, then all cuts, which is exactly what the old global subtraction
+// meant.
+function normalizeDoc(d) {
+  const out = Object.assign(starterDoc(), d);
+  if (!Array.isArray(out.ops) || (d && !Array.isArray(d.ops) && Array.isArray(d.polys))) {
+    out.ops = (d.polys || []).map(p => ({ t: "rock", p }))
+      .concat((d.holes || []).map(p => ({ t: "cut", p })));
+  }
+  out.ops = out.ops.filter(o => o && (o.t === "rock" || o.t === "cut") && Array.isArray(o.p));
+  delete out.polys;
+  delete out.holes;
+  return out;
+}
+
 let doc = starterDoc();
 try {
   const saved = JSON.parse(localStorage.getItem(DOC_KEY) || "null");
-  if (saved && Array.isArray(saved.polys)) doc = Object.assign(starterDoc(), saved);
+  if (saved && (Array.isArray(saved.ops) || Array.isArray(saved.polys)))
+    doc = normalizeDoc(saved);
 } catch (e) { /* corrupt autosave: start fresh */ }
 
 // ---------- view / canvas ----------
@@ -253,8 +274,7 @@ function fitView() {
   let lo = [Infinity, Infinity], hi = [-Infinity, -Infinity];
   const eat = p => { lo[0] = Math.min(lo[0], p[0]); lo[1] = Math.min(lo[1], p[1]);
                      hi[0] = Math.max(hi[0], p[0]); hi[1] = Math.max(hi[1], p[1]); };
-  doc.polys.forEach(poly => poly.forEach(eat));
-  doc.holes.forEach(hole => hole.forEach(eat));
+  doc.ops.forEach(o => o.p.forEach(eat));
   doc.pads.forEach(eat);
   if (doc.start) eat(doc.start);
   if (lo[0] > hi[0]) { view = { x: 0, y: 5, s: 8 }; return; }
@@ -394,11 +414,10 @@ function finishPending() {
 function closeDrawing() {
   if (!drawing || drawing.length < 3) return;
   pushUndo();
-  doc.polys.push(drawing);
-  const idx = doc.polys.length - 1;
+  doc.ops.push({ t: "rock", p: drawing });
   drawing = null; hoverClose = false;
   setTool("select");
-  sel = { kind: "poly", idx, vert: null };
+  sel = { kind: "poly", idx: doc.ops.length - 1, vert: null };
   syncContextBtns();
   commit();
 }
@@ -577,12 +596,12 @@ function polyDifference(subjectPts, clipPts) {
 function applyCarve() {
   if (!drawing || drawing.length < 3) return;
   pushUndo();
-  doc.holes.push(drawing.slice());
+  doc.ops.push({ t: "cut", p: drawing.slice() });
   cancelDraw();
   // Finishing hands over to SELECT with the fresh cut selected — ready to
   // nudge it (same convention as closing a rock polygon).
   setTool("select");
-  sel = { kind: "hole", idx: doc.holes.length - 1, vert: null };
+  sel = { kind: "hole", idx: doc.ops.length - 1, vert: null };
   syncContextBtns();
   commit();
 }
@@ -611,11 +630,10 @@ function makeShapePoly(a, b) {
 function commitShapePoly(poly) {
   pushUndo();
   const isCarve = tool === "carve";
-  (isCarve ? doc.holes : doc.polys).push(poly);
+  doc.ops.push({ t: isCarve ? "cut" : "rock", p: poly });
   shapeAnchor = null;
   setTool("select");
-  sel = { kind: isCarve ? "hole" : "poly",
-          idx: (isCarve ? doc.holes : doc.polys).length - 1, vert: null };
+  sel = { kind: isCarve ? "hole" : "poly", idx: doc.ops.length - 1, vert: null };
   syncContextBtns();
   commit();
 }
@@ -628,8 +646,7 @@ function reoriginToStart() {
   if (!doc.start) return;
   const dx = doc.start[0];
   if (Math.abs(dx) < 1e-9) return;
-  doc.polys.forEach(poly => poly.forEach(p => { p[0] = round2(p[0] - dx); }));
-  doc.holes.forEach(hole => hole.forEach(p => { p[0] = round2(p[0] - dx); }));
+  doc.ops.forEach(o => o.p.forEach(p => { p[0] = round2(p[0] - dx); }));
   doc.pads.forEach(p => { p[0] = round2(p[0] - dx); });
   doc.start[0] = 0;
   view.x -= dx;
@@ -639,12 +656,12 @@ function deleteSelected() {
   if (!sel) return;
   pushUndo();
   if (sel.kind === "poly" || sel.kind === "hole") {
-    const arr = sel.kind === "hole" ? doc.holes : doc.polys;
-    if (sel.vert != null && arr[sel.idx].length > 3) {
-      arr[sel.idx].splice(sel.vert, 1);
+    const p = doc.ops[sel.idx].p;
+    if (sel.vert != null && p.length > 3) {
+      p.splice(sel.vert, 1);
       sel.vert = null;
     } else {
-      arr.splice(sel.idx, 1); // deleting a hole restores the rock it cut
+      doc.ops.splice(sel.idx, 1); // deleting a cut restores the rock below it
       sel = null;
     }
   } else if (sel.kind === "pad") {
@@ -680,23 +697,30 @@ function pointInPoly(p, poly) {
   }
   return inside;
 }
-// Rock = union of doc.polys MINUS union of doc.holes. Carve cuts live as
-// EDITABLE hole objects (select to move/reshape, delete to restore the
-// rock); the subtraction is only baked into plain polygons at export /
-// test-fly time by compiledPolys, so the game's level format is untouched.
+// Rock is the ordered op stack, NEWEST WINS: the last op containing a
+// point decides — rock op = solid, cut op = open. So rock drawn inside a
+// carving is an island; a cut through that island opens it again. Every op
+// stays an editable object; the stack is only baked into plain polygons at
+// export/test-fly time by compiledPolys, so the game's format is untouched.
 function pointInRock(p) {
-  return doc.polys.some(poly => pointInPoly(p, poly))
-      && !doc.holes.some(hole => hole.length >= 3 && pointInPoly(p, hole));
+  for (let i = doc.ops.length - 1; i >= 0; i--) {
+    const o = doc.ops[i];
+    if (o.p.length >= 3 && pointInPoly(p, o.p)) return o.t === "rock";
+  }
+  return false;
 }
-// The exported rock: every hole subtracted from every poly it overlaps,
-// splitting into simple pieces (polyDifference/holeSplit). Each hole gets
-// ~1 mm jitter per compile so grid-snapped vertex-on-edge/collinear
-// degeneracies can't occur (invisible next to the 1 cm export rounding).
+// The exported rock: fold the stack in order — rock ops append, cut ops
+// subtract from everything accumulated SO FAR (splitting into simple
+// pieces via polyDifference/holeSplit); rock appended later is untouched by
+// earlier cuts, which is exactly the newest-wins rule. Each cut gets ~1 mm
+// jitter per compile so grid-snapped vertex-on-edge/collinear degeneracies
+// can't occur (invisible next to the 1 cm export rounding).
 function compiledPolys() {
-  let polys = doc.polys.map(p => p.map(q => [q[0], q[1]]));
-  for (const hole of doc.holes) {
-    if (hole.length < 3) continue;
-    const clip = hole.map(p => [p[0] + (Math.random() - 0.5) * 0.002,
+  let polys = [];
+  for (const op of doc.ops) {
+    if (op.p.length < 3) continue;
+    if (op.t === "rock") { polys.push(op.p.map(q => [q[0], q[1]])); continue; }
+    const clip = op.p.map(p => [p[0] + (Math.random() - 0.5) * 0.002,
                                 p[1] + (Math.random() - 0.5) * 0.002]);
     if (Math.abs(signedArea(clip)) < 0.02) continue;
     polys = polys.flatMap(p => {
@@ -708,17 +732,18 @@ function compiledPolys() {
 }
 
 // What is under screen point (sx, sy)?
-// Priority: selected poly/hole's vertices > its edge midpoints (insert) >
-// pads/start markers > hole bodies (their interior is open space, so they
-// win over the rock they cut) > rock bodies (topmost = last drawn).
-function polyArr(kind) { return kind === "hole" ? doc.holes : doc.polys; }
+// Priority: selected op's vertices > its edge midpoints (insert) >
+// pads/start markers > op bodies, NEWEST FIRST (matching the newest-wins
+// rock rule: tapping open space inside a cut selects the cut, tapping a
+// rock island on top of it selects the island).
+function opPoly(i) { const o = doc.ops[i]; return o && o.p; }
 // `r` = grab radius (touch input passes a finger-sized one). With a big
 // radius several handles can be in range, so the NEAREST one wins —
 // vertices first, then midpoints (a circle's vertices sit ~1.2 m apart, so
 // first-match order would routinely grab the wrong one on a phone).
 function hitTest(sx, sy, r = HANDLE_PX) {
   if (sel && (sel.kind === "poly" || sel.kind === "hole")) {
-    const poly = polyArr(sel.kind)[sel.idx];
+    const poly = opPoly(sel.idx);
     if (poly) {
       let best = null, bd = r;
       for (let i = 0; i < poly.length; i++) {
@@ -748,12 +773,10 @@ function hitTest(sx, sy, r = HANDLE_PX) {
       return { kind: "start" };
   }
   const wp = [s2wx(sx), s2wy(sy)];
-  for (let i = doc.holes.length - 1; i >= 0; i--) {
-    if (doc.holes[i].length >= 3 && pointInPoly(wp, doc.holes[i]))
-      return { kind: "hole", idx: i };
-  }
-  for (let i = doc.polys.length - 1; i >= 0; i--) {
-    if (pointInPoly(wp, doc.polys[i])) return { kind: "poly", idx: i };
+  for (let i = doc.ops.length - 1; i >= 0; i--) {
+    const o = doc.ops[i];
+    if (o.p.length >= 3 && pointInPoly(wp, o.p))
+      return { kind: o.t === "cut" ? "hole" : "poly", idx: i };
   }
   return null;
 }
@@ -792,7 +815,7 @@ cv.addEventListener("pointerdown", e => {
       pushUndo();
       if (hit.kind === "mid") { // insert a vertex on the edge, then drag it
         const wp = snapPt([s2wx(sx), s2wy(sy)]);
-        polyArr(hit.of)[hit.idx].splice(hit.vert, 0, wp);
+        opPoly(hit.idx).splice(hit.vert, 0, wp);
       }
       sel = { kind: hit.of, idx: hit.idx, vert: hit.vert };
       gesture = { type: "drag-vert", of: hit.of, idx: hit.idx, vert: hit.vert, moved: hit.kind === "mid" };
@@ -805,7 +828,7 @@ cv.addEventListener("pointerdown", e => {
     } else if (hit && (hit.kind === "poly" || hit.kind === "hole")) {
       sel = { kind: hit.kind, idx: hit.idx, vert: null };
       gesture = { type: "drag-poly", of: hit.kind, idx: hit.idx, sx, sy,
-                  p0: polyArr(hit.kind)[hit.idx].map(p => [...p]), undoPushed: false };
+                  p0: opPoly(hit.idx).map(p => [...p]), undoPushed: false };
     } else {
       gesture = { type: "maybe-tap", sx, sy, view0: { ...view }, deselect: true };
     }
@@ -900,7 +923,7 @@ cv.addEventListener("pointermove", e => {
     }
     case "drag-vert": {
       gesture.moved = true;
-      polyArr(gesture.of)[gesture.idx][gesture.vert] = snapPt([s2wx(sx), s2wy(sy)]);
+      opPoly(gesture.idx)[gesture.vert] = snapPt([s2wx(sx), s2wy(sy)]);
       draw();
       break;
     }
@@ -916,7 +939,7 @@ cv.addEventListener("pointermove", e => {
         // Translate the whole polygon by the SNAPPED delta so its shape
         // (relative vertex offsets, incl. off-grid ones) is preserved.
         const sdx = snap(dx), sdy = snap(dy);
-        polyArr(gesture.of)[gesture.idx] = gesture.p0.map(p => [p[0] + sdx, p[1] + sdy]);
+        doc.ops[gesture.idx].p = gesture.p0.map(p => [p[0] + sdx, p[1] + sdy]);
       }
       draw();
       break;
@@ -1137,11 +1160,21 @@ function draw() {
   const rctx = rockLayer.getContext("2d");
   rctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   rctx.clearRect(0, 0, W, H);
-  rctx.fillStyle = "rgba(52,68,96,0.5)";
-  doc.polys.forEach(poly => { tracePoly(rctx, poly); rctx.fill(); });
-  rctx.globalCompositeOperation = "destination-out";
-  rctx.fillStyle = "#000";
-  doc.holes.forEach(hole => { if (hole.length >= 3) { tracePoly(rctx, hole); rctx.fill(); } });
+  // Ops composite IN ORDER — rock paints, a cut erases what's below it, and
+  // rock painted after a cut lands on top: the canvas shows exactly the
+  // newest-wins rule the export compiles.
+  for (const o of doc.ops) {
+    if (o.p.length < 3) continue;
+    if (o.t === "cut") {
+      rctx.globalCompositeOperation = "destination-out";
+      rctx.fillStyle = "#000";
+    } else {
+      rctx.globalCompositeOperation = "source-over";
+      rctx.fillStyle = "rgba(52,68,96,0.5)";
+    }
+    tracePoly(rctx, o.p);
+    rctx.fill();
+  }
   rctx.globalCompositeOperation = "source-over";
   ctx.drawImage(rockLayer, 0, 0, W, H);
 
@@ -1152,7 +1185,7 @@ function draw() {
   ctx.strokeStyle = "#5c7496";
   ctx.lineWidth = 1.25;
   ctx.beginPath();
-  const strokeExposed = (poly, holeSide) => {
+  const strokeExposed = poly => {
     const ccw = signedArea(poly) > 0; // y-up: interior left of edge dir
     for (let k = 0; k < poly.length; k++) {
       const a = poly[k], b = poly[(k + 1) % poly.length];
@@ -1163,46 +1196,40 @@ function draw() {
       const steps = Math.max(1, Math.ceil(len / 2)); // ~2 m grain, like the game
       for (let s = 0; s < steps; s++) {
         const mx = a[0] + ex * (s + 0.5) / steps, my = a[1] + ey * (s + 0.5) / steps;
-        // Rock-poly edge: outward must be open AND inward still rock (a
-        // hole may have swallowed this stretch). Hole edge: it's a wall
-        // exactly where rock lies just beyond it (its inside is open by
-        // definition).
-        const vis = holeSide
-          ? pointInRock([mx + ox, my + oy])
-          : (!pointInRock([mx + ox, my + oy]) && pointInRock([mx - ox, my - oy]));
-        if (!vis) continue;
+        // A stretch is a real wall exactly where the two sides DISAGREE
+        // about being rock — that covers every stacking case: buried
+        // seams, edges swallowed by a later cut, a cut's boundary re-rocked
+        // by an island on top, all skip; true rock/open transitions stroke.
+        if (pointInRock([mx + ox, my + oy]) === pointInRock([mx - ox, my - oy])) continue;
         const t0 = s / steps, t1 = (s + 1) / steps;
         ctx.moveTo(w2sx(a[0] + ex * t0), w2sy(a[1] + ey * t0));
         ctx.lineTo(w2sx(a[0] + ex * t1), w2sy(a[1] + ey * t1));
       }
     }
   };
-  doc.polys.forEach((poly, i) => {
-    if (!(sel && sel.kind === "poly" && sel.idx === i)) strokeExposed(poly, false);
-  });
-  doc.holes.forEach((hole, i) => {
-    if (hole.length >= 3 && !(sel && sel.kind === "hole" && sel.idx === i))
-      strokeExposed(hole, true);
+  doc.ops.forEach((o, i) => {
+    if (o.p.length >= 3 && !(sel && sel.idx === i &&
+        (sel.kind === "poly" || sel.kind === "hole"))) strokeExposed(o.p);
   });
   ctx.stroke();
 
-  // Hole guides: dashed outline so a cut stays visible/selectable even over
+  // Cut guides: dashed outline so a cut stays visible/selectable even over
   // open space (faint) — the selected one bright, its handles drawn below.
-  doc.holes.forEach((hole, i) => {
-    if (hole.length < 2) return;
+  doc.ops.forEach((o, i) => {
+    if (o.t !== "cut" || o.p.length < 2) return;
     const isSel = sel && sel.kind === "hole" && sel.idx === i;
     ctx.strokeStyle = isSel ? "#ff5d5d" : "rgba(255,93,93,0.3)";
     ctx.lineWidth = isSel ? 2 : 1;
     ctx.setLineDash([5, 4]);
-    tracePoly(ctx, hole);
+    tracePoly(ctx, o.p);
     ctx.stroke();
     ctx.setLineDash([]);
   });
 
-  // Selected polygon / hole: full outline (rock only — the selected hole's
-  // bright dashed guide is above) + vertex and midpoint handles.
-  if (sel && (sel.kind === "poly" || sel.kind === "hole") && polyArr(sel.kind)[sel.idx]) {
-    const poly = polyArr(sel.kind)[sel.idx];
+  // Selected op: full outline (rock only — a selected cut's bright dashed
+  // guide is above) + vertex and midpoint handles.
+  if (sel && (sel.kind === "poly" || sel.kind === "hole") && opPoly(sel.idx)) {
+    const poly = opPoly(sel.idx);
     if (sel.kind === "poly") {
       ctx.strokeStyle = "#46f0ff";
       ctx.lineWidth = 2;
@@ -1366,9 +1393,9 @@ function validate() {
     out.push({ level: "error", msg: "Too many vertices (" + verts + " > " + MAX_VERTS + ", the score-verifier cap)" });
   if (doc.pads.length > MAX_PADS)
     out.push({ level: "error", msg: "Too many pads (" + doc.pads.length + " > " + MAX_PADS + ", the score-verifier cap)" });
-  doc.polys.forEach((p, i) => {
-    if (polyArea(p) < 0.25)
-      out.push({ level: "warn", msg: "Polygon " + (i + 1) + " is degenerate (near-zero area)" });
+  doc.ops.forEach((o, i) => {
+    if (o.p.length >= 3 && polyArea(o.p) < 0.25)
+      out.push({ level: "warn", msg: (o.t === "cut" ? "Cut " : "Polygon ") + (i + 1) + " is degenerate (near-zero area)" });
   });
   const ground = doc.start ? doc.start[1] : (doc.spawnY ?? 0);
   const spawn = [doc.start ? doc.start[0] : 0, ground + 0.78];
@@ -1432,10 +1459,11 @@ function parseLevelText(text) {
   if (dm) {
     try {
       const d = JSON.parse(dm[1]);
-      if (d && Array.isArray(d.polys) && d.polys.length) return d;
+      if (d && ((Array.isArray(d.ops) && d.ops.length)
+                || (Array.isArray(d.polys) && d.polys.length))) return d;
     } catch (e) { /* corrupt comment: fall through to the line parser */ }
   }
-  const d = { name: "Imported level", scoring: "time", polys: [], holes: [], pads: [], start: null, spawnY: null };
+  const d = { name: "Imported level", scoring: "time", polys: [], pads: [], start: null, spawnY: null };
   const pt = s => {
     const m = s.split(",");
     if (m.length !== 2) return null;
@@ -1545,7 +1573,7 @@ document.getElementById("b-import").addEventListener("click", () => {
           const d = parseLevelText(mtext.value);
           if (!d) { toast("No poly lines found — not a hand-drawn level"); return; }
           pushUndo();
-          doc = Object.assign(starterDoc(), d);
+          doc = normalizeDoc(d);
           reoriginToStart(); // imported levels obey the start-pad-origin rule too
           sel = null; cancelDraw();
           syncFields(); fitView(); closeModal(); commit();
