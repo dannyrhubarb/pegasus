@@ -54,6 +54,7 @@ push-retry loop for concurrent deploys):
 - `src/ship_mesh.rs` — `SHIP_TRIS` / `SHIP_DETAILS` data tables extracted from the Flash SWF
 - `src/audio.rs` — in-memory WAV synthesis (`wav_from_samples`, `thruster_wav`, `boom_wav`)
 - `levels/` — **runtime level data**: `*.level` files (`key = value`) + `manifest.json` (menu order), fetched by `index.html` and pushed into the wasm — new levels deploy with no recompile (see "Levels")
+- `editor.html` — the **standalone level editor** (issue #89 v1, 2026-07): draws hand-drawn `.level` worlds — the same `poly`/`pad`/`start` representation The Hollows uses — on a pan/zoom canvas. Self-contained like `index.html` (no CDNs), copied by `build-site`. **Deliberately UNLINKED from the game UI** (owner decision pre-merge): it lives at its own path with no menu button and no picker row; the game only meets it through the `?custom=1` test-fly handoff. **While it stays unlinked, editor commits carry NO `Whats-new:` trailers** (the changelog must not advertise an unannounced feature — the PR #110 branch had its trailers stripped before merge; give the editor one proper entry when it's linked up for real). See "Level editor & custom drafts" under "Levels"
 - `tools/gen-third-party-licenses.py` + `third-party-licenses.html` — the generated third-party attribution page served with the site and linked from the About screen; regenerate when `Cargo.lock` changes (see "License")
 - `tools/gen-whats-new.py` + `tools/whats-new-backfill.json` — deploy-time generator for `whats-new.json`, the About screen's What's New changelog (see "What's new page" — **every user-facing commit needs a `Whats-new:` trailer**)
 - `index.html` — web wrapper, safe-area insets, the **HTML game menu** (start / pause / game-over screens, level picker, settings, high scores, about — see "Game menu"), **gamepad polling**, and a **boot guard** (touch/stick input moved in-canvas — no touch handlers here any more): a small standalone `<script>` tag ahead of the bundle (script tags parse independently, so no error in the bundle/main script can kill it) that paints any script error on screen with file:line and offers a tap-to-reload if `wasm_exports` is missing 8 s after load. Keep it first and self-contained. It also pushes each reported error into a capped `window.__pegErrs` buffer (push-only — the guard never depends on anything) that the analytics module drains (see "Analytics"). It also wraps `console.error` (installed ahead of the bundle, so the wasm `console_error` import routes through it) and appends the last logged error to the banner when the error event is anonymous or attributed to the `.wasm` file — **a Rust panic reaches JS as an opaque trap** (`RuntimeError: unreachable`; iOS Safari mutes it further to a bare "Script error." with no filename, because wasm frames fail its same-origin check), and the only useful description is the panic-hook line logged just before the trap (`src/main.rs` installs `std::panic::set_hook` → `error!("{}", info)`; the *default* hook prints the useless Debug form `PanicHookInfo { payload: Any { .. }, … }`). Unhandled promise rejections get the same banner (skipped when `reason` is null). **Fully-anonymous errors (no filename AND no console.error trace) are deliberately ignored**: same-origin scripts always carry file:line and a wasm panic always logs via the hook first, so the only things that land there are Safari-injected third-party scripts — reproduced live on iOS: opening the **share sheet** runs share/action extensions' preprocessing JS in the page, and an error in any of them arrives as a muted "Script error." (this was the mystery banner of 2026-07-06, seen right after the Pegasus rename and initially blamed on it).
@@ -570,6 +571,101 @@ just pre-loads the saved selection (else the first manifest level — also
 the recovery path when a saved level was retired from the manifest) behind
 the menu to keep its record/ghost warm. Manifest fetch failure skips the
 picker and the game stays on the compiled-in `Level::demo()`.
+
+**Level editor & custom drafts** (`editor.html` + the custom-level block in
+`index.html`, 2026-07 — the issue #89 v1): a standalone editor page for
+hand-drawn levels. Tools: draw-polygon (tap vertices, close on the first
+vertex / CLOSE POLY / Enter — **or drag to draw FREEHAND**: pointer samples
+are RDP-simplified on release with a zoom-scaled tolerance (~2.5 px, clamped
+5–60 cm) so a finger-drawn blob lands as a sane vertex count, deliberately
+un-snapped; a long stroke ending on the first vertex auto-closes), **carve**
+(same input as draw, red preview — a finished cut becomes a **persistent,
+EDITABLE cut object**: select it to move/reshape it, delete it to restore
+the rock. The document is an **ordered op stack (`doc.ops`,
+`{t:'rock'|'cut', p}`) where the NEWEST op wins** (owner request 2026-07,
+"how do I draw rock inside a carving?"): rock over a cut is an island, a
+cut through that island opens it again — `pointInRock` scans the stack in
+reverse, fills composite in order on an offscreen layer (cut =
+destination-out), outlines stroke only where the two sides of an edge
+DISAGREE about being rock, and `compiledPolys` folds the stack into plain
+polygons at export/test-fly (rock appends; a cut subtracts from everything
+accumulated so far, so it only affects rock BELOW it) — the game's level
+format is untouched. `normalizeDoc` migrates the older flat polys+holes
+documents (all rock, then all cuts). Exported files carry the full
+document in an `# editor-doc:` comment (ignored by the game's parser) so
+IMPORT restores the editable stack instead of baked pieces. The bake per
+cut:
+`polyDifference`, a Greiner–Hormann difference:
+subject walked forward outside the clip, clip walked backward inside the
+subject, so boundary-crossing cuts split polys into pieces), **shape modes
+FREE / RECT / CIRC** for both draw and carve (rect: drag corner-to-corner
+or tap two corners; circle: drag from the centre or tap centre-then-edge,
+polygonized at ~1.2 m arc steps, 12–48 verts). **Finishing anything —
+closing a free polygon, applying a cut, committing a shape — auto-switches
+to SELECT with the new object selected** (owner request: draw → adjust is
+the natural loop). (Carve internals: a cut fully
+INSIDE a poly makes a donut, which needs NO single-polygon trick — rock is
+the UNION of polys and buried edges are harmless (the Hollows frame rule),
+so `holeSplit` slices the donut through the hole with two half-plane
+rectangle cuts and subtracts the hole from each piece, every step a
+boundary-crossing `polyDifference` — exact area, only simple polygons, the
+pieces' coincident split-line edges buried between rock on both sides;
+verified flyable + rendering in the real game. An earlier keyhole-slit
+version was replaced by this after the owner asked why one polygon at all.
+The carve polygon is jittered ~1 mm pre-clip so grid-snapped
+vertex-on-edge/collinear degeneracies can't occur), select (drag vertices,
+tap an edge midpoint to insert one, drag/delete whole polygons, pads, the
+start platform), pad/start placement, **group/lock** (owner request
+2026-07, "keep them in the same relative position once we are happy": a
+MULTI toggle in select mode collects elements by tapping, GROUP binds them
+— tapping any member then selects the whole group and one drag moves all
+members in lockstep, incl. the start pad, which re-origins on release;
+LOCK on a group (or a lone element — it gets a group of one) freezes it:
+selectable but not draggable/deletable until UNLOCK. Membership = op `g`
+property / a third slot on pad/start arrays the exporter never reads;
+group metadata in `doc.groups` — all editor-doc-only), 0.5 m grid snap
+(toggle), undo/redo
+(snapshot stack, Ctrl+Z), import (paste any hand-drawn `.level` text —
+parses the same key subset as `Level::parse`) and export (copy/download).
+**The start pad IS the origin** (owner decision, 2026-07): the sim always
+spawns at x = 0, so instead of moving the spawn, placing/moving/importing a
+start platform re-anchors the whole level around it (`reoriginToStart` —
+every x shifts so start.x = 0, the view shifts along so only the grid
+appears to move); the spawn marker rides the start pad. Pointer-events
+driven so mouse and touch share one path; **two fingers are always
+pan/zoom** whatever the tool, taps commit on pointer-UP — in draw/carve a
+one-finger drag is the freehand stroke (pan via two fingers / middle mouse
+/ wheel), elsewhere it pans. **Touch ergonomics** (owner feedback,
+2026-07): coarse-pointer devices draw bigger handles (`HANDLE_R`), TOUCH
+input gets a fat grab radius per event (`TOUCH_PX = 28` vs 11 for mouse),
+and with a big radius the NEAREST handle wins (vertices before midpoints
+— first-match order grabbed the wrong vertex on dense circle polys). The
+contextual DELETE / CLOSE POLY / CANCEL buttons FLOAT over the canvas
+(`#ctxbar`) — in the toolbar they re-wrapped it on narrow screens every
+time the selection changed, shifting the whole canvas ~40 px so the
+vertex you were reaching for jumped away from your finger (found by the
+touch e2e; the toolbar must never reflow mid-interaction). The working
+document autosaves to `localStorage.pegasus_editor_doc` (survives the
+test-fly round trip); a validation pass (a JS port of
+`Terrain::point_in_rock` plus the backend verifier's `MAX_TERRAIN_*` caps)
+checks the spawn point, pad landing pockets, degenerate polys and
+time-scoring-needs-pads, surfaced live in the status bar and as a blocking
+"fly anyway?" dialog. **TEST FLY** stores the exported text under
+`localStorage.pegasus_custom_level` and opens `./?custom=1`; the boot
+pushes the draft through the normal `pushLevel` path (pseudo-file
+`custom-draft.level`, NEVER added to `levelFiles` — no picker row, no
+persisted selection) and closes the menu straight into flight. **During a
+draft flight the ✕ corner button returns to `editor.html`** instead of
+opening the pause screen, and **so does the game-over screen's "‹ Back"**
+(hardware back rides both buttons), closing the edit → fly loop from
+flight and from a crash alike; the ⟳ restart button works as normal. **Drafts are
+strictly local**: guards in `maybeSubmitOnline` (never submitted),
+`applyGlobalRecord` (no backend fetches) and
+`renderGlobalScores` ("Draft levels have no global board") keep them off
+the online layer — a draft isn't a shipped level, so its board would be a
+junk stem. Sharing a finished level still means adding the exported file to
+`levels/` + `manifest.json` via a PR (player-hosted sharing is future work
+on #89).
 
 **Distance high score**: `Sim.max_dist` (farthest \|x\| this run, reset by
 restore) raises the `BEST_DIST` atomic **only when the run ends**
@@ -1419,7 +1515,7 @@ commit the refreshed page.
 - **Always open a PR** after pushing a feature branch — standing instruction
   from the owner (no need to ask first). The PR also produces a phone-testable
   preview deployment at `pr-<n>/`.
-- Development branch: `claude/random-rift-level-type-m6axqa` (current); previous: `claude/two-new-game-levels-eienet`
+- Development branch: `claude/level-editor-polygon-tools-6kajl5` (current); previous: `claude/random-rift-level-type-m6axqa`
 - Merges to `main` via rebase PRs using the GitHub MCP tools (`mcp__github__create_pull_request`, `mcp__github__merge_pull_request`).
 - **Curate the branch before merging.** Rebase merges land every branch
   commit on `main` verbatim, so branch noise becomes permanent history.

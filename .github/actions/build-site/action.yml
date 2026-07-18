@@ -51,6 +51,7 @@ runs:
       run: |
         mkdir -p site
         cp index.html site/
+        cp editor.html site/
         cp manifest.json site/
         cp icon-512.png icon-192.png icon-180.png site/
         cp mq_js_bundle.js site/
