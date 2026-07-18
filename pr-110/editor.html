@@ -162,6 +162,10 @@
          canvas — on a phone the vertex you were reaching for jumped ~40 px
          away from your finger the moment something got selected. -->
     <div id="ctxbar">
+      <button class="btn shp" id="b-multi" style="display:none" title="Select several elements to group them">MULTI</button>
+      <button class="btn go" id="b-group" style="display:none">GROUP</button>
+      <button class="btn" id="b-ungroup" style="display:none">UNGROUP</button>
+      <button class="btn warn" id="b-lock" style="display:none">LOCK</button>
       <button class="btn danger" id="b-del" style="display:none">DELETE</button>
       <button class="btn go" id="b-close" style="display:none">CLOSE&nbsp;POLY</button>
       <button class="btn" id="b-cancel" style="display:none">CANCEL</button>
@@ -220,6 +224,11 @@ function starterDoc() {
     pads: [[-20, -1.8], [20, -1.8]],
     start: [0, -1.8],
     spawnY: null, // explicit spawn_y (only meaningful with no start platform)
+    // Groups: elements carry a group id (ops: `g` property; pads/start: a
+    // third array slot the exporter never reads) and the group's metadata
+    // ({lk: locked}) lives here, keyed by id. Editor-only — rides the
+    // editor-doc comment, never the game's level lines.
+    groups: {},
   };
 }
 
@@ -234,9 +243,50 @@ function normalizeDoc(d) {
       .concat((d.holes || []).map(p => ({ t: "cut", p })));
   }
   out.ops = out.ops.filter(o => o && (o.t === "rock" || o.t === "cut") && Array.isArray(o.p));
+  if (!out.groups || typeof out.groups !== "object") out.groups = {};
   delete out.polys;
   delete out.holes;
   return out;
+}
+
+// ---------- groups / lock ----------
+// A member ref is {kind:'op'|'pad'|'start', idx} (op idx into doc.ops).
+function hitToMember(hit) {
+  if (!hit) return null;
+  if (hit.kind === "poly" || hit.kind === "hole") return { kind: "op", idx: hit.idx };
+  if (hit.kind === "pad") return { kind: "pad", idx: hit.idx };
+  if (hit.kind === "start") return { kind: "start" };
+  return null; // vert/mid handles are not group members
+}
+function elGroupOf(m) {
+  if (m.kind === "op") return doc.ops[m.idx] && doc.ops[m.idx].g;
+  if (m.kind === "pad") return doc.pads[m.idx] && doc.pads[m.idx][2];
+  if (m.kind === "start") return doc.start && doc.start[2];
+  return undefined;
+}
+function setElGroup(m, gid) {
+  if (m.kind === "op" && doc.ops[m.idx]) {
+    if (gid == null) delete doc.ops[m.idx].g; else doc.ops[m.idx].g = gid;
+  } else if (m.kind === "pad" && doc.pads[m.idx]) {
+    if (gid == null) doc.pads[m.idx].length = 2; else doc.pads[m.idx][2] = gid;
+  } else if (m.kind === "start" && doc.start) {
+    if (gid == null) doc.start.length = 2; else doc.start[2] = gid;
+  }
+}
+function groupMembers(gid) {
+  const out = [];
+  doc.ops.forEach((o, i) => { if (o.g === gid) out.push({ kind: "op", idx: i }); });
+  doc.pads.forEach((p, i) => { if (p[2] === gid) out.push({ kind: "pad", idx: i }); });
+  if (doc.start && doc.start[2] === gid) out.push({ kind: "start" });
+  return out;
+}
+function groupLocked(gid) { return !!(doc.groups[gid] || {}).lk; }
+function nextGid() {
+  return Object.keys(doc.groups).reduce((n, k) => Math.max(n, +k), 0) + 1;
+}
+function pruneGroups() {
+  for (const k of Object.keys(doc.groups))
+    if (!groupMembers(+k).length) delete doc.groups[k];
 }
 
 let doc = starterDoc();
@@ -320,7 +370,9 @@ function syncUndoBtns() {
 
 // ---------- tools / selection ----------
 let tool = "select";           // select | draw | carve | pad | start
-let sel = null;                // {kind:'poly'|'hole'|'pad'|'start', idx, vert:n|null}
+let sel = null;                // {kind:'poly'|'hole'|'pad'|'start', idx, vert} or {kind:'group', gid}
+let multiOn = false;           // select tool: taps collect elements for grouping
+let multiSel = [];             // member refs ({kind:'op'|'pad'|'start', idx})
 let drawing = null;            // in-progress polygon: [[x,y],...]
 let pendingKind = "draw";      // what `drawing` becomes: 'draw' = rock, 'carve' = a cut
 let shape = "free";            // draw/carve input: free | rect | circle
@@ -345,7 +397,7 @@ const toolBtns = { select: "t-select", draw: "t-draw", carve: "t-carve",
 function setTool(t) {
   if (t !== tool) cancelDraw();
   tool = t;
-  if (t !== "select") sel = null;
+  if (t !== "select") { sel = null; multiOn = false; multiSel = []; }
   for (const k in toolBtns)
     document.getElementById(toolBtns[k]).classList.toggle("on", k === t);
   syncContextBtns();
@@ -375,7 +427,9 @@ function setHint() {
     circle: "drag outward from the centre · or tap centre, then edge",
   };
   const hints = {
-    select: "tap: select · drag: move · drag empty: pan · wheel/pinch: zoom",
+    select: multiOn
+      ? "tap elements to add them to the group · GROUP when ready · Esc: done"
+      : "tap: select · drag: move · drag empty: pan · wheel/pinch: zoom",
     draw: shape === "free"
       ? "tap: add vertex · drag: freehand · finish on the first vertex · two fingers: pan/zoom"
       : "draw rock — " + shapeHints[shape],
@@ -389,12 +443,23 @@ function setHint() {
 }
 
 function syncContextBtns() {
-  document.getElementById("b-del").style.display = sel ? "" : "none";
+  const show = (id, on) =>
+    { document.getElementById(id).style.display = on ? "" : "none"; };
+  const isGroup = sel && sel.kind === "group";
+  const locked = isGroup && groupLocked(sel.gid);
+  const single = sel && (sel.kind === "poly" || sel.kind === "hole" ||
+                         sel.kind === "pad" || sel.kind === "start");
+  show("b-multi", tool === "select");
+  document.getElementById("b-multi").classList.toggle("on", multiOn);
+  show("b-group", multiOn && multiSel.length >= 2);
+  show("b-ungroup", isGroup && !locked);
+  show("b-lock", !multiOn && (isGroup || single));
+  document.getElementById("b-lock").textContent = locked ? "UNLOCK" : "LOCK";
+  show("b-del", !multiOn && (single || (isGroup && !locked)));
   const closeBtn = document.getElementById("b-close");
-  closeBtn.style.display = drawing && drawing.length >= 3 ? "" : "none";
+  show("b-close", drawing && drawing.length >= 3);
   closeBtn.textContent = pendingKind === "carve" ? "APPLY CUT" : "CLOSE POLY";
-  document.getElementById("b-cancel").style.display =
-    drawing || shapeAnchor ? "" : "none";
+  show("b-cancel", !!(drawing || shapeAnchor));
 }
 
 function cancelDraw() {
@@ -654,6 +719,21 @@ function reoriginToStart() {
 
 function deleteSelected() {
   if (!sel) return;
+  if (sel.kind === "group") {
+    if (groupLocked(sel.gid)) return; // unlock first
+    pushUndo();
+    const ms = groupMembers(sel.gid);
+    ms.filter(m => m.kind === "op").map(m => m.idx).sort((a, b) => b - a)
+      .forEach(i => doc.ops.splice(i, 1));
+    ms.filter(m => m.kind === "pad").map(m => m.idx).sort((a, b) => b - a)
+      .forEach(i => doc.pads.splice(i, 1));
+    if (ms.some(m => m.kind === "start")) doc.start = null;
+    delete doc.groups[sel.gid];
+    sel = null;
+    syncContextBtns();
+    commit();
+    return;
+  }
   pushUndo();
   if (sel.kind === "poly" || sel.kind === "hole") {
     const p = doc.ops[sel.idx].p;
@@ -672,6 +752,50 @@ function deleteSelected() {
   syncContextBtns();
   commit();
 }
+
+// --- group / lock actions ---
+document.getElementById("b-multi").addEventListener("click", () => {
+  multiOn = !multiOn;
+  multiSel = [];
+  sel = null;
+  setHint(); syncContextBtns(); draw();
+});
+document.getElementById("b-group").addEventListener("click", () => {
+  if (multiSel.length < 2) return;
+  pushUndo();
+  const gid = nextGid();
+  for (const m of multiSel) setElGroup(m, gid);
+  doc.groups[gid] = {};
+  pruneGroups(); // reassignment may have emptied an older group
+  multiOn = false; multiSel = [];
+  sel = { kind: "group", gid };
+  setHint(); syncContextBtns(); commit();
+});
+document.getElementById("b-ungroup").addEventListener("click", () => {
+  if (!sel || sel.kind !== "group") return;
+  pushUndo();
+  for (const m of groupMembers(sel.gid)) setElGroup(m, null);
+  delete doc.groups[sel.gid];
+  sel = null;
+  syncContextBtns(); commit();
+});
+document.getElementById("b-lock").addEventListener("click", () => {
+  if (!sel) return;
+  pushUndo();
+  if (sel.kind === "group") {
+    const g = doc.groups[sel.gid] || (doc.groups[sel.gid] = {});
+    g.lk = !g.lk;
+  } else {
+    // Locking a lone element wraps it in a group of one.
+    const m = hitToMember(sel);
+    if (!m) { undoStack.pop(); syncUndoBtns(); return; }
+    const gid = nextGid();
+    setElGroup(m, gid);
+    doc.groups[gid] = { lk: true };
+    sel = { kind: "group", gid };
+  }
+  syncContextBtns(); commit();
+});
 
 document.getElementById("b-del").addEventListener("click", deleteSelected);
 document.getElementById("b-close").addEventListener("click", finishPending);
@@ -811,6 +935,35 @@ cv.addEventListener("pointerdown", e => {
 
   if (tool === "select") {
     const hit = hitTest(sx, sy, e.pointerType === "touch" ? TOUCH_PX : HANDLE_PX);
+    if (multiOn) {
+      // Collecting members for a group: taps toggle on pointer-UP, a drag
+      // pans — no selection or dragging of elements in this mode.
+      gesture = { type: "maybe-tap", sx, sy, view0: { ...view },
+                  multiHit: hitToMember(hit) };
+      return;
+    }
+    const member = hitToMember(hit);
+    const gid = member && elGroupOf(member);
+    if (gid != null) {
+      // Grouped element: the tap selects (and a drag moves) the WHOLE
+      // group, keeping every member's relative position. Locked groups
+      // select but never drag.
+      sel = { kind: "group", gid };
+      if (groupLocked(gid)) {
+        gesture = { type: "maybe-tap", sx, sy, view0: { ...view } };
+      } else {
+        const ms = groupMembers(gid);
+        gesture = { type: "drag-group", gid, sx, sy, undoPushed: false,
+          ops0: ms.filter(m => m.kind === "op")
+                  .map(m => [m.idx, doc.ops[m.idx].p.map(q => [...q])]),
+          pads0: ms.filter(m => m.kind === "pad")
+                   .map(m => [m.idx, [...doc.pads[m.idx]]]),
+          start0: ms.some(m => m.kind === "start") ? [...doc.start] : null };
+      }
+      syncContextBtns();
+      draw();
+      return;
+    }
     if (hit && (hit.kind === "vert" || hit.kind === "mid")) {
       pushUndo();
       if (hit.kind === "mid") { // insert a vertex on the edge, then drag it
@@ -927,19 +1080,30 @@ cv.addEventListener("pointermove", e => {
       draw();
       break;
     }
-    case "drag-pad": case "drag-start": case "drag-poly": {
+    case "drag-pad": case "drag-start": case "drag-poly": case "drag-group": {
       const dx = (sx - gesture.sx) / view.s, dy = -(sy - gesture.sy) / view.s;
       if (Math.hypot(dx, dy) * view.s < TAP_PX && !gesture.undoPushed) break;
       if (!gesture.undoPushed) { pushUndo(); gesture.undoPushed = true; }
+      // Whole-object moves use the SNAPPED delta so shapes (and a group's
+      // relative layout) are preserved exactly.
+      const sdx = snap(dx), sdy = snap(dy);
+      const keepG = (q, p0) => { if (p0.length > 2) q[2] = p0[2]; return q; };
       if (gesture.type === "drag-pad")
-        doc.pads[gesture.idx] = snapPt([gesture.p0[0] + dx, gesture.p0[1] + dy]);
+        doc.pads[gesture.idx] =
+          keepG(snapPt([gesture.p0[0] + dx, gesture.p0[1] + dy]), gesture.p0);
       else if (gesture.type === "drag-start")
-        doc.start = snapPt([gesture.p0[0] + dx, gesture.p0[1] + dy]);
-      else {
-        // Translate the whole polygon by the SNAPPED delta so its shape
-        // (relative vertex offsets, incl. off-grid ones) is preserved.
-        const sdx = snap(dx), sdy = snap(dy);
+        doc.start =
+          keepG(snapPt([gesture.p0[0] + dx, gesture.p0[1] + dy]), gesture.p0);
+      else if (gesture.type === "drag-poly")
         doc.ops[gesture.idx].p = gesture.p0.map(p => [p[0] + sdx, p[1] + sdy]);
+      else {
+        for (const [i, p0] of gesture.ops0)
+          doc.ops[i].p = p0.map(p => [p[0] + sdx, p[1] + sdy]);
+        for (const [i, p0] of gesture.pads0)
+          doc.pads[i] = keepG([p0[0] + sdx, p0[1] + sdy], p0);
+        if (gesture.start0)
+          doc.start = keepG([gesture.start0[0] + sdx, gesture.start0[1] + sdy],
+                            gesture.start0);
       }
       draw();
       break;
@@ -998,7 +1162,15 @@ function endPointer(e) {
   if (wasGesture.type === "maybe-tap") {
     // A clean tap: act per tool.
     if (tool === "select") {
-      if (wasGesture.deselect) { sel = null; syncContextBtns(); draw(); }
+      if (multiOn) {
+        const m = wasGesture.multiHit;
+        if (m) { // toggle membership in the pending group
+          const key = JSON.stringify(m);
+          const i = multiSel.findIndex(x => JSON.stringify(x) === key);
+          if (i >= 0) multiSel.splice(i, 1); else multiSel.push(m);
+          syncContextBtns(); draw();
+        }
+      } else if (wasGesture.deselect) { sel = null; syncContextBtns(); draw(); }
     } else if ((tool === "draw" || tool === "carve") && shape !== "free") {
       // Tap-tap shapes: first tap anchors the corner/centre, second commits.
       const p = snapPt([s2wx(sx), s2wy(sy)]);
@@ -1056,7 +1228,9 @@ function endPointer(e) {
     }
     commit();
   } else if (wasGesture.undoPushed) {
-    if (wasGesture.type === "drag-start") reoriginToStart();
+    // Moving the start pad (alone or inside a group) re-anchors the level.
+    if (wasGesture.type === "drag-start" ||
+        (wasGesture.type === "drag-group" && wasGesture.start0)) reoriginToStart();
     commit();
   }
 }
@@ -1092,6 +1266,7 @@ window.addEventListener("keydown", e => {
   else if (e.key === "Escape") {
     if (modalOpen()) closeModal();
     else if (drawing || shapeAnchor) { cancelDraw(); draw(); }
+    else if (multiOn) { multiOn = false; multiSel = []; setHint(); syncContextBtns(); draw(); }
     else { sel = null; syncContextBtns(); draw(); }
   } else if (e.key === "Enter" && drawing) finishPending();
   else if ((e.key === "Delete" || e.key === "Backspace")) {
@@ -1249,6 +1424,49 @@ function draw() {
       ctx.strokeStyle = "#06080d"; ctx.lineWidth = 1.5;
       ctx.strokeRect(x - HANDLE_R, y - HANDLE_R, HANDLE_R * 2, HANDLE_R * 2);
     });
+  }
+
+  // Multi-select collection + group selection: dashed outlines per member,
+  // and for a selected group a bounding box (with a LOCKED badge).
+  const memberOutline = (m, color) => {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    if (m.kind === "op" && doc.ops[m.idx]) {
+      tracePoly(ctx, doc.ops[m.idx].p);
+      ctx.stroke();
+    } else {
+      const p = m.kind === "pad" ? doc.pads[m.idx] : doc.start;
+      if (p) {
+        const hw = PAD_HALF_W * view.s;
+        ctx.strokeRect(w2sx(p[0]) - hw - 6, w2sy(p[1]) - 12, hw * 2 + 12, 32);
+      }
+    }
+    ctx.setLineDash([]);
+  };
+  multiSel.forEach(m => memberOutline(m, "#57ff9a"));
+  if (sel && sel.kind === "group") {
+    const ms = groupMembers(sel.gid);
+    ms.forEach(m => memberOutline(m, "#46f0ff"));
+    let lo = [Infinity, Infinity], hi = [-Infinity, -Infinity];
+    const eat = p => { lo = [Math.min(lo[0], p[0]), Math.min(lo[1], p[1])];
+                       hi = [Math.max(hi[0], p[0]), Math.max(hi[1], p[1])]; };
+    ms.forEach(m => {
+      if (m.kind === "op") doc.ops[m.idx].p.forEach(eat);
+      else eat(m.kind === "pad" ? doc.pads[m.idx] : doc.start);
+    });
+    if (lo[0] <= hi[0]) {
+      const x0 = w2sx(lo[0]) - 14, y0 = w2sy(hi[1]) - 14;
+      const bw = w2sx(hi[0]) - w2sx(lo[0]) + 28, bh = w2sy(lo[1]) - w2sy(hi[1]) + 28;
+      ctx.strokeStyle = "rgba(70,240,255,0.55)";
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([3, 5]);
+      ctx.strokeRect(x0, y0, bw, bh);
+      ctx.setLineDash([]);
+      ctx.fillStyle = groupLocked(sel.gid) ? "#ffb545" : "rgba(70,240,255,0.8)";
+      ctx.font = "11px ui-monospace, monospace";
+      ctx.fillText(groupLocked(sel.gid) ? "\u{1F512} LOCKED GROUP" : "GROUP", x0 + 2, y0 - 6);
+    }
   }
 
   // In-progress polygon (amber = rock being drawn, red = a cut being carved),
