@@ -125,6 +125,7 @@
     <a class="back" href="./" title="Back to the game">&#8249; GAME</a>
     <button class="btn tool on" id="t-select">SELECT</button>
     <button class="btn tool" id="t-draw">DRAW ROCK</button>
+    <button class="btn tool" id="t-carve">CARVE</button>
     <button class="btn tool" id="t-pad">PAD</button>
     <button class="btn tool" id="t-start">START</button>
     <div class="sep"></div>
@@ -275,20 +276,22 @@ function syncUndoBtns() {
 }
 
 // ---------- tools / selection ----------
-let tool = "select";           // select | draw | pad | start
+let tool = "select";           // select | draw | carve | pad | start
 let sel = null;                // {kind:'poly'|'pad'|'start', idx, vert:n|null}
 let drawing = null;            // in-progress polygon: [[x,y],...]
+let pendingKind = "draw";      // what `drawing` becomes: 'draw' = rock, 'carve' = a cut
 let snapOn = true;
-let hoverClose = false;        // draw tool: cursor near the closing vertex
+let hoverClose = false;        // draw/carve: cursor near the closing vertex
 
 const HANDLE_PX = 11, TAP_PX = 6, CLOSE_PX = 14;
 
 function snap(v) { return snapOn ? Math.round(v / SNAP_STEP) * SNAP_STEP : Math.round(v * 100) / 100; }
 function snapPt(p) { return [snap(p[0]), snap(p[1])]; }
 
-const toolBtns = { select: "t-select", draw: "t-draw", pad: "t-pad", start: "t-start" };
+const toolBtns = { select: "t-select", draw: "t-draw", carve: "t-carve",
+                   pad: "t-pad", start: "t-start" };
 function setTool(t) {
-  if (t !== "draw") cancelDraw();
+  if (t !== tool) cancelDraw();
   tool = t;
   if (t !== "select") sel = null;
   for (const k in toolBtns)
@@ -303,17 +306,19 @@ for (const k in toolBtns)
 function setHint() {
   const hints = {
     select: "tap: select · drag: move · drag empty: pan · wheel/pinch: zoom",
-    draw: "tap: add vertex · tap first vertex (or CLOSE POLY): finish · drag: pan",
+    draw: "tap: add vertex · drag: freehand · finish on the first vertex · two fingers: pan/zoom",
+    carve: "cut rock away: tap vertices or drag freehand · finish on the first vertex",
     pad: "tap: place a landing pad · drag: pan",
-    start: "tap: place the start platform (one per level) · drag: pan",
+    start: "tap: place the start platform — the level re-centres so it becomes x = 0",
   };
   document.getElementById("hint").textContent = hints[tool];
 }
 
 function syncContextBtns() {
   document.getElementById("b-del").style.display = sel ? "" : "none";
-  document.getElementById("b-close").style.display =
-    drawing && drawing.length >= 3 ? "" : "none";
+  const closeBtn = document.getElementById("b-close");
+  closeBtn.style.display = drawing && drawing.length >= 3 ? "" : "none";
+  closeBtn.textContent = pendingKind === "carve" ? "APPLY CUT" : "CLOSE POLY";
   document.getElementById("b-cancel").style.display = drawing ? "" : "none";
 }
 
@@ -321,6 +326,13 @@ function cancelDraw() {
   drawing = null;
   hoverClose = false;
   syncContextBtns();
+}
+
+// Finish the pending polygon: rock polys get added, carve polys get subtracted.
+function finishPending() {
+  if (!drawing || drawing.length < 3) return;
+  if (pendingKind === "carve") applyCarve();
+  else closeDrawing();
 }
 
 function closeDrawing() {
@@ -333,6 +345,216 @@ function closeDrawing() {
   sel = { kind: "poly", idx, vert: null };
   syncContextBtns();
   commit();
+}
+
+// ---------- polygon geometry (freehand + carve) ----------
+function signedArea(poly) {
+  let a = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i], q = poly[(i + 1) % poly.length];
+    a += p[0] * q[1] - q[0] * p[1];
+  }
+  return a / 2;
+}
+function ensureCCW(poly) {
+  return signedArea(poly) < 0 ? poly.slice().reverse() : poly.slice();
+}
+function round2(v) { const r = Math.round(v * 100) / 100; return r === 0 ? 0 : r; }
+
+// Ramer–Douglas–Peucker: freehand strokes come in as dense pointer samples
+// and leave as a sane vertex count (tolerance in metres, zoom-scaled by the
+// caller so what you see is what you keep).
+function pointSegDist(p, a, b) {
+  const ax = b[0] - a[0], ay = b[1] - a[1];
+  const l2 = ax * ax + ay * ay;
+  if (l2 < 1e-12) return Math.hypot(p[0] - a[0], p[1] - a[1]);
+  const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * ax + (p[1] - a[1]) * ay) / l2));
+  return Math.hypot(p[0] - (a[0] + t * ax), p[1] - (a[1] + t * ay));
+}
+function rdp(pts, eps) {
+  if (pts.length < 3) return pts.slice();
+  const keep = new Array(pts.length).fill(false);
+  keep[0] = keep[pts.length - 1] = true;
+  const stack = [[0, pts.length - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop();
+    let maxD = 0, idx = -1;
+    for (let i = a + 1; i < b; i++) {
+      const d = pointSegDist(pts[i], pts[a], pts[b]);
+      if (d > maxD) { maxD = d; idx = i; }
+    }
+    if (maxD > eps) { keep[idx] = true; stack.push([a, idx], [idx, b]); }
+  }
+  return pts.filter((_, i) => keep[i]);
+}
+
+// Proper segment intersection, endpoints excluded — the carve polygon is
+// jittered by ~1 mm before clipping (see applyCarve), so grid-snapped
+// vertex-on-edge / collinear degeneracies can't occur in practice.
+function segInt(p1, p2, q1, q2) {
+  const rx = p2[0] - p1[0], ry = p2[1] - p1[1];
+  const sx = q2[0] - q1[0], sy = q2[1] - q1[1];
+  const den = rx * sy - ry * sx;
+  if (Math.abs(den) < 1e-12) return null;
+  const qpx = q1[0] - p1[0], qpy = q1[1] - p1[1];
+  const t = (qpx * sy - qpy * sx) / den;
+  const u = (qpx * ry - qpy * rx) / den;
+  if (t <= 1e-9 || t >= 1 - 1e-9 || u <= 1e-9 || u >= 1 - 1e-9) return null;
+  return { t, u, x: p1[0] + t * rx, y: p1[1] + t * ry };
+}
+
+// A hole (clip fully inside the subject) makes a donut, which one simple
+// polygon can't represent — but the level format doesn't need it to: rock
+// is the UNION of the polys and buried edges are harmless (the Hollows
+// frame is built exactly that way). So the donut is returned as pieces:
+// split the subject with a half-plane rectangle through the hole (a
+// boundary-crossing cut -> clean simple pieces), then subtract the hole
+// from each piece (now also boundary-crossing). No slit, no rock lost —
+// the pieces' coincident edges along the split line are buried between
+// rock on both sides.
+function holeSplit(S, C) {
+  const cxs = C.map(p => p[0]);
+  // Any vertical line strictly inside the hole's x-range crosses both the
+  // hole and the subject; the jitter keeps it off grid-snapped vertices.
+  const cx = (Math.min(...cxs) + Math.max(...cxs)) / 2 + (Math.random() - 0.5) * 0.002;
+  const sxs = S.map(p => p[0]), sys = S.map(p => p[1]);
+  const x0 = Math.min(...sxs) - 10, x1 = Math.max(...sxs) + 10;
+  const y0 = Math.min(...sys) - 10, y1 = Math.max(...sys) + 10;
+  const out = [];
+  for (const H of [[[cx, y0], [x1, y0], [x1, y1], [cx, y1]],    // right half-plane
+                   [[x0, y0], [cx, y0], [cx, y1], [x0, y1]]]) { // left half-plane
+    for (const piece of polyDifference(S, H) || []) {
+      const cut = polyDifference(piece, C); // C straddles cx, so it crosses
+      if (cut === null) out.push(piece);
+      else out.push(...cut);
+    }
+  }
+  return out;
+}
+
+// subject minus clip (Greiner–Hormann, difference traversal: subject walked
+// FORWARD where outside the clip, clip walked BACKWARD where inside the
+// subject). Returns null = untouched (disjoint), [] = swallowed, else the
+// resulting piece(s) — a boundary-crossing cut can only split, never create
+// holes; the hole case is the no-intersection branch (holeSplit above).
+function polyDifference(subjectPts, clipPts) {
+  const S = ensureCCW(subjectPts), C = ensureCCW(clipPts);
+  const inters = [];
+  for (let i = 0; i < S.length; i++) {
+    for (let j = 0; j < C.length; j++) {
+      const r = segInt(S[i], S[(i + 1) % S.length], C[j], C[(j + 1) % C.length]);
+      if (r) inters.push({ i, j, t: r.t, u: r.u, x: r.x, y: r.y });
+    }
+  }
+  if (!inters.length) {
+    if (pointInPoly(C[0], S)) return holeSplit(S, C);
+    if (pointInPoly(S[0], C)) return [];
+    return null;
+  }
+  // Build circular doubly-linked rings with the intersections spliced in
+  // (sorted along each edge) and cross-linked between the rings.
+  const mkRing = pts => {
+    const nodes = pts.map(p => ({ x: p[0], y: p[1], inter: false }));
+    return nodes;
+  };
+  const sn = mkRing(S), cn = mkRing(C);
+  const sIns = new Map(), cIns = new Map(); // edge idx -> [{alpha, node}]
+  for (const it of inters) {
+    const a = { x: it.x, y: it.y, inter: true, visited: false };
+    const b = { x: it.x, y: it.y, inter: true, visited: false };
+    a.neighbor = b; b.neighbor = a;
+    (sIns.get(it.i) || sIns.set(it.i, []).get(it.i)).push({ alpha: it.t, node: a });
+    (cIns.get(it.j) || cIns.set(it.j, []).get(it.j)).push({ alpha: it.u, node: b });
+  }
+  const splice = (ring, insMap) => {
+    const out = [];
+    for (let i = 0; i < ring.length; i++) {
+      out.push(ring[i]);
+      const ins = insMap.get(i);
+      if (ins) { ins.sort((p, q) => p.alpha - q.alpha); ins.forEach(e => out.push(e.node)); }
+    }
+    for (let i = 0; i < out.length; i++) {
+      out[i].next = out[(i + 1) % out.length];
+      out[i].prev = out[(i - 1 + out.length) % out.length];
+    }
+    return out;
+  };
+  const sRing = splice(sn, sIns), cRing = splice(cn, cIns);
+  // entry/exit flags: walk each ring, toggling containment in the OTHER poly.
+  const mark = (ring, other) => {
+    let inside = pointInPoly([ring[0].x, ring[0].y], other);
+    for (const n of ring) if (n.inter) { n.entry = !inside; inside = !inside; }
+  };
+  mark(sRing, C);
+  mark(cRing, S);
+  // Trace: each result contour starts at a subject EXIT (leaving the clip).
+  const results = [];
+  for (const start of sRing) {
+    if (!start.inter || start.entry || start.visited) continue;
+    const contour = [];
+    let cur = start, onSubject = true;
+    for (let guard = 0; guard < 100000; guard++) {
+      let n = cur;
+      do {
+        contour.push([n.x, n.y]);
+        if (n.inter) n.visited = true;
+        n = onSubject ? n.next : n.prev;
+      } while (!n.inter);
+      n.visited = true;
+      cur = n.neighbor; onSubject = !onSubject;
+      if (cur === start) break;
+    }
+    // Dedupe near-coincident consecutive points, drop slivers.
+    const clean = contour.filter((p, i) => {
+      const q = contour[(i + 1) % contour.length];
+      return Math.hypot(p[0] - q[0], p[1] - q[1]) > 1e-4;
+    }).map(p => [round2(p[0]), round2(p[1])]);
+    if (clean.length >= 3 && Math.abs(signedArea(clean)) > 0.02) results.push(clean);
+  }
+  return results;
+}
+
+function applyCarve() {
+  if (!drawing || drawing.length < 3) return;
+  // ~1 mm jitter: grid-snapped cuts routinely land exactly on grid-snapped
+  // rock edges, and exact vertex-on-edge/collinear overlaps are the classic
+  // clipping degeneracies. Invisible next to the 1 cm export rounding.
+  const clip = drawing.map(p => [p[0] + (Math.random() - 0.5) * 0.002,
+                                 p[1] + (Math.random() - 0.5) * 0.002]);
+  if (Math.abs(signedArea(clip)) < 0.02) { cancelDraw(); draw(); return; }
+  pushUndo();
+  let changed = false;
+  const next = [];
+  for (const poly of doc.polys) {
+    const pieces = polyDifference(poly, clip);
+    if (pieces === null) { next.push(poly); continue; }
+    changed = true;
+    next.push(...pieces);
+  }
+  if (!changed) {
+    undoStack.pop(); syncUndoBtns();
+    toast("The cut didn't touch any rock");
+    cancelDraw(); draw();
+    return;
+  }
+  doc.polys = next;
+  sel = null;
+  cancelDraw(); // stay in the carve tool — cuts tend to come in batches
+  commit();
+}
+
+// The start pad IS the origin: the sim always spawns at x = 0 (SPAWN_X), so
+// instead of moving the spawn, moving/placing the start platform re-anchors
+// the WHOLE level around it — every x shifts so start.x becomes 0. The view
+// shifts by the same amount, so on screen only the grid moves, not the rock.
+function reoriginToStart() {
+  if (!doc.start) return;
+  const dx = doc.start[0];
+  if (Math.abs(dx) < 1e-9) return;
+  doc.polys.forEach(poly => poly.forEach(p => { p[0] = round2(p[0] - dx); }));
+  doc.pads.forEach(p => { p[0] = round2(p[0] - dx); });
+  doc.start[0] = 0;
+  view.x -= dx;
 }
 
 function deleteSelected() {
@@ -356,7 +578,7 @@ function deleteSelected() {
 }
 
 document.getElementById("b-del").addEventListener("click", deleteSelected);
-document.getElementById("b-close").addEventListener("click", closeDrawing);
+document.getElementById("b-close").addEventListener("click", finishPending);
 document.getElementById("b-cancel").addEventListener("click", () => { cancelDraw(); draw(); });
 document.getElementById("b-undo").addEventListener("click", undo);
 document.getElementById("b-redo").addEventListener("click", redo);
@@ -471,7 +693,8 @@ cv.addEventListener("pointerdown", e => {
     syncContextBtns();
     draw();
   } else {
-    // draw / pad / start: tap acts on UP; a drag pans.
+    // draw / carve / pad / start: tap acts on UP; a drag becomes a freehand
+    // stroke (draw/carve) or a pan (pad/start).
     gesture = { type: "maybe-tap", sx, sy, view0: { ...view } };
   }
 });
@@ -514,10 +737,30 @@ cv.addEventListener("pointermove", e => {
 
   if (gesture.type === "maybe-tap" &&
       distPx(sx, sy, gesture.sx, gesture.sy) > TAP_PX) {
-    gesture = { type: "pan", sx: gesture.sx, sy: gesture.sy, view0: gesture.view0 };
+    if (tool === "draw" || tool === "carve") {
+      // Freehand: the drag IS the stroke (pan with two fingers / middle
+      // mouse / wheel). Sampled points get RDP-simplified on release.
+      if (!drawing) { drawing = []; pendingKind = tool; }
+      gesture = { type: "stroke",
+                  pts: [[s2wx(gesture.sx), s2wy(gesture.sy)]],
+                  lenPx: 0, lastSx: gesture.sx, lastSy: gesture.sy };
+    } else {
+      gesture = { type: "pan", sx: gesture.sx, sy: gesture.sy, view0: gesture.view0 };
+    }
   }
 
   switch (gesture.type) {
+    case "stroke": {
+      const last = gesture.pts[gesture.pts.length - 1];
+      const wp = [s2wx(sx), s2wy(sy)];
+      if (Math.hypot(wp[0] - last[0], wp[1] - last[1]) * view.s > 2) {
+        gesture.pts.push(wp);
+        gesture.lenPx += distPx(sx, sy, gesture.lastSx, gesture.lastSy);
+        gesture.lastSx = sx; gesture.lastSy = sy;
+        draw();
+      }
+      break;
+    }
     case "pan": {
       view.x = gesture.view0.x - (sx - gesture.sx) / view.s;
       view.y = gesture.view0.y + (sy - gesture.sy) / view.s;
@@ -564,16 +807,43 @@ function endPointer(e) {
   gesture = null;
   if (!wasGesture) return;
 
+  if (wasGesture.type === "stroke") {
+    // Simplify the sampled stroke to a sane vertex count (tolerance follows
+    // the zoom: ~2.5 px of deviation, clamped to 5–60 cm in the world) and
+    // append it to the pending polygon. Freehand points deliberately skip
+    // grid snap — snapping a curve flattens it.
+    const tol = Math.min(0.6, Math.max(0.05, 2.5 / view.s));
+    const simp = rdp(wasGesture.pts, tol);
+    for (const p of simp) {
+      const last = drawing[drawing.length - 1];
+      const q = [round2(p[0]), round2(p[1])];
+      if (!last || Math.hypot(q[0] - last[0], q[1] - last[1]) > 0.03) drawing.push(q);
+    }
+    syncContextBtns();
+    // A long stroke that ends back at the polygon's first vertex finishes
+    // it (draw: add the rock; carve: apply the cut) — one-gesture blobs.
+    if (drawing.length > 3 && wasGesture.lenPx > CLOSE_PX * 3) {
+      const p0 = drawing[0], pe = drawing[drawing.length - 1];
+      if (distPx(w2sx(pe[0]), w2sy(pe[1]), w2sx(p0[0]), w2sy(p0[1])) < CLOSE_PX * 1.5) {
+        drawing.pop(); // the tail point sits on the start — drop it
+        finishPending();
+        return;
+      }
+    }
+    draw();
+    return;
+  }
+
   if (wasGesture.type === "maybe-tap") {
     // A clean tap: act per tool.
     if (tool === "select") {
       if (wasGesture.deselect) { sel = null; syncContextBtns(); draw(); }
-    } else if (tool === "draw") {
+    } else if (tool === "draw" || tool === "carve") {
       if (drawing && drawing.length >= 3 &&
           distPx(sx, sy, w2sx(drawing[0][0]), w2sy(drawing[0][1])) < CLOSE_PX) {
-        closeDrawing();
+        finishPending();
       } else {
-        if (!drawing) drawing = [];
+        if (!drawing) { drawing = []; pendingKind = tool; }
         drawing.push(snapPt([s2wx(sx), s2wy(sy)]));
         drawCursor = null;
         syncContextBtns();
@@ -590,6 +860,7 @@ function endPointer(e) {
     } else if (tool === "start") {
       pushUndo();
       doc.start = snapPt([s2wx(sx), s2wy(sy)]);
+      reoriginToStart(); // the start pad becomes the new x = 0
       setTool("select");
       sel = { kind: "start" };
       syncContextBtns();
@@ -610,6 +881,7 @@ function endPointer(e) {
     }
     commit();
   } else if (wasGesture.undoPushed) {
+    if (wasGesture.type === "drag-start") reoriginToStart();
     commit();
   }
 }
@@ -646,15 +918,16 @@ window.addEventListener("keydown", e => {
     if (modalOpen()) closeModal();
     else if (drawing) { cancelDraw(); draw(); }
     else { sel = null; syncContextBtns(); draw(); }
-  } else if (e.key === "Enter" && drawing) closeDrawing();
+  } else if (e.key === "Enter" && drawing) finishPending();
   else if ((e.key === "Delete" || e.key === "Backspace")) {
     if (drawing) { drawing.pop(); if (!drawing.length) cancelDraw(); syncContextBtns(); draw(); }
     else deleteSelected();
   }
   else if (e.key === "1") setTool("select");
   else if (e.key === "2") setTool("draw");
-  else if (e.key === "3") setTool("pad");
-  else if (e.key === "4") setTool("start");
+  else if (e.key === "3") setTool("carve");
+  else if (e.key === "4") setTool("pad");
+  else if (e.key === "5") setTool("start");
 });
 
 // ---------- name / scoring fields ----------
@@ -729,19 +1002,26 @@ function draw() {
     });
   }
 
-  // In-progress polygon.
-  if (drawing && drawing.length) {
-    ctx.strokeStyle = "#ffb545";
+  // In-progress polygon (amber = rock being drawn, red = a cut being carved),
+  // plus the live freehand stroke while a drag is in flight.
+  if (drawing && (drawing.length || (gesture && gesture.type === "stroke"))) {
+    const col = pendingKind === "carve" ? "#ff5d5d" : "#ffb545";
+    ctx.strokeStyle = col;
     ctx.lineWidth = 2;
     ctx.setLineDash([6, 5]);
     ctx.beginPath();
-    drawing.forEach((p, j) => j ? ctx.lineTo(w2sx(p[0]), w2sy(p[1]))
-                                : ctx.moveTo(w2sx(p[0]), w2sy(p[1])));
-    if (drawCursor) ctx.lineTo(w2sx(drawCursor[0]), w2sy(drawCursor[1]));
+    let first = true;
+    const seg = p => {
+      if (first) { ctx.moveTo(w2sx(p[0]), w2sy(p[1])); first = false; }
+      else ctx.lineTo(w2sx(p[0]), w2sy(p[1]));
+    };
+    drawing.forEach(seg);
+    if (gesture && gesture.type === "stroke") gesture.pts.forEach(seg);
+    else if (drawCursor) seg(drawCursor);
     ctx.stroke();
     ctx.setLineDash([]);
     drawing.forEach((p, j) => {
-      ctx.fillStyle = j === 0 && hoverClose ? "#57ff9a" : "#ffb545";
+      ctx.fillStyle = j === 0 && hoverClose ? "#57ff9a" : col;
       ctx.beginPath(); ctx.arc(w2sx(p[0]), w2sy(p[1]), j === 0 ? 7 : 4, 0, 7); ctx.fill();
     });
   }
@@ -775,10 +1055,13 @@ function draw() {
   if (doc.start)
     deck(doc.start, "#8fa0b5", "START", sel && sel.kind === "start");
 
-  // Spawn marker: where the ship will actually appear (x = 0, ground +0.78 —
-  // stand_y). Red when buried in rock.
+  // Spawn marker: where the ship will actually appear (stand_y = ground
+  // +0.78). The sim spawns at x = 0, and the editor keeps the start platform
+  // AT x = 0 by re-anchoring the level around it (reoriginToStart) — so the
+  // marker rides the start pad, staying truthful even mid-drag. Red when
+  // buried in rock.
   const ground = doc.start ? doc.start[1] : (doc.spawnY ?? 0);
-  const spawn = [0, ground + 0.78];
+  const spawn = [doc.start ? doc.start[0] : 0, ground + 0.78];
   const sxp = w2sx(spawn[0]), syp = w2sy(spawn[1]);
   const shipH = Math.max(8, 0.95 * view.s);
   const buried = pointInRock(spawn);
@@ -837,13 +1120,11 @@ function validate() {
       out.push({ level: "warn", msg: "Polygon " + (i + 1) + " is degenerate (near-zero area)" });
   });
   const ground = doc.start ? doc.start[1] : (doc.spawnY ?? 0);
-  const spawn = [0, ground + 0.78];
+  const spawn = [doc.start ? doc.start[0] : 0, ground + 0.78];
   if (pointInRock(spawn) || pointInRock([spawn[0], spawn[1] + 1.2]))
-    out.push({ level: "error", msg: "The spawn point (x = 0, y = " + spawn[1].toFixed(1) + ") is inside rock — clear it or move the start platform" });
+    out.push({ level: "error", msg: "The spawn point (x = " + spawn[0].toFixed(1) + ", y = " + spawn[1].toFixed(1) + ") is inside rock — clear it or move the start platform" });
   if (!doc.start)
     out.push({ level: "warn", msg: "No start platform — the ship will spawn standing at x = 0, ground y = " + ground.toFixed(1) });
-  else if (Math.abs(doc.start[0]) > 0.01)
-    out.push({ level: "warn", msg: "The start platform is at x = " + doc.start[0] + " but the ship always spawns at x = 0 — centre it (or expect a drop)" });
   doc.pads.forEach((p, i) => {
     if (pointInRock([p[0], p[1] + 0.05]))
       out.push({ level: "error", msg: "Pad " + (i + 1) + " deck is inside rock" });
@@ -1000,6 +1281,7 @@ document.getElementById("b-import").addEventListener("click", () => {
           if (!d) { toast("No poly lines found — not a hand-drawn level"); return; }
           pushUndo();
           doc = Object.assign(starterDoc(), d);
+          reoriginToStart(); // imported levels obey the start-pad-origin rule too
           sel = null; cancelDraw();
           syncFields(); fitView(); closeModal(); commit();
         } },
@@ -1052,6 +1334,7 @@ syncFields();
 setHint();
 syncUndoBtns();
 resize();
+reoriginToStart(); // pre-rule autosaves may carry an off-origin start pad
 fitView();
 refreshIssues();
 draw();

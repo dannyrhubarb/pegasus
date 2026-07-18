@@ -503,7 +503,9 @@
       -webkit-user-select: none;
     }
     .rowlist .row:hover { background: rgba(52, 231, 255, 0.12); }
-    .rowlist .row .lname { flex: 1; text-align: left; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+    .rowlist .row .lcol { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; text-align: left; }
+    .rowlist .row .lname { font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+    .rowlist .row .ldesc { color: var(--dim); font-size: 0.72em; letter-spacing: 0.03em; line-height: 1.35; }
     .rowlist .row .lbest {
       color: var(--dim);
       font-size: 0.85em;
@@ -1035,11 +1037,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">81a5759-pr-110</div>
+        <div class="info-value" id="git-rev">1d8bedb-pr-110</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-17T21:34:47Z</div>
+        <div class="info-value" id="build-time">2026-07-18T08:07:30Z</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors, which site
@@ -1931,7 +1933,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "81a5759-pr-110";
+    const wasmRev = "1d8bedb-pr-110";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -2066,6 +2068,7 @@
     const scoresLevelEl = document.getElementById("scores-level");
     const levelTexts = {};        // file -> level text
     const levelNames = {};        // file -> display name
+    const levelDescs = {};        // file -> one-line picker description
     const levelFiles = [];        // manifest order
     let currentLevelFile = null;  // the level LOADED in the game
     let scoresFile = null;        // the level whose board scr-scores shows
@@ -2110,9 +2113,19 @@
       for (const file of levelFiles) {
         const row = document.createElement("div");
         row.className = "row";
+        // Title + (optional) one-line description, stacked in the left column.
+        const col = document.createElement("span");
+        col.className = "lcol";
         const name = document.createElement("span");
         name.className = "lname";
         name.textContent = levelNames[file];
+        col.appendChild(name);
+        if (levelDescs[file]) {
+          const desc = document.createElement("span");
+          desc.className = "ldesc";
+          desc.textContent = levelDescs[file];
+          col.appendChild(desc);
+        }
         const best = document.createElement("span");
         best.className = "lbest";
         const bd = document.createElement("span");
@@ -2121,7 +2134,7 @@
         best.append(bd, by);
         levelBestEls[file] = { d: bd, by };
         setLevelBest(file);
-        row.append(name, best);
+        row.append(col, best);
         if (levelPickerMode === "scores") {
           // Drill-down affordance: tapping a row opens that level's board.
           const chev = document.createElement("span");
@@ -2189,6 +2202,9 @@
       levelNames[CUSTOM_LEVEL_FILE] =
         (((text.match(/^\s*name\s*=\s*(.+)$/m) || [])[1]) || "Custom level").trim()
         + " (draft)";
+      levelDescs[CUSTOM_LEVEL_FILE] =
+        (((text.match(/^\s*description\s*=\s*(.+)$/m) || [])[1])
+         || "Your level-editor draft — this device only").trim();
       if (!levelFiles.includes(CUSTOM_LEVEL_FILE)) levelFiles.push(CUSTOM_LEVEL_FILE);
       return true;
     }
@@ -2206,6 +2222,10 @@
               levelTexts[file] = text;
               levelNames[file] =
                 ((text.match(/^\s*name\s*=\s*(.+)$/m) || [])[1] || file).trim();
+              // Optional cosmetic `description =` line — shown under the
+              // title in the level picker (the wasm parser ignores the key).
+              levelDescs[file] =
+                ((text.match(/^\s*description\s*=\s*(.+)$/m) || [])[1] || "").trim();
               levelFiles.push(file);
             } catch (e) { /* skip an unfetchable level */ }
           }
@@ -2220,6 +2240,12 @@
           closeMenu();
           return;
         }
+        // Pre-load a world behind the menu: the saved selection, else the
+        // first manifest level. There is no "default level" the player can
+        // fly unpicked — Fly always goes through the picker — this just
+        // keeps a real level (record, ghost) warm behind the menu, and the
+        // levelFiles[0] fallback recovers anyone whose saved level left the
+        // manifest (e.g. a retired level).
         const saved = localStorage.getItem("pegasus_level");
         const start = levelTexts[saved] !== undefined ? saved : levelFiles[0];
         pushLevel(start);

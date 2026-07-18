@@ -1,8 +1,38 @@
 [
  {
-  "rev": "81a5759",
-  "date": "2026-07-17T21:32:08Z",
+  "rev": "1d8bedb",
+  "date": "2026-07-18T08:05:14Z",
+  "note": "Carving a chamber fully inside rock now produces clean split rock pieces instead of a hidden slit"
+ },
+ {
+  "rev": "bb49a4b",
+  "date": "2026-07-18T08:05:14Z",
+  "note": "Level editor upgrades — draw rock freehand with your finger, carve tunnels and chambers out of existing rock, and the start pad now anchors the level"
+ },
+ {
+  "rev": "5ef2506",
+  "date": "2026-07-18T08:05:14Z",
   "note": "New level editor — draw your own cave with rock polygons and landing pads, then test-fly it in the game"
+ },
+ {
+  "rev": "a7c89d3",
+  "date": "2026-07-18T00:43:38+02:00",
+  "note": "Retired The Caves — four distinct worlds remain"
+ },
+ {
+  "rev": "b776412",
+  "date": "2026-07-18T00:43:38+02:00",
+  "note": "Retired The Rift — The Flux carries the endless cave on, reshuffled every attempt"
+ },
+ {
+  "rev": "6dee267",
+  "date": "2026-07-18T00:43:38+02:00",
+  "note": "The Hollows time trial now leads the level list"
+ },
+ {
+  "rev": "10d4e7b",
+  "date": "2026-07-18T00:43:38+02:00",
+  "note": "The level picker now describes each level under its name"
  },
  {
   "rev": "47acd3f",
