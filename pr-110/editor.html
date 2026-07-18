@@ -80,6 +80,9 @@
   #wrap { position: relative; flex: 1 1 0; min-height: 0; }
   canvas { position: absolute; inset: 0; width: 100%; height: 100%;
            touch-action: none; cursor: crosshair; }
+  #ctxbar { position: absolute; top: 10px; left: 10px; z-index: 5;
+            display: flex; gap: 8px; }
+  #ctxbar .btn { box-shadow: 0 2px 10px rgba(0,0,0,0.5); }
   #status {
     background: var(--panel);
     border-top: 1px solid var(--line);
@@ -139,9 +142,6 @@
     <button class="btn" id="b-undo" title="Ctrl+Z">&#8630;</button>
     <button class="btn" id="b-redo" title="Ctrl+Shift+Z">&#8631;</button>
     <button class="btn" id="b-snap" title="Snap to 0.5 m grid">SNAP&nbsp;&#183;5m</button>
-    <button class="btn danger" id="b-del" style="display:none">DELETE</button>
-    <button class="btn go" id="b-close" style="display:none">CLOSE&nbsp;POLY</button>
-    <button class="btn" id="b-cancel" style="display:none">CANCEL</button>
     <div class="grow"></div>
     <input id="name" maxlength="40" placeholder="Level name">
     <select id="scoring" title="Scoring mode">
@@ -155,7 +155,18 @@
     <button class="btn warn" id="b-export">EXPORT</button>
     <button class="btn go" id="b-fly">&#9654;&nbsp;TEST&nbsp;FLY</button>
   </div>
-  <div id="wrap"><canvas id="cv"></canvas></div>
+  <div id="wrap">
+    <canvas id="cv"></canvas>
+    <!-- Contextual actions FLOAT over the canvas. In the toolbar they
+         reflowed it whenever the selection changed, which shifted the whole
+         canvas — on a phone the vertex you were reaching for jumped ~40 px
+         away from your finger the moment something got selected. -->
+    <div id="ctxbar">
+      <button class="btn danger" id="b-del" style="display:none">DELETE</button>
+      <button class="btn go" id="b-close" style="display:none">CLOSE&nbsp;POLY</button>
+      <button class="btn" id="b-cancel" style="display:none">CANCEL</button>
+    </div>
+  </div>
   <div id="status">
     <span id="coords"></span>
     <span id="hint"></span>
@@ -297,7 +308,14 @@ let shapeAnchor = null;        // rect/circle tap-tap: the placed corner/centre
 let snapOn = true;
 let hoverClose = false;        // draw/carve: cursor near the closing vertex
 
-const HANDLE_PX = 11, TAP_PX = 6, CLOSE_PX = 14;
+// Finger-friendly sizing: coarse-pointer devices (phones/tablets) get
+// bigger drawn handles and close-targets, and TOUCH input additionally gets
+// a much larger grab radius per event (see hitTest's r parameter) — a
+// fingertip is ~7 mm of screen, not a mouse cursor.
+const COARSE = !!(window.matchMedia && matchMedia("(pointer: coarse)").matches);
+const HANDLE_PX = COARSE ? 16 : 11, TOUCH_PX = 28, TAP_PX = COARSE ? 9 : 6;
+const CLOSE_PX = COARSE ? 22 : 14;
+const HANDLE_R = COARSE ? 7 : 5; // drawn half-size of a vertex square
 
 function snap(v) { return snapOn ? Math.round(v / SNAP_STEP) * SNAP_STEP : Math.round(v * 100) / 100; }
 function snapPt(p) { return [snap(p[0]), snap(p[1])]; }
@@ -694,32 +712,39 @@ function compiledPolys() {
 // pads/start markers > hole bodies (their interior is open space, so they
 // win over the rock they cut) > rock bodies (topmost = last drawn).
 function polyArr(kind) { return kind === "hole" ? doc.holes : doc.polys; }
-function hitTest(sx, sy) {
+// `r` = grab radius (touch input passes a finger-sized one). With a big
+// radius several handles can be in range, so the NEAREST one wins —
+// vertices first, then midpoints (a circle's vertices sit ~1.2 m apart, so
+// first-match order would routinely grab the wrong one on a phone).
+function hitTest(sx, sy, r = HANDLE_PX) {
   if (sel && (sel.kind === "poly" || sel.kind === "hole")) {
     const poly = polyArr(sel.kind)[sel.idx];
     if (poly) {
+      let best = null, bd = r;
       for (let i = 0; i < poly.length; i++) {
-        if (distPx(sx, sy, w2sx(poly[i][0]), w2sy(poly[i][1])) < HANDLE_PX)
-          return { kind: "vert", of: sel.kind, idx: sel.idx, vert: i };
+        const d = distPx(sx, sy, w2sx(poly[i][0]), w2sy(poly[i][1]));
+        if (d < bd) { bd = d; best = { kind: "vert", of: sel.kind, idx: sel.idx, vert: i }; }
       }
+      if (best) return best;
+      bd = r * 0.85;
       for (let i = 0; i < poly.length; i++) {
         const a = poly[i], b = poly[(i + 1) % poly.length];
-        const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
-        if (distPx(sx, sy, w2sx(mx), w2sy(my)) < HANDLE_PX - 2)
-          return { kind: "mid", of: sel.kind, idx: sel.idx, vert: i + 1 };
+        const d = distPx(sx, sy, w2sx((a[0] + b[0]) / 2), w2sy((a[1] + b[1]) / 2));
+        if (d < bd) { bd = d; best = { kind: "mid", of: sel.kind, idx: sel.idx, vert: i + 1 }; }
       }
+      if (best) return best;
     }
   }
   for (let i = doc.pads.length - 1; i >= 0; i--) {
     const p = doc.pads[i];
-    if (Math.abs(sx - w2sx(p[0])) < Math.max(HANDLE_PX, PAD_HALF_W * view.s) &&
-        Math.abs(sy - w2sy(p[1])) < HANDLE_PX + 4)
+    if (Math.abs(sx - w2sx(p[0])) < Math.max(r, PAD_HALF_W * view.s) &&
+        Math.abs(sy - w2sy(p[1])) < r + 4)
       return { kind: "pad", idx: i };
   }
   if (doc.start) {
     const p = doc.start;
-    if (Math.abs(sx - w2sx(p[0])) < Math.max(HANDLE_PX, PAD_HALF_W * view.s) &&
-        Math.abs(sy - w2sy(p[1])) < HANDLE_PX + 4)
+    if (Math.abs(sx - w2sx(p[0])) < Math.max(r, PAD_HALF_W * view.s) &&
+        Math.abs(sy - w2sy(p[1])) < r + 4)
       return { kind: "start" };
   }
   const wp = [s2wx(sx), s2wy(sy)];
@@ -762,7 +787,7 @@ cv.addEventListener("pointerdown", e => {
   if (e.button === 1) { gesture = { type: "pan", sx, sy, view0: { ...view } }; return; }
 
   if (tool === "select") {
-    const hit = hitTest(sx, sy);
+    const hit = hitTest(sx, sy, e.pointerType === "touch" ? TOUCH_PX : HANDLE_PX);
     if (hit && (hit.kind === "vert" || hit.kind === "mid")) {
       pushUndo();
       if (hit.kind === "mid") { // insert a vertex on the edge, then drag it
@@ -1188,14 +1213,14 @@ function draw() {
       const a = poly[i], b = poly[(i + 1) % poly.length];
       const mx = w2sx((a[0] + b[0]) / 2), my = w2sy((a[1] + b[1]) / 2);
       ctx.fillStyle = "rgba(70,240,255,0.35)";
-      ctx.beginPath(); ctx.arc(mx, my, 4, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.arc(mx, my, HANDLE_R - 1, 0, 7); ctx.fill();
     }
     poly.forEach((p, i) => {
       const x = w2sx(p[0]), y = w2sy(p[1]);
       ctx.fillStyle = sel.vert === i ? "#ffb545" : "#46f0ff";
-      ctx.fillRect(x - 5, y - 5, 10, 10);
+      ctx.fillRect(x - HANDLE_R, y - HANDLE_R, HANDLE_R * 2, HANDLE_R * 2);
       ctx.strokeStyle = "#06080d"; ctx.lineWidth = 1.5;
-      ctx.strokeRect(x - 5, y - 5, 10, 10);
+      ctx.strokeRect(x - HANDLE_R, y - HANDLE_R, HANDLE_R * 2, HANDLE_R * 2);
     });
   }
 
@@ -1219,7 +1244,9 @@ function draw() {
     ctx.setLineDash([]);
     drawing.forEach((p, j) => {
       ctx.fillStyle = j === 0 && hoverClose ? "#57ff9a" : col;
-      ctx.beginPath(); ctx.arc(w2sx(p[0]), w2sy(p[1]), j === 0 ? 7 : 4, 0, 7); ctx.fill();
+      ctx.beginPath();
+      ctx.arc(w2sx(p[0]), w2sy(p[1]), j === 0 ? HANDLE_R + 2 : HANDLE_R - 1, 0, 7);
+      ctx.fill();
     });
   }
 
