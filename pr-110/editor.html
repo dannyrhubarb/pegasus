@@ -970,7 +970,11 @@ function draw() {
     }
   }
 
-  // Rock polygons (the game's slate palette).
+  // Rock polygons (the game's slate palette). Outlines skip BURIED edge
+  // stretches — coincident carve-seam edges and overlapped slab edges would
+  // otherwise paint bright lines through solid rock (the game's edge bands
+  // apply the same rule). A SELECTED polygon shows its full outline so the
+  // actual pieces stay visible while editing.
   doc.polys.forEach((poly, i) => {
     const isSel = sel && sel.kind === "poly" && sel.idx === i;
     ctx.beginPath();
@@ -979,8 +983,31 @@ function draw() {
     ctx.closePath();
     ctx.fillStyle = "rgba(52,68,96,0.5)";
     ctx.fill();
-    ctx.strokeStyle = isSel ? "#46f0ff" : "#5c7496";
-    ctx.lineWidth = isSel ? 2 : 1.25;
+    if (isSel) {
+      ctx.strokeStyle = "#46f0ff";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      return;
+    }
+    ctx.strokeStyle = "#5c7496";
+    ctx.lineWidth = 1.25;
+    ctx.beginPath();
+    const ccw = signedArea(poly) > 0; // y-up: interior left of edge dir
+    for (let k = 0; k < poly.length; k++) {
+      const a = poly[k], b = poly[(k + 1) % poly.length];
+      const ex = b[0] - a[0], ey = b[1] - a[1];
+      const len = Math.hypot(ex, ey);
+      if (len < 1e-6) continue;
+      const ox = (ccw ? ey : -ey) / len * 0.06, oy = (ccw ? -ex : ex) / len * 0.06;
+      const steps = Math.max(1, Math.ceil(len / 2)); // ~2 m grain, like the game
+      for (let s = 0; s < steps; s++) {
+        const mx = a[0] + ex * (s + 0.5) / steps, my = a[1] + ey * (s + 0.5) / steps;
+        if (pointInRock([mx + ox, my + oy])) continue; // buried stretch
+        const t0 = s / steps, t1 = (s + 1) / steps;
+        ctx.moveTo(w2sx(a[0] + ex * t0), w2sy(a[1] + ey * t0));
+        ctx.lineTo(w2sx(a[0] + ex * t1), w2sy(a[1] + ey * t1));
+      }
+    }
     ctx.stroke();
   });
 
