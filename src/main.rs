@@ -1154,6 +1154,15 @@ async fn main() {
         terrain: world::Terrain,
         tris: Vec<Vec<[Vec2; 3]>>, // per polygon: ear-clip fill triangles
         bboxes: Vec<(Vec2, Vec2)>, // per polygon: world-space (min, max)
+        // Per polygon -> edge -> ~2 m band step: is that stretch of the edge
+        // EXPOSED to open space? Overlapping polys are a first-class level
+        // idiom (the Hollows frame; the editor's carve splits a donut into
+        // pieces with coincident seam edges), and drawing the lit edge bands
+        // on a buried stretch paints a bright seam through solid rock.
+        // Sampled 6 cm outside each step's midpoint via point_in_rock; the
+        // per-step grain keeps partially-buried edges (a floor edge whose
+        // ends tuck under the frame slabs) lit where they are actually open.
+        exposed: Vec<Vec<Vec<bool>>>,
     }
     let mut terrain_cache: Option<TerrainMesh> = None;
 
@@ -1881,7 +1890,36 @@ async fn main() {
                         (lo, hi)
                     })
                     .collect();
-                terrain_cache = Some(TerrainMesh { terrain: terr.clone(), tris, bboxes });
+                // Edge-band visibility (see the struct doc): mirror the band
+                // loop's step count exactly so flags line up with cells.
+                let exposed: Vec<Vec<Vec<bool>>> = terr
+                    .polys
+                    .iter()
+                    .map(|poly| {
+                        let n = poly.len();
+                        (0..n)
+                            .map(|i| {
+                                let (a, b) = (poly[i], poly[(i + 1) % n]);
+                                let e = b - a;
+                                let len = e.length();
+                                if len < 1e-3 {
+                                    return Vec::new();
+                                }
+                                let dir = e / len;
+                                let out = vec2(dir.y, -dir.x); // away from rock (CCW)
+                                let steps = (len / 2.0).ceil().max(1.0) as usize;
+                                (0..steps)
+                                    .map(|k| {
+                                        let mid =
+                                            a + e * ((k as f32 + 0.5) / steps as f32);
+                                        !terr.point_in_rock(mid + out * 0.06)
+                                    })
+                                    .collect()
+                            })
+                            .collect()
+                    })
+                    .collect();
+                terrain_cache = Some(TerrainMesh { terrain: terr.clone(), tris, bboxes, exposed });
             }
             let mesh = terrain_cache.as_ref().unwrap();
             let (tri_polys, bboxes) = (&mesh.tris, &mesh.bboxes);
@@ -1954,6 +1992,11 @@ async fn main() {
                         base + dir * ja + nrm * (depth + jd)
                     };
                     for k in 0..steps {
+                        // Buried stretch (coincident carve seams, overlapped
+                        // frame edges): no lit band through solid rock.
+                        if !mesh.exposed[pi][i].get(k).copied().unwrap_or(true) {
+                            continue;
+                        }
                         for d in 0..BAND_DEPTHS.len() - 1 {
                             let s00 = { let q = bp(k,     d);     w2s(q.x, q.y, sh, cam_x, cam_y) };
                             let s10 = { let q = bp(k + 1, d);     w2s(q.x, q.y, sh, cam_x, cam_y) };

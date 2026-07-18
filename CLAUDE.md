@@ -548,7 +548,14 @@ main's `TerrainMesh` keyed on the RENDERED terrain — it follows `world_sim`,
 so replays of other levels swap the cache) plus two faceted edge bands
 extruded along the inward normal (CCW ⇒ edge dir rotated +90° points into
 rock; depth 0 sits EXACTLY on the polygon edge = the collider — same
-alignment rule as lattice row 0), lit by the same radial shader. The
+alignment rule as lattice row 0), lit by the same radial shader. **Edge
+bands skip BURIED stretches** (per ~2 m band step, sampled 6 cm outside the
+step midpoint via `point_in_rock`, precomputed in `TerrainMesh.exposed`):
+overlapping polys are a first-class idiom (the Hollows frame; the editor's
+carve splits donuts into pieces with coincident seam edges) and a lit band
+on a buried stretch paints a bright seam through solid rock — seen in the
+field on the first carved hole. The editor's outline pass applies the same
+rule (a SELECTED poly still shows its full outline for editing). The
 procedural wall/shaft lattice loop is skipped (`terrain.is_some()` break);
 obstacle/shaft/pad loops self-gate via their empty maps. Minimap: dark open
 space with the triangulated rock drawn on top; pad legs use a short fixed
