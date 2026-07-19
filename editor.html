@@ -177,6 +177,7 @@
       <button class="btn go" id="b-group" style="display:none">GROUP</button>
       <button class="btn" id="b-ungroup" style="display:none">UNGROUP</button>
       <button class="btn warn" id="b-lock" style="display:none">LOCK</button>
+      <button class="btn" id="b-flip" style="display:none">&#8594;&nbsp;CUT</button>
       <button class="btn" id="b-dupe" style="display:none">DUPE</button>
       <button class="btn danger" id="b-del" style="display:none">DELETE</button>
       <button class="btn go" id="b-close" style="display:none">CLOSE&nbsp;POLY</button>
@@ -615,6 +616,12 @@ function syncContextBtns() {
   show("b-dupe", !multiOn && !lockAllOn &&
        ((sel && (sel.kind === "poly" || sel.kind === "hole" || sel.kind === "pad"))
         || (isGroup && !locked)));
+  const flippable = !multiOn && !lockAllOn && sel &&
+    (sel.kind === "poly" || sel.kind === "hole");
+  show("b-flip", flippable);
+  if (flippable)
+    document.getElementById("b-flip").innerHTML =
+      sel.kind === "poly" ? "&#8594;&nbsp;CUT" : "&#8594;&nbsp;ROCK";
   show("b-group", multiOn && multiSel.length >= 2);
   show("b-ungroup", isGroup && !locked && !lockAllOn);
   show("b-lock", !multiOn && !lockAllOn && (isGroup || single));
@@ -1004,6 +1011,19 @@ function duplicateSelected() {
   commit();
 }
 document.getElementById("b-dupe").addEventListener("click", duplicateSelected);
+// Toggle the selected op between rock and cut. The op KEEPS its place in
+// the stack (newest-wins is untouched) — DUPE a rock wall, scale it down a
+// touch, flip it to a cut, and you've carved a narrow tunnel that follows
+// the wall's own contour.
+document.getElementById("b-flip").addEventListener("click", () => {
+  if (!sel || lockAllOn || !(sel.kind === "poly" || sel.kind === "hole")) return;
+  pushUndo();
+  const o = doc.ops[sel.idx];
+  o.t = o.t === "rock" ? "cut" : "rock";
+  sel = { kind: o.t === "cut" ? "hole" : "poly", idx: sel.idx, vert: null };
+  syncContextBtns();
+  commit();
+});
 document.getElementById("b-move").addEventListener("click", e => {
   moveOnly = !moveOnly;
   e.currentTarget.classList.toggle("on", moveOnly);
