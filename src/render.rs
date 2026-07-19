@@ -183,6 +183,158 @@ pub fn triangulate(poly: &[Vec2]) -> Vec<[Vec2; 3]> {
     tris
 }
 
+// Sutherland–Hodgman clip of a convex-or-triangle polygon against an
+// axis-aligned rect. The minimap uses this to clip terrain triangles to its
+// window IN WORLD SPACE — clamping the mapped vertices instead (the old
+// approach) dragged far-outside vertices onto the box edge and WARPED the
+// triangle's interior: invisible on axis-aligned frame slabs, but the
+// editor's carve pieces and islands are full of long sliver triangles with
+// distant vertices, which smeared rock across carved space (field report,
+// 2026-07). Returns 0..=7 vertices; fan-triangulate the result.
+pub fn clip_poly_rect(input: &[Vec2], lo: Vec2, hi: Vec2) -> Vec<Vec2> {
+    let mut poly: Vec<Vec2> = input.to_vec();
+    for side in 0..4 {
+        if poly.is_empty() {
+            break;
+        }
+        let inside = |p: Vec2| match side {
+            0 => p.x >= lo.x,
+            1 => p.x <= hi.x,
+            2 => p.y >= lo.y,
+            _ => p.y <= hi.y,
+        };
+        let mut out = Vec::with_capacity(poly.len() + 2);
+        for i in 0..poly.len() {
+            let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+            let (ia, ib) = (inside(a), inside(b));
+            if ia {
+                out.push(a);
+            }
+            if ia != ib {
+                let t = match side {
+                    0 => (lo.x - a.x) / (b.x - a.x),
+                    1 => (hi.x - a.x) / (b.x - a.x),
+                    2 => (lo.y - a.y) / (b.y - a.y),
+                    _ => (hi.y - a.y) / (b.y - a.y),
+                };
+                out.push(a + (b - a) * t);
+            }
+        }
+        poly = out;
+    }
+    poly
+}
+
+#[cfg(test)]
+mod clip_tests {
+    use super::*;
+
+    fn in_poly(p: Vec2, poly: &[Vec2]) -> bool {
+        let mut inside = false;
+        for i in 0..poly.len() {
+            let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+            if (a.y > p.y) != (b.y > p.y)
+                && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x {
+                inside = !inside;
+            }
+        }
+        inside
+    }
+    fn in_tri(p: Vec2, t: &[Vec2; 3]) -> bool {
+        let c = |a: Vec2, b: Vec2| (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+        let (d0, d1, d2) = (c(t[0], t[1]), c(t[1], t[2]), c(t[2], t[0]));
+        !((d0 < 0.0 || d1 < 0.0 || d2 < 0.0) && (d0 > 0.0 || d1 > 0.0 || d2 > 0.0))
+    }
+
+    // The editor's carve pipeline splits a cut slab into C-shaped pieces
+    // whose seam edges leave several collinear vertices on one line — real
+    // output that broke ear clipping in the field (minimap showed rock
+    // across the carved chamber). Coverage oracle: a grid point is inside
+    // some triangle IFF it is inside the polygon.
+    #[test]
+    fn triangulation_covers_carve_pieces_exactly() {
+        let pieces: Vec<Vec<Vec2>> = vec![
+            vec![vec2(-2.5, 37.87), vec2(-2.5, 80.0), vec2(-80.0, 80.0),
+                 vec2(-80.0, -70.0), vec2(-2.5, -70.0), vec2(-2.5, -27.92),
+                 vec2(-40.0, -30.0), vec2(-60.0, 5.0), vec2(-45.0, 40.0)],
+            vec![vec2(-2.5, -27.92), vec2(-2.5, -70.0), vec2(80.0, -70.0),
+                 vec2(80.0, 80.0), vec2(-2.5, 80.0), vec2(-2.5, 37.87),
+                 vec2(55.0, 35.0), vec2(50.0, -25.0)],
+            vec![vec2(1.0, 11.94), vec2(1.0, 19.8), vec2(-10.0, 22.0),
+                 vec2(-28.0, 8.0), vec2(-20.0, -5.0), vec2(1.0, -8.0),
+                 vec2(1.0, -1.22), vec2(-10.0, 0.0), vec2(-5.0, 13.0)],
+            vec![vec2(1.0, -1.22), vec2(1.0, -8.0), vec2(15.0, -10.0),
+                 vec2(25.0, 15.0), vec2(1.0, 19.8), vec2(1.0, 11.94),
+                 vec2(12.0, 10.0), vec2(8.0, -2.0)],
+        ];
+        for (pi, raw) in pieces.iter().enumerate() {
+            // Same normalization as Level::parse: winding forced CCW.
+            let mut poly = raw.clone();
+            let area: f32 = (0..poly.len())
+                .map(|i| {
+                    let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+                    a.x * b.y - b.x * a.y
+                })
+                .sum();
+            if area < 0.0 {
+                poly.reverse();
+            }
+            let tris = triangulate(&poly);
+            let mut bad = 0;
+            for gx in 0..60 {
+                for gy in 0..60 {
+                    let p = vec2(
+                        -82.0 + gx as f32 * (164.0 / 60.0) + 0.0137,
+                        -72.0 + gy as f32 * (154.0 / 60.0) + 0.0071,
+                    );
+                    let want = in_poly(p, &poly);
+                    let got = tris.iter().any(|t| in_tri(p, t));
+                    if want != got {
+                        bad += 1;
+                    }
+                }
+            }
+            assert_eq!(bad, 0, "piece {} mis-triangulated at {} grid points", pi, bad);
+        }
+    }
+
+    fn area(p: &[Vec2]) -> f32 {
+        let mut a = 0.0;
+        for i in 0..p.len() {
+            let (q, r) = (p[i], p[(i + 1) % p.len()]);
+            a += q.x * r.y - r.x * q.y;
+        }
+        (a / 2.0).abs()
+    }
+
+    #[test]
+    fn fully_inside_triangle_is_unchanged() {
+        let t = [vec2(1.0, 1.0), vec2(3.0, 1.0), vec2(2.0, 2.0)];
+        let c = clip_poly_rect(&t, vec2(0.0, 0.0), vec2(4.0, 4.0));
+        assert_eq!(c, t.to_vec());
+    }
+
+    #[test]
+    fn fully_outside_triangle_vanishes() {
+        let t = [vec2(10.0, 10.0), vec2(12.0, 10.0), vec2(11.0, 12.0)];
+        assert!(clip_poly_rect(&t, vec2(0.0, 0.0), vec2(4.0, 4.0)).len() < 3);
+    }
+
+    #[test]
+    fn far_vertex_is_clipped_not_warped() {
+        // A sliver triangle with one vertex far outside: the clipped area
+        // must equal the exact intersection area — the old vertex-clamp
+        // produced a different (warped) shape.
+        let t = [vec2(0.0, 0.0), vec2(4.0, 0.0), vec2(2.0, 100.0)];
+        let c = clip_poly_rect(&t, vec2(0.0, 0.0), vec2(4.0, 4.0));
+        assert!(c.len() >= 3);
+        // Exact intersection: trapezoid between y=0 and y=4 of the triangle.
+        // Width at y: lerp from 4 at y=0 toward 0 at y=100 => 4*(1-y/100).
+        let expect = (4.0 + 4.0 * (1.0 - 4.0 / 100.0)) / 2.0 * 4.0;
+        assert!((area(&c) - expect).abs() < 1e-3, "area {} vs {}", area(&c), expect);
+    }
+}
+
 // Facet lattice point for shaft walls (vertical analogue of lattice_point):
 // depth col 0 sits exactly on the wall polyline (collider-aligned); deeper
 // cols recede horizontally into the rock with deterministic jitter. Near the
