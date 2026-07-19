@@ -381,6 +381,50 @@ function pruneGroups() {
     if (!groupMembers(+k).length) delete doc.groups[k];
 }
 
+// ---------- scaling (#115) ----------
+// A scalable selection (single rock/cut op, or an unlocked group) exposes
+// ONE handle hung off its bounding box's bottom-right corner; dragging it
+// scales uniformly about the bbox centre. Returns the world-space centre +
+// handle corner, or null when the selection can't scale (locked, browse
+// mode, pads/start alone — a pad has nothing to scale, its deck width is
+// fixed by the game).
+const SCALE_HANDLE_OFF = 16; // px past the bbox corner
+function selScaleInfo() {
+  if (lockAllOn || !sel) return null;
+  let pts = null;
+  if (sel.kind === "poly" || sel.kind === "hole") {
+    const p = opPoly(sel.idx);
+    if (p && p.length) pts = p;
+  } else if (sel.kind === "group" && !groupLocked(sel.gid)) {
+    pts = [];
+    for (const m of groupMembers(sel.gid)) {
+      if (m.kind === "op") pts.push(...doc.ops[m.idx].p);
+      else { const p = m.kind === "pad" ? doc.pads[m.idx] : doc.start; if (p) pts.push(p); }
+    }
+  }
+  if (!pts || !pts.length) return null;
+  let lo = [Infinity, Infinity], hi = [-Infinity, -Infinity];
+  for (const p of pts) {
+    lo = [Math.min(lo[0], p[0]), Math.min(lo[1], p[1])];
+    hi = [Math.max(hi[0], p[0]), Math.max(hi[1], p[1])];
+  }
+  return { cx: (lo[0] + hi[0]) / 2, cy: (lo[1] + hi[1]) / 2, hx: hi[0], hy: lo[1] };
+}
+// Geometry snapshot for the scale gesture (same member set as drag-group).
+function scaleSnapshot() {
+  if (sel.kind === "group") {
+    const ms = groupMembers(sel.gid);
+    return {
+      ops: ms.filter(m => m.kind === "op")
+             .map(m => [m.idx, doc.ops[m.idx].p.map(q => [...q])]),
+      pads: ms.filter(m => m.kind === "pad")
+              .map(m => [m.idx, [...doc.pads[m.idx]]]),
+      start: ms.some(m => m.kind === "start") ? [...doc.start] : null,
+    };
+  }
+  return { ops: [[sel.idx, opPoly(sel.idx).map(q => [...q])]], pads: [], start: null };
+}
+
 let doc = starterDoc();
 try {
   const saved = JSON.parse(localStorage.getItem(DOC_KEY) || "null");
@@ -1070,6 +1114,18 @@ cv.addEventListener("pointerdown", e => {
                   multiHit: hitToMember(hit) };
       return;
     }
+    // The scale handle wins over everything else near the bbox corner.
+    const si = selScaleInfo();
+    if (si) {
+      const hsx = w2sx(si.hx) + SCALE_HANDLE_OFF, hsy = w2sy(si.hy) + SCALE_HANDLE_OFF;
+      if (distPx(sx, sy, hsx, hsy) < (e.pointerType === "touch" ? TOUCH_PX : HANDLE_PX)) {
+        pushUndo();
+        gesture = { type: "drag-scale", cx: si.cx, cy: si.cy, moved: false,
+                    d0: Math.max(12, distPx(sx, sy, w2sx(si.cx), w2sy(si.cy))),
+                    snap0: scaleSnapshot() };
+        return;
+      }
+    }
     const member = hitToMember(hit);
     const gid = member && elGroupOf(member);
     if (gid != null) {
@@ -1180,6 +1236,24 @@ cv.addEventListener("pointermove", e => {
   }
 
   switch (gesture.type) {
+    case "drag-scale": {
+      // Uniform scale about the bbox centre: factor = cursor distance from
+      // the centre vs where the grab started. Vertices land on the 1 cm
+      // export grid (0.5 m snap would visibly distort small shapes); pad /
+      // start POSITIONS scale, their deck width is fixed by the game.
+      const f = Math.max(0.05,
+        distPx(sx, sy, w2sx(gesture.cx), w2sy(gesture.cy)) / gesture.d0);
+      if (Math.abs(f - 1) > 0.002) gesture.moved = true;
+      const S = q => [round2(gesture.cx + (q[0] - gesture.cx) * f),
+                      round2(gesture.cy + (q[1] - gesture.cy) * f)];
+      const keepG2 = (q, p0) => { if (p0.length > 2) q[2] = p0[2]; return q; };
+      for (const [i, p0] of gesture.snap0.ops) doc.ops[i].p = p0.map(S);
+      for (const [i, p0] of gesture.snap0.pads) doc.pads[i] = keepG2(S(p0), p0);
+      if (gesture.snap0.start) doc.start = keepG2(S(gesture.snap0.start), gesture.snap0.start);
+      document.getElementById("hint").textContent = "scale × " + f.toFixed(2);
+      draw();
+      break;
+    }
     case "shape": {
       gesture.b = [s2wx(sx), s2wy(sy)];
       draw();
@@ -1354,6 +1428,12 @@ function endPointer(e) {
       syncContextBtns(); draw();
       return;
     }
+    commit();
+  } else if (wasGesture.type === "drag-scale") {
+    setHint(); // clear the live × factor readout
+    if (!wasGesture.moved) { undoStack.pop(); syncUndoBtns(); draw(); return; }
+    // Scaling about the bbox centre can move a grouped start pad off x = 0.
+    if (wasGesture.snap0.start) reoriginToStart();
     commit();
   } else if (wasGesture.undoPushed) {
     // Moving the start pad (alone or inside a group) re-anchors the level.
@@ -1598,6 +1678,29 @@ function draw() {
       ctx.font = "11px ui-monospace, monospace";
       ctx.fillText(lk ? "\u{1F512} LOCKED GROUP" : "GROUP", x0 + 2, y0 - 6);
     }
+  }
+
+  // Scale handle: one amber grip hung off the scalable selection's bbox
+  // corner (see selScaleInfo) — drag scales about the bbox centre.
+  const si = selScaleInfo();
+  if (si) {
+    const hx = w2sx(si.hx) + SCALE_HANDLE_OFF, hy = w2sy(si.hy) + SCALE_HANDLE_OFF;
+    ctx.fillStyle = "#ffb545";
+    ctx.beginPath();
+    ctx.arc(hx, hy, HANDLE_R + 2, 0, 7);
+    ctx.fill();
+    ctx.strokeStyle = "#06080d";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    // Diagonal double-arrow glyph.
+    ctx.beginPath();
+    const a = HANDLE_R - 1.5;
+    ctx.moveTo(hx - a, hy - a); ctx.lineTo(hx + a, hy + a);
+    ctx.moveTo(hx - a, hy - a); ctx.lineTo(hx - a + 3, hy - a);
+    ctx.moveTo(hx - a, hy - a); ctx.lineTo(hx - a, hy - a + 3);
+    ctx.moveTo(hx + a, hy + a); ctx.lineTo(hx + a - 3, hy + a);
+    ctx.moveTo(hx + a, hy + a); ctx.lineTo(hx + a, hy + a - 3);
+    ctx.stroke();
   }
 
   // In-progress polygon (amber = rock being drawn, red = a cut being carved),
