@@ -172,10 +172,12 @@
          canvas — on a phone the vertex you were reaching for jumped ~40 px
          away from your finger the moment something got selected. -->
     <div id="ctxbar">
+      <button class="btn shp" id="b-move" style="display:none" title="Move mode: drags always move whole elements — vertices can't be grabbed">MOVE</button>
       <button class="btn shp" id="b-multi" style="display:none" title="Select several elements to group them">MULTI</button>
       <button class="btn go" id="b-group" style="display:none">GROUP</button>
       <button class="btn" id="b-ungroup" style="display:none">UNGROUP</button>
       <button class="btn warn" id="b-lock" style="display:none">LOCK</button>
+      <button class="btn" id="b-dupe" style="display:none">DUPE</button>
       <button class="btn danger" id="b-del" style="display:none">DELETE</button>
       <button class="btn go" id="b-close" style="display:none">CLOSE&nbsp;POLY</button>
       <button class="btn" id="b-cancel" style="display:none">CANCEL</button>
@@ -527,6 +529,7 @@ let sel = null;                // {kind:'poly'|'hole'|'pad'|'start', idx, vert} 
 let multiOn = false;           // select tool: taps collect elements for grouping
 let multiSel = [];             // member refs ({kind:'op'|'pad'|'start', idx})
 let lockAllOn = false;         // browse mode: everything locked, drags pan
+let moveOnly = false;          // select tool: drags move whole elements, never vertices
 let drawing = null;            // in-progress polygon: [[x,y],...]
 let pendingKind = "draw";      // what `drawing` becomes: 'draw' = rock, 'carve' = a cut
 let shape = "free";            // draw/carve input: free | rect | circle
@@ -583,7 +586,9 @@ function setHint() {
   const hints = {
     select: multiOn
       ? "tap elements to add them to the group · GROUP when ready · Esc: done"
-      : "tap: select · drag: move · drag empty: pan · wheel/pinch: zoom",
+      : moveOnly
+        ? "move mode: drags move whole elements — vertices can't be grabbed"
+        : "tap: select · drag: move · drag empty: pan · wheel/pinch: zoom",
     draw: shape === "free"
       ? "tap: add vertex · drag: freehand · finish on the first vertex · two fingers: pan/zoom"
       : "draw rock — " + shapeHints[shape],
@@ -603,8 +608,13 @@ function syncContextBtns() {
   const locked = isGroup && groupLocked(sel.gid);
   const single = sel && (sel.kind === "poly" || sel.kind === "hole" ||
                          sel.kind === "pad" || sel.kind === "start");
+  show("b-move", tool === "select" && !lockAllOn);
+  document.getElementById("b-move").classList.toggle("on", moveOnly);
   show("b-multi", tool === "select" && !lockAllOn);
   document.getElementById("b-multi").classList.toggle("on", multiOn);
+  show("b-dupe", !multiOn && !lockAllOn &&
+       ((sel && (sel.kind === "poly" || sel.kind === "hole" || sel.kind === "pad"))
+        || (isGroup && !locked)));
   show("b-group", multiOn && multiSel.length >= 2);
   show("b-ungroup", isGroup && !locked && !lockAllOn);
   show("b-lock", !multiOn && !lockAllOn && (isGroup || single));
@@ -951,6 +961,55 @@ document.getElementById("b-lock").addEventListener("click", () => {
   syncContextBtns(); commit();
 });
 
+// Duplicate the selection: a copy offset 2 m right/down, selected and ready
+// to drag into place. Single rock/cut ops, pads, or a whole unlocked group
+// (its copy lands in a NEW group); the start platform is unique. A
+// duplicated cut joins the TOP of the op stack, so it cuts wherever it
+// lands — same rule as a fresh carve.
+function duplicateSelected() {
+  if (!sel || lockAllOn) return;
+  const OFF = 2;
+  const shift = q => [round2(q[0] + OFF), round2(q[1] - OFF)];
+  pushUndo();
+  if (sel.kind === "group") {
+    if (groupLocked(sel.gid)) { undoStack.pop(); syncUndoBtns(); return; }
+    const gid = nextGid();
+    doc.groups[gid] = {};
+    for (const m of groupMembers(sel.gid)) {
+      if (m.kind === "op") {
+        const o = doc.ops[m.idx];
+        doc.ops.push({ t: o.t, p: o.p.map(shift), g: gid });
+      } else if (m.kind === "pad" && doc.pads.length < MAX_PADS) {
+        doc.pads.push([...shift(doc.pads[m.idx]), gid]);
+      } // start: unique, skipped
+    }
+    sel = { kind: "group", gid };
+  } else if (sel.kind === "poly" || sel.kind === "hole") {
+    const o = doc.ops[sel.idx];
+    doc.ops.push({ t: o.t, p: o.p.map(shift) });
+    sel = { kind: sel.kind, idx: doc.ops.length - 1, vert: null };
+  } else if (sel.kind === "pad") {
+    if (doc.pads.length >= MAX_PADS) {
+      undoStack.pop(); syncUndoBtns();
+      toast("Pad limit reached (" + MAX_PADS + ")");
+      return;
+    }
+    doc.pads.push(shift(doc.pads[sel.idx]));
+    sel = { kind: "pad", idx: doc.pads.length - 1 };
+  } else { // start
+    undoStack.pop(); syncUndoBtns();
+    return;
+  }
+  syncContextBtns();
+  commit();
+}
+document.getElementById("b-dupe").addEventListener("click", duplicateSelected);
+document.getElementById("b-move").addEventListener("click", e => {
+  moveOnly = !moveOnly;
+  e.currentTarget.classList.toggle("on", moveOnly);
+  setHint(); syncContextBtns(); draw();
+});
+
 document.getElementById("b-del").addEventListener("click", deleteSelected);
 document.getElementById("b-close").addEventListener("click", finishPending);
 document.getElementById("b-cancel").addEventListener("click", () => { cancelDraw(); draw(); });
@@ -1041,7 +1100,9 @@ function opPoly(i) { const o = doc.ops[i]; return o && o.p; }
 // vertices first, then midpoints (a circle's vertices sit ~1.2 m apart, so
 // first-match order would routinely grab the wrong one on a phone).
 function hitTest(sx, sy, r = HANDLE_PX) {
-  if (sel && (sel.kind === "poly" || sel.kind === "hole")) {
+  // MOVE mode: vertex/midpoint handles can't be grabbed — a drag anywhere
+  // on a body moves the whole element (the grips stay, they sit off-bbox).
+  if (!moveOnly && sel && (sel.kind === "poly" || sel.kind === "hole")) {
     const poly = opPoly(sel.idx);
     if (poly) {
       let best = null, bd = r;
@@ -1668,7 +1729,7 @@ function draw() {
       tracePoly(ctx, poly);
       ctx.stroke();
     }
-    if (!lockAllOn) { // browse mode: outline only, no edit handles
+    if (!lockAllOn && !moveOnly) { // browse/move mode: outline, no handles
       for (let i = 0; i < poly.length; i++) {
         const a = poly[i], b = poly[(i + 1) % poly.length];
         const mx = w2sx((a[0] + b[0]) / 2), my = w2sy((a[1] + b[1]) / 2);
