@@ -89,10 +89,16 @@
     background: var(--panel);
     border-top: 1px solid var(--line);
     padding: 5px 10px calc(5px + env(safe-area-inset-bottom));
-    display: flex; gap: 14px; align-items: baseline;
+    display: flex; gap: 14px; align-items: flex-start;
     color: var(--dim); font-size: 12px;
     user-select: none; -webkit-user-select: none;
-    min-height: 2em;
+    /* FIXED height (2 lines), overflow clipped: a hint that wraps taller on
+       a phone used to grow this bar and SHRINK the canvas above it — with
+       the bitmap unresized, freehand strokes drew ~30 px away from the
+       finger (found from a field report on carve, whose hint is longest).
+       Like the toolbar, the layout must never reflow on a state change. */
+    height: calc(2.9em + env(safe-area-inset-bottom));
+    overflow: hidden;
   }
   #status .issues { color: var(--amber); cursor: pointer; }
   #status .issues.err { color: var(--red); }
@@ -381,13 +387,13 @@ function pruneGroups() {
     if (!groupMembers(+k).length) delete doc.groups[k];
 }
 
-// ---------- scaling (#115) ----------
-// A scalable selection (single rock/cut op, or an unlocked group) exposes
-// ONE handle hung off its bounding box's bottom-right corner; dragging it
-// scales uniformly about the bbox centre. Returns the world-space centre +
-// handle corner, or null when the selection can't scale (locked, browse
-// mode, pads/start alone — a pad has nothing to scale, its deck width is
-// fixed by the game).
+// ---------- scale & rotate (#115) ----------
+// A transformable selection (single rock/cut op, or an unlocked group)
+// exposes two grips hung off its bounding box: SCALE at the bottom-right
+// corner, ROTATE at the top-right. Both transform about the bbox centre.
+// Returns the world-space centre + the two grip corners, or null when the
+// selection can't transform (locked, browse mode, pads/start alone — a
+// pad has nothing to scale/rotate, its deck is fixed by the game).
 const SCALE_HANDLE_OFF = 16; // px past the bbox corner
 function selScaleInfo() {
   if (lockAllOn || !sel) return null;
@@ -408,7 +414,8 @@ function selScaleInfo() {
     lo = [Math.min(lo[0], p[0]), Math.min(lo[1], p[1])];
     hi = [Math.max(hi[0], p[0]), Math.max(hi[1], p[1])];
   }
-  return { cx: (lo[0] + hi[0]) / 2, cy: (lo[1] + hi[1]) / 2, hx: hi[0], hy: lo[1] };
+  return { cx: (lo[0] + hi[0]) / 2, cy: (lo[1] + hi[1]) / 2,
+           hx: hi[0], hy: lo[1], ty: hi[1] };
 }
 // Geometry snapshot for the scale gesture (same member set as drag-group).
 function scaleSnapshot() {
@@ -450,6 +457,16 @@ function resize() {
   draw();
 }
 window.addEventListener("resize", resize);
+// Safety net for canvas-size changes that fire no window resize (dynamic
+// browser chrome, safe-area shifts): keep the bitmap in lockstep with the
+// CSS box, or pointer positions and drawn pixels drift apart.
+if (window.ResizeObserver) {
+  new ResizeObserver(() => {
+    const r = cv.getBoundingClientRect();
+    if (Math.round(r.width * (window.devicePixelRatio || 1)) !== cv.width ||
+        Math.round(r.height * (window.devicePixelRatio || 1)) !== cv.height) resize();
+  }).observe(cv);
+}
 
 const w2sx = wx => (wx - view.x) * view.s + W / 2;
 const w2sy = wy => H / 2 - (wy - view.y) * view.s;
@@ -1114,14 +1131,23 @@ cv.addEventListener("pointerdown", e => {
                   multiHit: hitToMember(hit) };
       return;
     }
-    // The scale handle wins over everything else near the bbox corner.
+    // The transform grips win over everything else near the bbox corners.
     const si = selScaleInfo();
     if (si) {
+      const grabR = e.pointerType === "touch" ? TOUCH_PX : HANDLE_PX;
       const hsx = w2sx(si.hx) + SCALE_HANDLE_OFF, hsy = w2sy(si.hy) + SCALE_HANDLE_OFF;
-      if (distPx(sx, sy, hsx, hsy) < (e.pointerType === "touch" ? TOUCH_PX : HANDLE_PX)) {
+      if (distPx(sx, sy, hsx, hsy) < grabR) {
         pushUndo();
         gesture = { type: "drag-scale", cx: si.cx, cy: si.cy, moved: false,
                     d0: Math.max(12, distPx(sx, sy, w2sx(si.cx), w2sy(si.cy))),
+                    snap0: scaleSnapshot() };
+        return;
+      }
+      const rsx = w2sx(si.hx) + SCALE_HANDLE_OFF, rsy = w2sy(si.ty) - SCALE_HANDLE_OFF;
+      if (distPx(sx, sy, rsx, rsy) < grabR) {
+        pushUndo();
+        gesture = { type: "drag-rotate", cx: si.cx, cy: si.cy, moved: false,
+                    a0: Math.atan2(s2wy(sy) - si.cy, s2wx(sx) - si.cx),
                     snap0: scaleSnapshot() };
         return;
       }
@@ -1251,6 +1277,29 @@ cv.addEventListener("pointermove", e => {
       for (const [i, p0] of gesture.snap0.pads) doc.pads[i] = keepG2(S(p0), p0);
       if (gesture.snap0.start) doc.start = keepG2(S(gesture.snap0.start), gesture.snap0.start);
       document.getElementById("hint").textContent = "scale × " + f.toFixed(2);
+      draw();
+      break;
+    }
+    case "drag-rotate": {
+      // Rotate about the bbox centre by the angle the cursor has swept
+      // around it since the grab. Grid snap ON snaps the angle to 15°
+      // steps (vertex-level snapping would distort the shape); vertices
+      // land on the 1 cm export grid like scaling.
+      let th = Math.atan2(s2wy(sy) - gesture.cy, s2wx(sx) - gesture.cx) - gesture.a0;
+      if (snapOn) th = Math.round(th / (Math.PI / 12)) * (Math.PI / 12);
+      if (Math.abs(th) > 0.005) gesture.moved = true;
+      const co = Math.cos(th), si2 = Math.sin(th);
+      const R = q => {
+        const dx = q[0] - gesture.cx, dy = q[1] - gesture.cy;
+        return [round2(gesture.cx + dx * co - dy * si2),
+                round2(gesture.cy + dx * si2 + dy * co)];
+      };
+      const keepG3 = (q, p0) => { if (p0.length > 2) q[2] = p0[2]; return q; };
+      for (const [i, p0] of gesture.snap0.ops) doc.ops[i].p = p0.map(R);
+      for (const [i, p0] of gesture.snap0.pads) doc.pads[i] = keepG3(R(p0), p0);
+      if (gesture.snap0.start) doc.start = keepG3(R(gesture.snap0.start), gesture.snap0.start);
+      document.getElementById("hint").textContent =
+        "rotate " + Math.round(th * 180 / Math.PI) + "°";
       draw();
       break;
     }
@@ -1429,10 +1478,10 @@ function endPointer(e) {
       return;
     }
     commit();
-  } else if (wasGesture.type === "drag-scale") {
-    setHint(); // clear the live × factor readout
+  } else if (wasGesture.type === "drag-scale" || wasGesture.type === "drag-rotate") {
+    setHint(); // clear the live factor/angle readout
     if (!wasGesture.moved) { undoStack.pop(); syncUndoBtns(); draw(); return; }
-    // Scaling about the bbox centre can move a grouped start pad off x = 0.
+    // Transforming about the bbox centre can move a grouped start pad off x = 0.
     if (wasGesture.snap0.start) reoriginToStart();
     commit();
   } else if (wasGesture.undoPushed) {
@@ -1680,26 +1729,40 @@ function draw() {
     }
   }
 
-  // Scale handle: one amber grip hung off the scalable selection's bbox
-  // corner (see selScaleInfo) — drag scales about the bbox centre.
+  // Transform grips (see selScaleInfo): SCALE at the bbox's bottom-right
+  // corner, ROTATE at the top-right — both about the bbox centre.
   const si = selScaleInfo();
   if (si) {
-    const hx = w2sx(si.hx) + SCALE_HANDLE_OFF, hy = w2sy(si.hy) + SCALE_HANDLE_OFF;
-    ctx.fillStyle = "#ffb545";
-    ctx.beginPath();
-    ctx.arc(hx, hy, HANDLE_R + 2, 0, 7);
-    ctx.fill();
-    ctx.strokeStyle = "#06080d";
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-    // Diagonal double-arrow glyph.
-    ctx.beginPath();
+    const grip = (gx, gy) => {
+      ctx.fillStyle = "#ffb545";
+      ctx.beginPath();
+      ctx.arc(gx, gy, HANDLE_R + 2, 0, 7);
+      ctx.fill();
+      ctx.strokeStyle = "#06080d";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    };
     const a = HANDLE_R - 1.5;
+    // Scale: diagonal double-arrow.
+    const hx = w2sx(si.hx) + SCALE_HANDLE_OFF, hy = w2sy(si.hy) + SCALE_HANDLE_OFF;
+    grip(hx, hy);
+    ctx.beginPath();
     ctx.moveTo(hx - a, hy - a); ctx.lineTo(hx + a, hy + a);
     ctx.moveTo(hx - a, hy - a); ctx.lineTo(hx - a + 3, hy - a);
     ctx.moveTo(hx - a, hy - a); ctx.lineTo(hx - a, hy - a + 3);
     ctx.moveTo(hx + a, hy + a); ctx.lineTo(hx + a - 3, hy + a);
     ctx.moveTo(hx + a, hy + a); ctx.lineTo(hx + a, hy + a - 3);
+    ctx.stroke();
+    // Rotate: open arc with an arrowhead.
+    const rx = w2sx(si.hx) + SCALE_HANDLE_OFF, ry = w2sy(si.ty) - SCALE_HANDLE_OFF;
+    grip(rx, ry);
+    ctx.beginPath();
+    ctx.arc(rx, ry, a, -0.4 * Math.PI, 0.9 * Math.PI);
+    ctx.stroke();
+    ctx.beginPath();
+    const tx = rx + a * Math.cos(-0.4 * Math.PI), tyy = ry + a * Math.sin(-0.4 * Math.PI);
+    ctx.moveTo(tx, tyy); ctx.lineTo(tx - 3, tyy - 1);
+    ctx.moveTo(tx, tyy); ctx.lineTo(tx + 1, tyy - 3.5);
     ctx.stroke();
   }
 
