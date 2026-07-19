@@ -637,7 +637,13 @@ an unlocked group uniformly about the bbox centre with a live ×/° readout;
 vertices land on the 1 cm export grid, NOT the 0.5 m edit snap; grid snap
 ON snaps the angle to 15° steps; pad/start POSITIONS transform — deck
 width is game-fixed — and a group containing the start pad re-origins on
-release), **play-feel aids**: the spawn marker is the REAL vector ship at
+release), **DUPE** (copies the selected op/pad — or a whole unlocked group
+into a NEW group — offset 2 m and auto-selected; a duplicated cut joins
+the stack top like a fresh carve; the start platform is unique and never
+copied), a **MOVE toggle** in select mode (drags always move whole
+elements — vertex/midpoint handles can't be grabbed, the cure for
+fat-finger vertex grabs while arranging; the off-bbox scale/rotate grips
+stay live), **play-feel aids**: the spawn marker is the REAL vector ship at
 true scale (issue #114 — `SHIP_GLYPH`, the hero-SVG polys remapped to
 ~1.43 m with feet where `stand_y` parks them; a faint ring keeps it
 findable at far zoom instead of inflating it), a **1:1** button zooming to
