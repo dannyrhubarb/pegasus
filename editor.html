@@ -63,6 +63,8 @@
                  box-shadow: 0 0 8px rgba(70,240,255,0.25) inset; }
   .btn.shp.on { border-color: var(--amber); color: var(--amber);
                 box-shadow: 0 0 8px rgba(255,181,69,0.2) inset; }
+  .btn.on { border-color: var(--amber); color: var(--amber);
+            box-shadow: 0 0 8px rgba(255,181,69,0.2) inset; }
   .btn.warn { border-color: #5a3020; color: var(--amber); }
   .btn.go { border-color: #1d5a38; color: var(--green); }
   .btn.danger { border-color: #5a2020; color: var(--red); }
@@ -142,6 +144,8 @@
     <button class="btn" id="b-undo" title="Ctrl+Z">&#8630;</button>
     <button class="btn" id="b-redo" title="Ctrl+Shift+Z">&#8631;</button>
     <button class="btn" id="b-snap" title="Snap to 0.5 m grid">SNAP&nbsp;&#183;5m</button>
+    <button class="btn" id="b-gamezoom" title="Zoom to the in-game scale on this device">1:1</button>
+    <button class="btn" id="b-lockall" title="Lock everything — pan and inspect without disturbing the level">&#128274;&nbsp;ALL</button>
     <div class="grow"></div>
     <input id="name" maxlength="40" placeholder="Level name">
     <select id="scoring" title="Scoring mode">
@@ -461,6 +465,7 @@ let tool = "select";           // select | draw | carve | pad | start
 let sel = null;                // {kind:'poly'|'hole'|'pad'|'start', idx, vert} or {kind:'group', gid}
 let multiOn = false;           // select tool: taps collect elements for grouping
 let multiSel = [];             // member refs ({kind:'op'|'pad'|'start', idx})
+let lockAllOn = false;         // browse mode: everything locked, drags pan
 let drawing = null;            // in-progress polygon: [[x,y],...]
 let pendingKind = "draw";      // what `drawing` becomes: 'draw' = rock, 'carve' = a cut
 let shape = "free";            // draw/carve input: free | rect | circle
@@ -537,13 +542,13 @@ function syncContextBtns() {
   const locked = isGroup && groupLocked(sel.gid);
   const single = sel && (sel.kind === "poly" || sel.kind === "hole" ||
                          sel.kind === "pad" || sel.kind === "start");
-  show("b-multi", tool === "select");
+  show("b-multi", tool === "select" && !lockAllOn);
   document.getElementById("b-multi").classList.toggle("on", multiOn);
   show("b-group", multiOn && multiSel.length >= 2);
-  show("b-ungroup", isGroup && !locked);
-  show("b-lock", !multiOn && (isGroup || single));
+  show("b-ungroup", isGroup && !locked && !lockAllOn);
+  show("b-lock", !multiOn && !lockAllOn && (isGroup || single));
   document.getElementById("b-lock").textContent = locked ? "UNLOCK" : "LOCK";
-  show("b-del", !multiOn && (single || (isGroup && !locked)));
+  show("b-del", !multiOn && !lockAllOn && (single || (isGroup && !locked)));
   const closeBtn = document.getElementById("b-close");
   show("b-close", drawing && drawing.length >= 3);
   closeBtn.textContent = pendingKind === "carve" ? "APPLY CUT" : "CLOSE POLY";
@@ -806,7 +811,7 @@ function reoriginToStart() {
 }
 
 function deleteSelected() {
-  if (!sel) return;
+  if (!sel || lockAllOn) return;
   if (sel.kind === "group") {
     if (groupLocked(sel.gid)) return; // unlock first
     pushUndo();
@@ -893,6 +898,27 @@ document.getElementById("b-redo").addEventListener("click", redo);
 document.getElementById("b-snap").addEventListener("click", e => {
   snapOn = !snapOn;
   e.currentTarget.style.opacity = snapOn ? "" : "0.45";
+});
+document.getElementById("b-gamezoom").addEventListener("click", () => {
+  // The zoom the GAME will use on this device, in CSS px per metre (the
+  // editor's drawing space) — mirrors main.rs view_scale: small screens
+  // (min CSS dimension < 600) fit MOBILE_VIEW_M = 19 m across the smaller
+  // dimension, capped at the desktop scale; desktop is SCALE = 80 physical
+  // px/m, which is a dpr-independent 80 CSS px/m. Uses the WINDOW size —
+  // the game canvas is the full viewport, not the editor's canvas area.
+  const minCss = Math.min(window.innerWidth, window.innerHeight);
+  view.s = minCss < 600 ? Math.min(minCss / 19, 80) : 80;
+  draw();
+});
+document.getElementById("b-lockall").addEventListener("click", e => {
+  // Browse mode: every element behaves locked — taps still select (for a
+  // look at what things are), but drags pan, and nothing can be moved,
+  // vertex-edited or deleted. For flying-eye tours of a finished level.
+  lockAllOn = !lockAllOn;
+  e.currentTarget.classList.toggle("on", lockAllOn);
+  syncContextBtns();
+  toast(lockAllOn ? "Everything locked — drag anywhere to pan" : "Editing re-enabled");
+  draw();
 });
 
 // ---------- hit testing ----------
@@ -1023,6 +1049,20 @@ cv.addEventListener("pointerdown", e => {
 
   if (tool === "select") {
     const hit = hitTest(sx, sy, e.pointerType === "touch" ? TOUCH_PX : HANDLE_PX);
+    if (lockAllOn) {
+      // Browse mode: taps select (element, or its group) for inspection;
+      // any drag is a pan. No handle grabs, no moves.
+      const m = hitToMember(hit);
+      if (m) {
+        const gid = elGroupOf(m);
+        sel = gid != null ? { kind: "group", gid }
+                          : { kind: hit.kind, idx: hit.idx, vert: null };
+      }
+      gesture = { type: "maybe-tap", sx, sy, view0: { ...view }, deselect: !hit };
+      syncContextBtns();
+      draw();
+      return;
+    }
     if (multiOn) {
       // Collecting members for a group: taps toggle on pointer-UP, a drag
       // pans — no selection or dragging of elements in this mode.
@@ -1499,19 +1539,21 @@ function draw() {
       tracePoly(ctx, poly);
       ctx.stroke();
     }
-    for (let i = 0; i < poly.length; i++) {
-      const a = poly[i], b = poly[(i + 1) % poly.length];
-      const mx = w2sx((a[0] + b[0]) / 2), my = w2sy((a[1] + b[1]) / 2);
-      ctx.fillStyle = "rgba(70,240,255,0.35)";
-      ctx.beginPath(); ctx.arc(mx, my, HANDLE_R - 1, 0, 7); ctx.fill();
+    if (!lockAllOn) { // browse mode: outline only, no edit handles
+      for (let i = 0; i < poly.length; i++) {
+        const a = poly[i], b = poly[(i + 1) % poly.length];
+        const mx = w2sx((a[0] + b[0]) / 2), my = w2sy((a[1] + b[1]) / 2);
+        ctx.fillStyle = "rgba(70,240,255,0.35)";
+        ctx.beginPath(); ctx.arc(mx, my, HANDLE_R - 1, 0, 7); ctx.fill();
+      }
+      poly.forEach((p, i) => {
+        const x = w2sx(p[0]), y = w2sy(p[1]);
+        ctx.fillStyle = sel.vert === i ? "#ffb545" : "#46f0ff";
+        ctx.fillRect(x - HANDLE_R, y - HANDLE_R, HANDLE_R * 2, HANDLE_R * 2);
+        ctx.strokeStyle = "#06080d"; ctx.lineWidth = 1.5;
+        ctx.strokeRect(x - HANDLE_R, y - HANDLE_R, HANDLE_R * 2, HANDLE_R * 2);
+      });
     }
-    poly.forEach((p, i) => {
-      const x = w2sx(p[0]), y = w2sy(p[1]);
-      ctx.fillStyle = sel.vert === i ? "#ffb545" : "#46f0ff";
-      ctx.fillRect(x - HANDLE_R, y - HANDLE_R, HANDLE_R * 2, HANDLE_R * 2);
-      ctx.strokeStyle = "#06080d"; ctx.lineWidth = 1.5;
-      ctx.strokeRect(x - HANDLE_R, y - HANDLE_R, HANDLE_R * 2, HANDLE_R * 2);
-    });
   }
 
   // Multi-select collection + group selection: dashed outlines per member,
@@ -1551,9 +1593,10 @@ function draw() {
       ctx.setLineDash([3, 5]);
       ctx.strokeRect(x0, y0, bw, bh);
       ctx.setLineDash([]);
-      ctx.fillStyle = groupLocked(sel.gid) ? "#ffb545" : "rgba(70,240,255,0.8)";
+      const lk = groupLocked(sel.gid) || lockAllOn;
+      ctx.fillStyle = lk ? "#ffb545" : "rgba(70,240,255,0.8)";
       ctx.font = "11px ui-monospace, monospace";
-      ctx.fillText(groupLocked(sel.gid) ? "\u{1F512} LOCKED GROUP" : "GROUP", x0 + 2, y0 - 6);
+      ctx.fillText(lk ? "\u{1F512} LOCKED GROUP" : "GROUP", x0 + 2, y0 - 6);
     }
   }
 
