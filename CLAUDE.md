@@ -640,7 +640,10 @@ width is game-fixed — and a group containing the start pad re-origins on
 release), **DUPE** (copies the selected op/pad — or a whole unlocked group
 into a NEW group — offset 2 m and auto-selected; a duplicated cut joins
 the stack top like a fresh carve; the start platform is unique and never
-copied), a **MOVE toggle** in select mode (drags always move whole
+copied), a **rock↔cut FLIP** on the selected op (→ CUT / → ROCK — the op
+keeps its stack position; DUPE + scale-down + flip carves a narrow tunnel
+following any wall's own contour, the owner's tunnel recipe),
+a **MOVE toggle** in select mode (drags always move whole
 elements — vertex/midpoint handles can't be grabbed, the cure for
 fat-finger vertex grabs while arranging; the off-bbox scale/rotate grips
 stay live), **play-feel aids**: the spawn marker is the REAL vector ship at
