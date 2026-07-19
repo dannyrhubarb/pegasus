@@ -89,10 +89,16 @@
     background: var(--panel);
     border-top: 1px solid var(--line);
     padding: 5px 10px calc(5px + env(safe-area-inset-bottom));
-    display: flex; gap: 14px; align-items: baseline;
+    display: flex; gap: 14px; align-items: flex-start;
     color: var(--dim); font-size: 12px;
     user-select: none; -webkit-user-select: none;
-    min-height: 2em;
+    /* FIXED height (2 lines), overflow clipped: a hint that wraps taller on
+       a phone used to grow this bar and SHRINK the canvas above it — with
+       the bitmap unresized, freehand strokes drew ~30 px away from the
+       finger (found from a field report on carve, whose hint is longest).
+       Like the toolbar, the layout must never reflow on a state change. */
+    height: calc(2.9em + env(safe-area-inset-bottom));
+    overflow: hidden;
   }
   #status .issues { color: var(--amber); cursor: pointer; }
   #status .issues.err { color: var(--red); }
@@ -166,10 +172,13 @@
          canvas — on a phone the vertex you were reaching for jumped ~40 px
          away from your finger the moment something got selected. -->
     <div id="ctxbar">
+      <button class="btn shp" id="b-move" style="display:none" title="Move mode: drags always move whole elements — vertices can't be grabbed">MOVE</button>
       <button class="btn shp" id="b-multi" style="display:none" title="Select several elements to group them">MULTI</button>
       <button class="btn go" id="b-group" style="display:none">GROUP</button>
       <button class="btn" id="b-ungroup" style="display:none">UNGROUP</button>
       <button class="btn warn" id="b-lock" style="display:none">LOCK</button>
+      <button class="btn" id="b-flip" style="display:none">&#8594;&nbsp;CUT</button>
+      <button class="btn" id="b-dupe" style="display:none">DUPE</button>
       <button class="btn danger" id="b-del" style="display:none">DELETE</button>
       <button class="btn go" id="b-close" style="display:none">CLOSE&nbsp;POLY</button>
       <button class="btn" id="b-cancel" style="display:none">CANCEL</button>
@@ -381,6 +390,51 @@ function pruneGroups() {
     if (!groupMembers(+k).length) delete doc.groups[k];
 }
 
+// ---------- scale & rotate (#115) ----------
+// A transformable selection (single rock/cut op, or an unlocked group)
+// exposes two grips hung off its bounding box: SCALE at the bottom-right
+// corner, ROTATE at the top-right. Both transform about the bbox centre.
+// Returns the world-space centre + the two grip corners, or null when the
+// selection can't transform (locked, browse mode, pads/start alone — a
+// pad has nothing to scale/rotate, its deck is fixed by the game).
+const SCALE_HANDLE_OFF = 16; // px past the bbox corner
+function selScaleInfo() {
+  if (lockAllOn || !sel) return null;
+  let pts = null;
+  if (sel.kind === "poly" || sel.kind === "hole") {
+    const p = opPoly(sel.idx);
+    if (p && p.length) pts = p;
+  } else if (sel.kind === "group" && !groupLocked(sel.gid)) {
+    pts = [];
+    for (const m of groupMembers(sel.gid)) {
+      if (m.kind === "op") pts.push(...doc.ops[m.idx].p);
+      else { const p = m.kind === "pad" ? doc.pads[m.idx] : doc.start; if (p) pts.push(p); }
+    }
+  }
+  if (!pts || !pts.length) return null;
+  let lo = [Infinity, Infinity], hi = [-Infinity, -Infinity];
+  for (const p of pts) {
+    lo = [Math.min(lo[0], p[0]), Math.min(lo[1], p[1])];
+    hi = [Math.max(hi[0], p[0]), Math.max(hi[1], p[1])];
+  }
+  return { cx: (lo[0] + hi[0]) / 2, cy: (lo[1] + hi[1]) / 2,
+           hx: hi[0], hy: lo[1], ty: hi[1] };
+}
+// Geometry snapshot for the scale gesture (same member set as drag-group).
+function scaleSnapshot() {
+  if (sel.kind === "group") {
+    const ms = groupMembers(sel.gid);
+    return {
+      ops: ms.filter(m => m.kind === "op")
+             .map(m => [m.idx, doc.ops[m.idx].p.map(q => [...q])]),
+      pads: ms.filter(m => m.kind === "pad")
+              .map(m => [m.idx, [...doc.pads[m.idx]]]),
+      start: ms.some(m => m.kind === "start") ? [...doc.start] : null,
+    };
+  }
+  return { ops: [[sel.idx, opPoly(sel.idx).map(q => [...q])]], pads: [], start: null };
+}
+
 let doc = starterDoc();
 try {
   const saved = JSON.parse(localStorage.getItem(DOC_KEY) || "null");
@@ -406,6 +460,16 @@ function resize() {
   draw();
 }
 window.addEventListener("resize", resize);
+// Safety net for canvas-size changes that fire no window resize (dynamic
+// browser chrome, safe-area shifts): keep the bitmap in lockstep with the
+// CSS box, or pointer positions and drawn pixels drift apart.
+if (window.ResizeObserver) {
+  new ResizeObserver(() => {
+    const r = cv.getBoundingClientRect();
+    if (Math.round(r.width * (window.devicePixelRatio || 1)) !== cv.width ||
+        Math.round(r.height * (window.devicePixelRatio || 1)) !== cv.height) resize();
+  }).observe(cv);
+}
 
 const w2sx = wx => (wx - view.x) * view.s + W / 2;
 const w2sy = wy => H / 2 - (wy - view.y) * view.s;
@@ -466,6 +530,7 @@ let sel = null;                // {kind:'poly'|'hole'|'pad'|'start', idx, vert} 
 let multiOn = false;           // select tool: taps collect elements for grouping
 let multiSel = [];             // member refs ({kind:'op'|'pad'|'start', idx})
 let lockAllOn = false;         // browse mode: everything locked, drags pan
+let moveOnly = false;          // select tool: drags move whole elements, never vertices
 let drawing = null;            // in-progress polygon: [[x,y],...]
 let pendingKind = "draw";      // what `drawing` becomes: 'draw' = rock, 'carve' = a cut
 let shape = "free";            // draw/carve input: free | rect | circle
@@ -522,7 +587,9 @@ function setHint() {
   const hints = {
     select: multiOn
       ? "tap elements to add them to the group · GROUP when ready · Esc: done"
-      : "tap: select · drag: move · drag empty: pan · wheel/pinch: zoom",
+      : moveOnly
+        ? "move mode: drags move whole elements — vertices can't be grabbed"
+        : "tap: select · drag: move · drag empty: pan · wheel/pinch: zoom",
     draw: shape === "free"
       ? "tap: add vertex · drag: freehand · finish on the first vertex · two fingers: pan/zoom"
       : "draw rock — " + shapeHints[shape],
@@ -542,8 +609,19 @@ function syncContextBtns() {
   const locked = isGroup && groupLocked(sel.gid);
   const single = sel && (sel.kind === "poly" || sel.kind === "hole" ||
                          sel.kind === "pad" || sel.kind === "start");
+  show("b-move", tool === "select" && !lockAllOn);
+  document.getElementById("b-move").classList.toggle("on", moveOnly);
   show("b-multi", tool === "select" && !lockAllOn);
   document.getElementById("b-multi").classList.toggle("on", multiOn);
+  show("b-dupe", !multiOn && !lockAllOn &&
+       ((sel && (sel.kind === "poly" || sel.kind === "hole" || sel.kind === "pad"))
+        || (isGroup && !locked)));
+  const flippable = !multiOn && !lockAllOn && sel &&
+    (sel.kind === "poly" || sel.kind === "hole");
+  show("b-flip", flippable);
+  if (flippable)
+    document.getElementById("b-flip").innerHTML =
+      sel.kind === "poly" ? "&#8594;&nbsp;CUT" : "&#8594;&nbsp;ROCK";
   show("b-group", multiOn && multiSel.length >= 2);
   show("b-ungroup", isGroup && !locked && !lockAllOn);
   show("b-lock", !multiOn && !lockAllOn && (isGroup || single));
@@ -890,6 +968,68 @@ document.getElementById("b-lock").addEventListener("click", () => {
   syncContextBtns(); commit();
 });
 
+// Duplicate the selection: a copy offset 2 m right/down, selected and ready
+// to drag into place. Single rock/cut ops, pads, or a whole unlocked group
+// (its copy lands in a NEW group); the start platform is unique. A
+// duplicated cut joins the TOP of the op stack, so it cuts wherever it
+// lands — same rule as a fresh carve.
+function duplicateSelected() {
+  if (!sel || lockAllOn) return;
+  const OFF = 2;
+  const shift = q => [round2(q[0] + OFF), round2(q[1] - OFF)];
+  pushUndo();
+  if (sel.kind === "group") {
+    if (groupLocked(sel.gid)) { undoStack.pop(); syncUndoBtns(); return; }
+    const gid = nextGid();
+    doc.groups[gid] = {};
+    for (const m of groupMembers(sel.gid)) {
+      if (m.kind === "op") {
+        const o = doc.ops[m.idx];
+        doc.ops.push({ t: o.t, p: o.p.map(shift), g: gid });
+      } else if (m.kind === "pad" && doc.pads.length < MAX_PADS) {
+        doc.pads.push([...shift(doc.pads[m.idx]), gid]);
+      } // start: unique, skipped
+    }
+    sel = { kind: "group", gid };
+  } else if (sel.kind === "poly" || sel.kind === "hole") {
+    const o = doc.ops[sel.idx];
+    doc.ops.push({ t: o.t, p: o.p.map(shift) });
+    sel = { kind: sel.kind, idx: doc.ops.length - 1, vert: null };
+  } else if (sel.kind === "pad") {
+    if (doc.pads.length >= MAX_PADS) {
+      undoStack.pop(); syncUndoBtns();
+      toast("Pad limit reached (" + MAX_PADS + ")");
+      return;
+    }
+    doc.pads.push(shift(doc.pads[sel.idx]));
+    sel = { kind: "pad", idx: doc.pads.length - 1 };
+  } else { // start
+    undoStack.pop(); syncUndoBtns();
+    return;
+  }
+  syncContextBtns();
+  commit();
+}
+document.getElementById("b-dupe").addEventListener("click", duplicateSelected);
+// Toggle the selected op between rock and cut. The op KEEPS its place in
+// the stack (newest-wins is untouched) — DUPE a rock wall, scale it down a
+// touch, flip it to a cut, and you've carved a narrow tunnel that follows
+// the wall's own contour.
+document.getElementById("b-flip").addEventListener("click", () => {
+  if (!sel || lockAllOn || !(sel.kind === "poly" || sel.kind === "hole")) return;
+  pushUndo();
+  const o = doc.ops[sel.idx];
+  o.t = o.t === "rock" ? "cut" : "rock";
+  sel = { kind: o.t === "cut" ? "hole" : "poly", idx: sel.idx, vert: null };
+  syncContextBtns();
+  commit();
+});
+document.getElementById("b-move").addEventListener("click", e => {
+  moveOnly = !moveOnly;
+  e.currentTarget.classList.toggle("on", moveOnly);
+  setHint(); syncContextBtns(); draw();
+});
+
 document.getElementById("b-del").addEventListener("click", deleteSelected);
 document.getElementById("b-close").addEventListener("click", finishPending);
 document.getElementById("b-cancel").addEventListener("click", () => { cancelDraw(); draw(); });
@@ -980,7 +1120,9 @@ function opPoly(i) { const o = doc.ops[i]; return o && o.p; }
 // vertices first, then midpoints (a circle's vertices sit ~1.2 m apart, so
 // first-match order would routinely grab the wrong one on a phone).
 function hitTest(sx, sy, r = HANDLE_PX) {
-  if (sel && (sel.kind === "poly" || sel.kind === "hole")) {
+  // MOVE mode: vertex/midpoint handles can't be grabbed — a drag anywhere
+  // on a body moves the whole element (the grips stay, they sit off-bbox).
+  if (!moveOnly && sel && (sel.kind === "poly" || sel.kind === "hole")) {
     const poly = opPoly(sel.idx);
     if (poly) {
       let best = null, bd = r;
@@ -1069,6 +1211,27 @@ cv.addEventListener("pointerdown", e => {
       gesture = { type: "maybe-tap", sx, sy, view0: { ...view },
                   multiHit: hitToMember(hit) };
       return;
+    }
+    // The transform grips win over everything else near the bbox corners.
+    const si = selScaleInfo();
+    if (si) {
+      const grabR = e.pointerType === "touch" ? TOUCH_PX : HANDLE_PX;
+      const hsx = w2sx(si.hx) + SCALE_HANDLE_OFF, hsy = w2sy(si.hy) + SCALE_HANDLE_OFF;
+      if (distPx(sx, sy, hsx, hsy) < grabR) {
+        pushUndo();
+        gesture = { type: "drag-scale", cx: si.cx, cy: si.cy, moved: false,
+                    d0: Math.max(12, distPx(sx, sy, w2sx(si.cx), w2sy(si.cy))),
+                    snap0: scaleSnapshot() };
+        return;
+      }
+      const rsx = w2sx(si.hx) + SCALE_HANDLE_OFF, rsy = w2sy(si.ty) - SCALE_HANDLE_OFF;
+      if (distPx(sx, sy, rsx, rsy) < grabR) {
+        pushUndo();
+        gesture = { type: "drag-rotate", cx: si.cx, cy: si.cy, moved: false,
+                    a0: Math.atan2(s2wy(sy) - si.cy, s2wx(sx) - si.cx),
+                    snap0: scaleSnapshot() };
+        return;
+      }
     }
     const member = hitToMember(hit);
     const gid = member && elGroupOf(member);
@@ -1180,6 +1343,47 @@ cv.addEventListener("pointermove", e => {
   }
 
   switch (gesture.type) {
+    case "drag-scale": {
+      // Uniform scale about the bbox centre: factor = cursor distance from
+      // the centre vs where the grab started. Vertices land on the 1 cm
+      // export grid (0.5 m snap would visibly distort small shapes); pad /
+      // start POSITIONS scale, their deck width is fixed by the game.
+      const f = Math.max(0.05,
+        distPx(sx, sy, w2sx(gesture.cx), w2sy(gesture.cy)) / gesture.d0);
+      if (Math.abs(f - 1) > 0.002) gesture.moved = true;
+      const S = q => [round2(gesture.cx + (q[0] - gesture.cx) * f),
+                      round2(gesture.cy + (q[1] - gesture.cy) * f)];
+      const keepG2 = (q, p0) => { if (p0.length > 2) q[2] = p0[2]; return q; };
+      for (const [i, p0] of gesture.snap0.ops) doc.ops[i].p = p0.map(S);
+      for (const [i, p0] of gesture.snap0.pads) doc.pads[i] = keepG2(S(p0), p0);
+      if (gesture.snap0.start) doc.start = keepG2(S(gesture.snap0.start), gesture.snap0.start);
+      document.getElementById("hint").textContent = "scale × " + f.toFixed(2);
+      draw();
+      break;
+    }
+    case "drag-rotate": {
+      // Rotate about the bbox centre by the angle the cursor has swept
+      // around it since the grab. Grid snap ON snaps the angle to 15°
+      // steps (vertex-level snapping would distort the shape); vertices
+      // land on the 1 cm export grid like scaling.
+      let th = Math.atan2(s2wy(sy) - gesture.cy, s2wx(sx) - gesture.cx) - gesture.a0;
+      if (snapOn) th = Math.round(th / (Math.PI / 12)) * (Math.PI / 12);
+      if (Math.abs(th) > 0.005) gesture.moved = true;
+      const co = Math.cos(th), si2 = Math.sin(th);
+      const R = q => {
+        const dx = q[0] - gesture.cx, dy = q[1] - gesture.cy;
+        return [round2(gesture.cx + dx * co - dy * si2),
+                round2(gesture.cy + dx * si2 + dy * co)];
+      };
+      const keepG3 = (q, p0) => { if (p0.length > 2) q[2] = p0[2]; return q; };
+      for (const [i, p0] of gesture.snap0.ops) doc.ops[i].p = p0.map(R);
+      for (const [i, p0] of gesture.snap0.pads) doc.pads[i] = keepG3(R(p0), p0);
+      if (gesture.snap0.start) doc.start = keepG3(R(gesture.snap0.start), gesture.snap0.start);
+      document.getElementById("hint").textContent =
+        "rotate " + Math.round(th * 180 / Math.PI) + "°";
+      draw();
+      break;
+    }
     case "shape": {
       gesture.b = [s2wx(sx), s2wy(sy)];
       draw();
@@ -1354,6 +1558,12 @@ function endPointer(e) {
       syncContextBtns(); draw();
       return;
     }
+    commit();
+  } else if (wasGesture.type === "drag-scale" || wasGesture.type === "drag-rotate") {
+    setHint(); // clear the live factor/angle readout
+    if (!wasGesture.moved) { undoStack.pop(); syncUndoBtns(); draw(); return; }
+    // Transforming about the bbox centre can move a grouped start pad off x = 0.
+    if (wasGesture.snap0.start) reoriginToStart();
     commit();
   } else if (wasGesture.undoPushed) {
     // Moving the start pad (alone or inside a group) re-anchors the level.
@@ -1539,7 +1749,7 @@ function draw() {
       tracePoly(ctx, poly);
       ctx.stroke();
     }
-    if (!lockAllOn) { // browse mode: outline only, no edit handles
+    if (!lockAllOn && !moveOnly) { // browse/move mode: outline, no handles
       for (let i = 0; i < poly.length; i++) {
         const a = poly[i], b = poly[(i + 1) % poly.length];
         const mx = w2sx((a[0] + b[0]) / 2), my = w2sy((a[1] + b[1]) / 2);
@@ -1598,6 +1808,43 @@ function draw() {
       ctx.font = "11px ui-monospace, monospace";
       ctx.fillText(lk ? "\u{1F512} LOCKED GROUP" : "GROUP", x0 + 2, y0 - 6);
     }
+  }
+
+  // Transform grips (see selScaleInfo): SCALE at the bbox's bottom-right
+  // corner, ROTATE at the top-right — both about the bbox centre.
+  const si = selScaleInfo();
+  if (si) {
+    const grip = (gx, gy) => {
+      ctx.fillStyle = "#ffb545";
+      ctx.beginPath();
+      ctx.arc(gx, gy, HANDLE_R + 2, 0, 7);
+      ctx.fill();
+      ctx.strokeStyle = "#06080d";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    };
+    const a = HANDLE_R - 1.5;
+    // Scale: diagonal double-arrow.
+    const hx = w2sx(si.hx) + SCALE_HANDLE_OFF, hy = w2sy(si.hy) + SCALE_HANDLE_OFF;
+    grip(hx, hy);
+    ctx.beginPath();
+    ctx.moveTo(hx - a, hy - a); ctx.lineTo(hx + a, hy + a);
+    ctx.moveTo(hx - a, hy - a); ctx.lineTo(hx - a + 3, hy - a);
+    ctx.moveTo(hx - a, hy - a); ctx.lineTo(hx - a, hy - a + 3);
+    ctx.moveTo(hx + a, hy + a); ctx.lineTo(hx + a - 3, hy + a);
+    ctx.moveTo(hx + a, hy + a); ctx.lineTo(hx + a, hy + a - 3);
+    ctx.stroke();
+    // Rotate: open arc with an arrowhead.
+    const rx = w2sx(si.hx) + SCALE_HANDLE_OFF, ry = w2sy(si.ty) - SCALE_HANDLE_OFF;
+    grip(rx, ry);
+    ctx.beginPath();
+    ctx.arc(rx, ry, a, -0.4 * Math.PI, 0.9 * Math.PI);
+    ctx.stroke();
+    ctx.beginPath();
+    const tx = rx + a * Math.cos(-0.4 * Math.PI), tyy = ry + a * Math.sin(-0.4 * Math.PI);
+    ctx.moveTo(tx, tyy); ctx.lineTo(tx - 3, tyy - 1);
+    ctx.moveTo(tx, tyy); ctx.lineTo(tx + 1, tyy - 3.5);
+    ctx.stroke();
   }
 
   // In-progress polygon (amber = rock being drawn, red = a cut being carved),
