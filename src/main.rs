@@ -2849,23 +2849,34 @@ async fn main() {
             };
 
             // Hand-drawn worlds: dark open space, rock polygons drawn on top
-            // from the cached triangulation (verts clamped to the map box,
-            // same rule as the obstacle shapes below).
+            // from the cached triangulation. Each triangle is CLIPPED to the
+            // minimap window in world space (render::clip_poly_rect) before
+            // mapping — clamping the mapped vertices instead warped triangle
+            // interiors whenever a vertex sat outside the window (harmless on
+            // axis-aligned slabs, visibly wrong on the editor's carve pieces
+            // and rock islands — their sliver triangles reach far outside).
             if world_sim.level.terrain.is_some() {
                 draw_rectangle(mm_ox, mm_oy, mm_w, mm_h, mm_dark);
+                let win_lo = vec2(cam_x - MM_HALF_X, cam_y - MM_HALF_Y);
+                let win_hi = vec2(cam_x + MM_HALF_X, cam_y + MM_HALF_Y);
                 if let Some(mesh) = &terrain_cache {
                     for (pi, tris) in mesh.tris.iter().enumerate() {
                         let (lo, hi) = mesh.bboxes[pi];
-                        if hi.x < cam_x - MM_HALF_X || lo.x > cam_x + MM_HALF_X
-                            || hi.y < cam_y - MM_HALF_Y || lo.y > cam_y + MM_HALF_Y {
+                        if hi.x < win_lo.x || lo.x > win_hi.x
+                            || hi.y < win_lo.y || lo.y > win_hi.y {
                             continue;
                         }
                         for t3 in tris {
-                            let p: Vec<Vec2> = t3.iter().map(|q| vec2(
-                                to_mm_x(q.x).clamp(mm_ox, mm_ox + mm_w),
-                                to_mm_y(q.y).clamp(mm_oy, mm_oy + mm_h),
-                            )).collect();
-                            draw_triangle(p[0], p[1], p[2], rock_mid);
+                            let clipped = render::clip_poly_rect(t3, win_lo, win_hi);
+                            if clipped.len() < 3 {
+                                continue;
+                            }
+                            let p: Vec<Vec2> = clipped.iter()
+                                .map(|q| vec2(to_mm_x(q.x), to_mm_y(q.y)))
+                                .collect();
+                            for k in 1..p.len() - 1 {
+                                draw_triangle(p[0], p[k], p[k + 1], rock_mid);
+                            }
                         }
                     }
                 }
