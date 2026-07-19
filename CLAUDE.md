@@ -630,7 +630,21 @@ members in lockstep, incl. the start pad, which re-origins on release;
 LOCK on a group (or a lone element — it gets a group of one) freezes it:
 selectable but not draggable/deletable until UNLOCK. Membership = op `g`
 property / a third slot on pad/start arrays the exporter never reads;
-group metadata in `doc.groups` — all editor-doc-only), 0.5 m grid snap
+group metadata in `doc.groups` — all editor-doc-only), **scale & rotate
+grips** (issue #115: two amber grips off the selection bbox — scale at the
+bottom-right corner, rotate at the top-right — transforming a single op or
+an unlocked group uniformly about the bbox centre with a live ×/° readout;
+vertices land on the 1 cm export grid, NOT the 0.5 m edit snap; grid snap
+ON snaps the angle to 15° steps; pad/start POSITIONS transform — deck
+width is game-fixed — and a group containing the start pad re-origins on
+release), **play-feel aids**: the spawn marker is the REAL vector ship at
+true scale (issue #114 — `SHIP_GLYPH`, the hero-SVG polys remapped to
+~1.43 m with feet where `stand_y` parks them; a faint ring keeps it
+findable at far zoom instead of inflating it), a **1:1** button zooming to
+this device's in-game `view_scale` (min CSS dim < 600 → fit 19 m, capped
+at desktop; else 80 CSS px/m) and a **🔒 ALL browse mode** (everything
+behaves locked, drags pan — tour the level without disturbing it;
+session-only), 0.5 m grid snap
 (toggle), undo/redo
 (snapshot stack, Ctrl+Z), import (paste any hand-drawn `.level` text —
 parses the same key subset as `Level::parse`) and export (copy/download).
