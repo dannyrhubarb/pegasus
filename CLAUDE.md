@@ -665,7 +665,12 @@ contextual DELETE / CLOSE POLY / CANCEL buttons FLOAT over the canvas
 (`#ctxbar`) — in the toolbar they re-wrapped it on narrow screens every
 time the selection changed, shifting the whole canvas ~40 px so the
 vertex you were reaching for jumped away from your finger (found by the
-touch e2e; the toolbar must never reflow mid-interaction). The working
+touch e2e; the toolbar must never reflow mid-interaction). The status bar
+obeys the same rule with a FIXED height (field bug, 2026-07: a long tool
+hint wrapping on a phone grew the bar, shrank the canvas, and — with the
+bitmap unresized — freehand carve strokes drew ~30 px above the finger);
+a ResizeObserver on the canvas re-syncs the bitmap for any remaining
+CSS-size change (dynamic browser chrome etc.). The working
 document autosaves to `localStorage.pegasus_editor_doc` (survives the
 test-fly round trip); a validation pass (a JS port of
 `Terrain::point_in_rock` plus the backend verifier's `MAX_TERRAIN_*` caps)

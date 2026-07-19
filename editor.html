@@ -89,10 +89,16 @@
     background: var(--panel);
     border-top: 1px solid var(--line);
     padding: 5px 10px calc(5px + env(safe-area-inset-bottom));
-    display: flex; gap: 14px; align-items: baseline;
+    display: flex; gap: 14px; align-items: flex-start;
     color: var(--dim); font-size: 12px;
     user-select: none; -webkit-user-select: none;
-    min-height: 2em;
+    /* FIXED height (2 lines), overflow clipped: a hint that wraps taller on
+       a phone used to grow this bar and SHRINK the canvas above it — with
+       the bitmap unresized, freehand strokes drew ~30 px away from the
+       finger (found from a field report on carve, whose hint is longest).
+       Like the toolbar, the layout must never reflow on a state change. */
+    height: calc(2.9em + env(safe-area-inset-bottom));
+    overflow: hidden;
   }
   #status .issues { color: var(--amber); cursor: pointer; }
   #status .issues.err { color: var(--red); }
@@ -451,6 +457,16 @@ function resize() {
   draw();
 }
 window.addEventListener("resize", resize);
+// Safety net for canvas-size changes that fire no window resize (dynamic
+// browser chrome, safe-area shifts): keep the bitmap in lockstep with the
+// CSS box, or pointer positions and drawn pixels drift apart.
+if (window.ResizeObserver) {
+  new ResizeObserver(() => {
+    const r = cv.getBoundingClientRect();
+    if (Math.round(r.width * (window.devicePixelRatio || 1)) !== cv.width ||
+        Math.round(r.height * (window.devicePixelRatio || 1)) !== cv.height) resize();
+  }).observe(cv);
+}
 
 const w2sx = wx => (wx - view.x) * view.s + W / 2;
 const w2sy = wy => H / 2 - (wy - view.y) * view.s;
