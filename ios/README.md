@@ -74,3 +74,27 @@ deliberate differences:
   rendered from the repo's `icon.svg`. If the icon changes, re-render at
   1024×1024 (any SVG rasterizer; the icon has its own opaque background).
 
+## CI (GitHub Actions)
+
+Two workflows, both on free public-repo macOS runners:
+
+- **`ios-build.yml`** — on every PR touching `ios/`: runs `sync-web.sh`
+  and an **unsigned** `xcodebuild` so shell/project regressions are caught
+  before anyone opens Xcode. Needs no secrets.
+- **`ios-testflight.yml`** — on manual dispatch (Actions → iOS TestFlight
+  → Run workflow) and on pushes to `main` touching `ios/`: archives with
+  xcodebuild **cloud signing** (the App Store Connect API key creates and
+  fetches the distribution certificate + profile on the fly — nothing
+  signing-related lives in the repo) and uploads to TestFlight.
+  `CFBundleVersion` = the workflow run number, so every upload is a new
+  build. Requires four repository secrets:
+  `APP_STORE_CONNECT_API_KEY_ID`, `APP_STORE_CONNECT_API_ISSUER_ID`,
+  `APP_STORE_CONNECT_API_KEY_P8` (the whole `.p8` file), and
+  `APPLE_TEAM_ID` — plus an existing App Store Connect app record for the
+  bundle id. `Info.plist` sets `ITSAppUsesNonExemptEncryption = false`
+  (HTTPS only = exempt) so uploads skip the per-build compliance question.
+
+The committed **shared scheme**
+(`Pegasus.xcodeproj/xcshareddata/xcschemes/Pegasus.xcscheme`) is what lets
+`xcodebuild -scheme Pegasus` work on a fresh runner — Xcode only
+auto-generates schemes locally. Keep it checked in.
