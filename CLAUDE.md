@@ -1552,6 +1552,17 @@ Not part of the web deploy pipeline; `index.html` needed zero changes.
 - App icon: `icon.svg` rendered to an opaque 1024×1024 PNG in
   `Assets.xcassets` (no alpha — App Store validation rejects it);
   re-render if the SVG changes.
+- **CI**: `ios-build.yml` (PRs touching `ios/` — sync + UNSIGNED
+  xcodebuild, no secrets) and `ios-testflight.yml` (manual dispatch +
+  `main` pushes touching `ios/` — cloud-signed archive → TestFlight;
+  needs the four `APP_STORE_CONNECT_API_*`/`APPLE_TEAM_ID` repo secrets
+  and the ASC app record; build number = workflow run number). Both need
+  the **committed shared scheme** (`xcshareddata/xcschemes/`) — xcodebuild
+  on a fresh runner can't see locally auto-generated schemes — and
+  `fetch-depth: 0` (What's New). `Info.plist` carries
+  `ITSAppUsesNonExemptEncryption = false` so TestFlight builds skip the
+  per-upload compliance question.
+
 ## License
 
 Pegasus is **GPL-3.0-or-later** (`LICENSE`). Contributors sign on via the
