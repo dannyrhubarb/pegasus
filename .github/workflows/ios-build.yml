@@ -14,13 +14,19 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
         with:
           # Full history: gen-whats-new.py degrades to backfill-only on a
           # shallow clone (same rule as the web deploys).
           fetch-depth: 0
+
+      - name: Select latest stable Xcode
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_*.app | grep -vi beta | sort -V | tail -1)"
+          echo "Selected $XCODE"
+          sudo xcode-select -s "$XCODE"
 
       - name: Install Rust
         run: |

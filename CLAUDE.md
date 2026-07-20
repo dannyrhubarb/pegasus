@@ -1556,7 +1556,11 @@ Not part of the web deploy pipeline; `index.html` needed zero changes.
   xcodebuild, no secrets) and `ios-testflight.yml` (manual dispatch +
   `main` pushes touching `ios/` — cloud-signed archive → TestFlight;
   needs the four `APP_STORE_CONNECT_API_*`/`APPLE_TEAM_ID` repo secrets
-  and the ASC app record; build number = workflow run number). Both need
+  and the ASC app record; build number = workflow run number). Both run on
+  **`macos-26` and select the newest stable Xcode** — App Store Connect
+  rejects uploads built with older SDKs ("must be built with the iOS 26
+  SDK", seen live 2026-07 on the macos-15 image's default Xcode 16.4).
+  Both need
   the **committed shared scheme** (`xcshareddata/xcschemes/`) — xcodebuild
   on a fresh runner can't see locally auto-generated schemes — and
   `fetch-depth: 0` (What's New). `Info.plist` carries
