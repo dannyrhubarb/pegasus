@@ -98,3 +98,6 @@ The committed **shared scheme**
 (`Pegasus.xcodeproj/xcshareddata/xcschemes/Pegasus.xcscheme`) is what lets
 `xcodebuild -scheme Pegasus` work on a fresh runner — Xcode only
 auto-generates schemes locally. Keep it checked in.
+
+The TestFlight pipeline was verified end-to-end 2026-07-20 (build 5, the
+first accepted upload).
