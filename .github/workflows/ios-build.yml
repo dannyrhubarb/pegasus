@@ -1,0 +1,53 @@
+# Unsigned iOS build check: validates that ios/sync-web.sh assembles the
+# bundle on macOS and that the Xcode project + Swift shell compile. No
+# signing, no upload — it exists so an iOS-shell regression is caught on the
+# PR instead of on someone's Mac. macOS runner minutes are free on public
+# repos.
+name: iOS build check
+
+on:
+  pull_request:
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios-build.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: gen-whats-new.py degrades to backfill-only on a
+          # shallow clone (same rule as the web deploys).
+          fetch-depth: 0
+
+      - name: Install Rust
+        run: |
+          if ! command -v cargo >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-ios-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-ios-
+
+      - name: Assemble WebRoot
+        run: ./ios/sync-web.sh
+
+      - name: Build (unsigned)
+        run: |
+          xcodebuild \
+            -project ios/Pegasus.xcodeproj \
+            -scheme Pegasus \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            build \
+            CODE_SIGNING_ALLOWED=NO

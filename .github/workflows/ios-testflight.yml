@@ -1,0 +1,129 @@
+# Build, sign and upload the iOS app to TestFlight.
+#
+# Runs on manual dispatch, and on pushes to main that touch the iOS shell.
+# (Game-content changes ship to the app by re-running this manually — or
+# widen the paths filter if the app should track every main deploy.)
+#
+# Signing is xcodebuild "cloud signing": the App Store Connect API key lets
+# xcodebuild create/fetch the distribution certificate and provisioning
+# profile itself — no certificates or profiles are stored in the repo.
+#
+# Required repository secrets:
+#   APP_STORE_CONNECT_API_KEY_ID      the key's 10-char Key ID
+#   APP_STORE_CONNECT_API_ISSUER_ID   the team's Issuer ID (UUID)
+#   APP_STORE_CONNECT_API_KEY_P8      the .p8 file contents
+#   APPLE_TEAM_ID                     10-char Team ID (developer.apple.com →
+#                                     Membership details)
+#
+# The App Store Connect app record for the bundle id must exist before the
+# first upload. CFBundleVersion = the workflow run number (monotonic), so
+# every upload is a new build; the marketing version stays whatever the
+# project sets.
+name: iOS TestFlight
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios-testflight.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ios-testflight
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    runs-on: macos-15
+    env:
+      ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - name: Check secrets
+        run: |
+          missing=0
+          for v in ASC_KEY_ID ASC_ISSUER_ID APPLE_TEAM_ID; do
+            if [ -z "${!v}" ]; then echo "::error::missing secret behind $v"; missing=1; fi
+          done
+          if [ -z "${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}" ]; then
+            echo "::error::missing secret APP_STORE_CONNECT_API_KEY_P8"; missing=1
+          fi
+          exit $missing
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        run: |
+          if ! command -v cargo >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-ios-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-ios-
+
+      - name: Install wasm-opt
+        run: brew install binaryen
+
+      - name: Assemble WebRoot
+        run: ./ios/sync-web.sh
+
+      - name: Write API key
+        run: |
+          mkdir -p ~/private_keys
+          printf '%s\n' "$ASC_KEY_P8" > ~/private_keys/AuthKey_"$ASC_KEY_ID".p8
+        env:
+          ASC_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+
+      - name: Archive
+        run: |
+          xcodebuild \
+            -project ios/Pegasus.xcodeproj \
+            -scheme Pegasus \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/Pegasus.xcarchive \
+            archive \
+            CODE_SIGN_STYLE=Automatic \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            -allowProvisioningUpdates \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            -authenticationKeyPath "$HOME/private_keys/AuthKey_$ASC_KEY_ID.p8"
+
+      - name: Upload to TestFlight
+        run: |
+          cat > build/ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>teamID</key><string>${APPLE_TEAM_ID}</string>
+            <key>uploadSymbols</key><true/>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild \
+            -exportArchive \
+            -archivePath build/Pegasus.xcarchive \
+            -exportOptionsPlist build/ExportOptions.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            -authenticationKeyPath "$HOME/private_keys/AuthKey_$ASC_KEY_ID.p8"
