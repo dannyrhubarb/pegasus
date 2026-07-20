@@ -1,0 +1,268 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		5E6A50000000000000000101 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E6A50000000000000000001 /* AppDelegate.swift */; };
+		5E6A50000000000000000102 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E6A50000000000000000002 /* SceneDelegate.swift */; };
+		5E6A50000000000000000103 /* GameViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E6A50000000000000000003 /* GameViewController.swift */; };
+		5E6A50000000000000000104 /* WebRootSchemeHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E6A50000000000000000004 /* WebRootSchemeHandler.swift */; };
+		5E6A50000000000000000105 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 5E6A50000000000000000005 /* Assets.xcassets */; };
+		5E6A50000000000000000106 /* WebRoot in Resources */ = {isa = PBXBuildFile; fileRef = 5E6A50000000000000000007 /* WebRoot */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		5E6A50000000000000000001 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		5E6A50000000000000000002 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
+		5E6A50000000000000000003 /* GameViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameViewController.swift; sourceTree = "<group>"; };
+		5E6A50000000000000000004 /* WebRootSchemeHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebRootSchemeHandler.swift; sourceTree = "<group>"; };
+		5E6A50000000000000000005 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		5E6A50000000000000000006 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		5E6A50000000000000000007 /* WebRoot */ = {isa = PBXFileReference; lastKnownFileType = folder; path = WebRoot; sourceTree = "<group>"; };
+		5E6A50000000000000000008 /* Pegasus.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Pegasus.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		5E6A50000000000000000302 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		5E6A50000000000000000201 = {
+			isa = PBXGroup;
+			children = (
+				5E6A50000000000000000202 /* Pegasus */,
+				5E6A50000000000000000203 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		5E6A50000000000000000202 /* Pegasus */ = {
+			isa = PBXGroup;
+			children = (
+				5E6A50000000000000000001 /* AppDelegate.swift */,
+				5E6A50000000000000000002 /* SceneDelegate.swift */,
+				5E6A50000000000000000003 /* GameViewController.swift */,
+				5E6A50000000000000000004 /* WebRootSchemeHandler.swift */,
+				5E6A50000000000000000005 /* Assets.xcassets */,
+				5E6A50000000000000000006 /* Info.plist */,
+				5E6A50000000000000000007 /* WebRoot */,
+			);
+			path = Pegasus;
+			sourceTree = "<group>";
+		};
+		5E6A50000000000000000203 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				5E6A50000000000000000008 /* Pegasus.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		5E6A50000000000000000401 /* Pegasus */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5E6A50000000000000000602 /* Build configuration list for PBXNativeTarget "Pegasus" */;
+			buildPhases = (
+				5E6A50000000000000000301 /* Sources */,
+				5E6A50000000000000000302 /* Frameworks */,
+				5E6A50000000000000000303 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Pegasus;
+			productName = Pegasus;
+			productReference = 5E6A50000000000000000008 /* Pegasus.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		5E6A50000000000000000501 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					5E6A50000000000000000401 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = 5E6A50000000000000000601 /* Build configuration list for PBXProject "Pegasus" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 5E6A50000000000000000201;
+			productRefGroup = 5E6A50000000000000000203 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				5E6A50000000000000000401 /* Pegasus */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		5E6A50000000000000000303 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5E6A50000000000000000105 /* Assets.xcassets in Resources */,
+				5E6A50000000000000000106 /* WebRoot in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		5E6A50000000000000000301 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5E6A50000000000000000101 /* AppDelegate.swift in Sources */,
+				5E6A50000000000000000102 /* SceneDelegate.swift in Sources */,
+				5E6A50000000000000000103 /* GameViewController.swift in Sources */,
+				5E6A50000000000000000104 /* WebRootSchemeHandler.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		5E6A50000000000000000701 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		5E6A50000000000000000702 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		5E6A50000000000000000703 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Pegasus/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = se.danielfalk.pegasus;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		5E6A50000000000000000704 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Pegasus/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = se.danielfalk.pegasus;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		5E6A50000000000000000601 /* Build configuration list for PBXProject "Pegasus" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5E6A50000000000000000701 /* Debug */,
+				5E6A50000000000000000702 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		5E6A50000000000000000602 /* Build configuration list for PBXNativeTarget "Pegasus" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5E6A50000000000000000703 /* Debug */,
+				5E6A50000000000000000704 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 5E6A50000000000000000501 /* Project object */;
+}

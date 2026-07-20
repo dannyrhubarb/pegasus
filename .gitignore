@@ -1,2 +1,4 @@
 /target
 /pegasus.wasm
+/ios/Pegasus/WebRoot/*
+!/ios/Pegasus/WebRoot/.gitkeep

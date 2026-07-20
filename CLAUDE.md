@@ -1518,6 +1518,40 @@ Each is built `ColliderBuilder::new(SharedShape::capsule(a, b, r)).restitution(0
 
 **RCS / attitude thrusters** (cosmetic particles, `kind 1/2`): bottom nozzles flanking the main booster vent **downward** (like a mini main thruster). Turning **left** → left nozzle at scaled-local `(−0.30, −0.71)`; turning **right** → right nozzle at `(0.30, −0.71)`. Gas exits `−Y` (downward) from both. The x positions sit in the leg nozzle (gold accent: unscaled x ≈ ±0.152–0.249 → midpoint ±0.30 scaled). Emission coords are in **scaled world units** — `lp()`/`ld()` do **not** apply `SHIP_SCALE` (only the render-time `rot` closure does), so don't multiply these by `SHIP_SCALE` (an earlier bug double-scaled them to ±0.60 and spawned the puffs outside the hull).
 
+## iOS app (`ios/`)
+
+A thin native wrapper that bundles the web build into an offline-capable
+iOS app — the game runs unmodified in a full-screen WKWebView (same WebKit
+as iOS Safari). Built and signed on a Mac with Xcode; `ios/README.md` has
+the full walkthrough (free-Apple-ID device signing vs. the paid program).
+Not part of the web deploy pipeline; `index.html` needed zero changes.
+- `ios/sync-web.sh` assembles `ios/Pegasus/WebRoot/` (**gitignored** build
+  product, like `pegasus.wasm`; a `.gitkeep` holds the folder for Xcode).
+  It mirrors `.github/actions/build-site` — **keep them in sync when the
+  site's file set changes** — with three deliberate differences: **no
+  `version.json`** (the stale-cache toast is meaningless in-app; the page
+  treats the 404 as feature-off), **`config.json` fetched from the live
+  Pages deployment** (the `BACKEND_CONFIG_JSON` variable isn't available
+  locally; unreachable ⇒ online scores off), and the injected revision
+  suffixed **`-ios`** (About screen / analytics / replay build id — the
+  page still env-tags these builds `prod`, so app sessions show up in
+  analytics as iOS webview device-mix).
+- `ios/Pegasus.xcodeproj` + `ios/Pegasus/*.swift`: WebRoot is served via a
+  **custom `pegasus://` scheme handler** (`WKURLSchemeHandler`) because
+  `fetch()` doesn't work on `file://` URLs and the game fetches its wasm,
+  levels, manifest and config at runtime; the scheme is also the stable
+  origin for localStorage. The handler **strips query strings** (`?v=`,
+  `?fresh=`) and **404s missing optional files** — both load-bearing. The
+  webview fills the WHOLE screen, not the safe area (the page reads
+  `env(safe-area-inset-*)` itself via `viewport-fit=cover`); scrolling/
+  bounce off; **back-forward gestures ON** (edge-swipe = the game's own
+  one-screen-back history stack, same as Safari); http(s) links open in
+  Safari, `target="_blank"` bundle pages (third-party licenses) load in
+  place with swipe-back. WebRoot ships as an Xcode **folder reference**,
+  so re-running the sync + rebuilding needs no project edits.
+- App icon: `icon.svg` rendered to an opaque 1024×1024 PNG in
+  `Assets.xcassets` (no alpha — App Store validation rejects it);
+  re-render if the SVG changes.
 ## License
 
 Pegasus is **GPL-3.0-or-later** (`LICENSE`). Contributors sign on via the
@@ -1550,7 +1584,7 @@ commit the refreshed page.
 - **Always open a PR** after pushing a feature branch — standing instruction
   from the owner (no need to ask first). The PR also produces a phone-testable
   preview deployment at `pr-<n>/`.
-- Development branch: `claude/level-editor-polygon-tools-6kajl5` (current); previous: `claude/random-rift-level-type-m6axqa`
+- Development branch: `claude/frontend-ios-app-bundle-jhhqr6` (current); previous: `claude/level-editor-polygon-tools-6kajl5`
 - Merges to `main` via rebase PRs using the GitHub MCP tools (`mcp__github__create_pull_request`, `mcp__github__merge_pull_request`).
 - **Curate the branch before merging.** Rebase merges land every branch
   commit on `main` verbatim, so branch noise becomes permanent history.
