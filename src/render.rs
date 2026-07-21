@@ -225,6 +225,34 @@ pub fn clip_poly_rect(input: &[Vec2], lo: Vec2, hi: Vec2) -> Vec<Vec2> {
     poly
 }
 
+
+// Facet lattice point for shaft walls (vertical analogue of lattice_point):
+// depth col 0 sits exactly on the wall polyline (collider-aligned); deeper
+// cols recede horizontally into the rock with deterministic jitter. Near the
+// two ends the deep cols are additionally pulled along the shaft toward the
+// junction rock, so corner facets turn diagonally into the corner wedge
+// instead of poking past the cave wall line into the cave interior.
+pub fn shaft_lattice(pts: &[Vec2], s: i64, i: usize, d: usize, side: u8) -> Vec2 {
+    let p = pts[i];
+    if d == 0 {
+        return p;
+    }
+    let depth = ROW_DEPTHS[d];
+    let dir = if side == 0 { -1.0 } else { 1.0 };
+    let h = hash_u32(
+        (s as u32).wrapping_mul(0x9e37_79b9)
+            ^ (i as u32).wrapping_mul(73856093)
+            ^ (d as u32).wrapping_mul(19349663)
+            ^ (side as u32 + 7).wrapping_mul(83492791),
+    );
+    let jy = ((h & 0xffff) as f32 / 65535.0 - 0.5) * (SHAFT_STEP * 0.5);
+    let jx = (((h >> 16) & 0xffff) as f32 / 65535.0 - 0.5) * (depth * 0.35);
+    let e = i.min(pts.len() - 1 - i) as f32;
+    let end_pull = (1.0 - e / 3.0).max(0.0) * depth;
+    let end_dir = if i * 2 < pts.len() { 1.0 } else { -1.0 }; // up at bottom end, down at top
+    vec2(p.x + dir * (depth + jx), p.y + jy + end_dir * end_pull)
+}
+
 #[cfg(test)]
 mod clip_tests {
     use super::*;
@@ -333,31 +361,4 @@ mod clip_tests {
         let expect = (4.0 + 4.0 * (1.0 - 4.0 / 100.0)) / 2.0 * 4.0;
         assert!((area(&c) - expect).abs() < 1e-3, "area {} vs {}", area(&c), expect);
     }
-}
-
-// Facet lattice point for shaft walls (vertical analogue of lattice_point):
-// depth col 0 sits exactly on the wall polyline (collider-aligned); deeper
-// cols recede horizontally into the rock with deterministic jitter. Near the
-// two ends the deep cols are additionally pulled along the shaft toward the
-// junction rock, so corner facets turn diagonally into the corner wedge
-// instead of poking past the cave wall line into the cave interior.
-pub fn shaft_lattice(pts: &[Vec2], s: i64, i: usize, d: usize, side: u8) -> Vec2 {
-    let p = pts[i];
-    if d == 0 {
-        return p;
-    }
-    let depth = ROW_DEPTHS[d];
-    let dir = if side == 0 { -1.0 } else { 1.0 };
-    let h = hash_u32(
-        (s as u32).wrapping_mul(0x9e37_79b9)
-            ^ (i as u32).wrapping_mul(73856093)
-            ^ (d as u32).wrapping_mul(19349663)
-            ^ (side as u32 + 7).wrapping_mul(83492791),
-    );
-    let jy = ((h & 0xffff) as f32 / 65535.0 - 0.5) * (SHAFT_STEP * 0.5);
-    let jx = (((h >> 16) & 0xffff) as f32 / 65535.0 - 0.5) * (depth * 0.35);
-    let e = i.min(pts.len() - 1 - i) as f32;
-    let end_pull = (1.0 - e / 3.0).max(0.0) * depth;
-    let end_dir = if i * 2 < pts.len() { 1.0 } else { -1.0 }; // up at bottom end, down at top
-    vec2(p.x + dir * (depth + jx), p.y + jy + end_dir * end_pull)
 }
