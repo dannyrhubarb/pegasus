@@ -33,9 +33,12 @@ changes.
   PR produces a directly installable build. No secrets needed.
 - **`android-release.yml`** — on manual dispatch and `main` pushes
   touching `android/`: builds a **signed AAB + universal APK**
-  (artifacts), and uploads the AAB to the **Play internal testing track**
-  once `PLAY_SERVICE_ACCOUNT_JSON` is configured (the step is skipped
-  until then). `versionCode` = the workflow run number.
+  (artifacts), **publishes the APK to GitHub Pages** at
+  `https://dannyrhubarb.github.io/pegasus/app/pegasus.apk` (a public
+  direct-download sideload link, refreshed every release), and uploads
+  the AAB to the **Play internal testing track** once
+  `PLAY_SERVICE_ACCOUNT_JSON` is configured (the step is skipped until
+  then). `versionCode` = the workflow run number.
 
 ### Signing secrets (one-time)
 

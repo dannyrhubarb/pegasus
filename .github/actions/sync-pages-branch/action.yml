@@ -52,9 +52,11 @@ runs:
           fi
 
           if [[ -z "$SUBDIR" ]]; then
-            # Main-site publish: replace the root but keep live previews.
+            # Main-site publish: replace the root but keep live previews and
+            # the app/ downloads dir (the Android APK published by the
+            # "Android release" workflow — it has its own lifecycle).
             find "$WT" -mindepth 1 -maxdepth 1 \
-              ! -name 'pr-*' ! -name '.git' -exec rm -rf {} +
+              ! -name 'pr-*' ! -name 'app' ! -name '.git' -exec rm -rf {} +
             cp -a "$SRC"/. "$WT"/
           elif [[ -n "$SRC" ]]; then
             rm -rf "$WT/${SUBDIR:?}"
