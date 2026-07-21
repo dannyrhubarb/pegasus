@@ -45,6 +45,9 @@ jobs:
       PEGASUS_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       PEGASUS_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
       PEGASUS_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      # The secrets context is not allowed in step `if:` expressions —
+      # route the presence check through env instead.
+      HAS_PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
     steps:
       - name: Check secrets
         run: |
@@ -126,7 +129,7 @@ jobs:
           message: "Android APK build ${{ github.run_number }}"
 
       - name: Upload to Play internal track
-        if: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
+        if: ${{ env.HAS_PLAY_JSON == 'true' }}
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
