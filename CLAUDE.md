@@ -19,8 +19,9 @@ in `index.html`/`manifest.json` is relative). Four workflows, sharing two
 composite actions (`.github/actions/build-site` = wasm build + icons + overlay
 injection; `.github/actions/sync-pages-branch` = commit into `gh-pages` with a
 push-retry loop for concurrent deploys):
-- `deploy.yml` (**Main deploy**, push to `main`): build → sync branch **root**,
-  `--exclude 'pr-*'` so live previews survive a main deploy.
+- `deploy.yml` (**Main deploy**, push to `main`): build → sync branch **root**
+  (live previews in `pr-*/` and the Android APK in `app/` are kept — the
+  root replace excludes both).
 - `preview-deploy.yml` (**Preview deploy**, PR opened/synchronize/reopened):
   build (overlay revision = `<head-sha>-pr-<n>`) → sync `pr-<n>/` → sticky PR
   comment (`<!-- preview-env -->` marker) with the preview URL. Skipped for
@@ -28,8 +29,9 @@ push-retry loop for concurrent deploys):
 - `preview-teardown.yml` (**Preview teardown**, PR closed): delete `pr-<n>/`,
   comment.
 - `publish-pages.yml` (**Publish Pages**): the *only* workflow that calls
-  `deploy-pages`. Triggered by `workflow_run` on the three above (must match
-  their `name:` strings exactly) and snapshots the whole `gh-pages` branch.
+  `deploy-pages`. Triggered by `workflow_run` on the three above plus
+  **Android release** (must match their `name:` strings exactly) and
+  snapshots the whole `gh-pages` branch.
   **Gotcha**: the auto-created `github-pages` environment only allows
   deployments from `main`, so PR-triggered workflows can't deploy directly;
   `workflow_run` workflows execute from the default branch, which passes the
@@ -1596,7 +1598,11 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   secrets; versionCode = workflow run number; **the first Play upload
   must be manual** — Google requirement). Release signing reads
   `PEGASUS_KEYSTORE_*` env vars in `app/build.gradle.kts`; nothing
-  signing-related lives in the repo.
+  signing-related lives in the repo. The release also **publishes the
+  signed APK to GitHub Pages** at `app/pegasus.apk` (direct-download
+  sideload link): it syncs the `app/` subdir of `gh-pages` via
+  `sync-pages-branch` (whose root replace keeps `app/` like `pr-*`) and
+  `publish-pages.yml` triggers on this workflow's name.
 - Launcher icons rendered from `icon.svg` (adaptive foreground 108dp
   densities + legacy sizes); re-render if the SVG changes.
 

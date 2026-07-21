@@ -34,6 +34,9 @@ concurrency:
   group: android-release
   cancel-in-progress: false
 
+permissions:
+  contents: write # push the APK into the gh-pages state branch
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -105,6 +108,22 @@ jobs:
             android/app/build/outputs/bundle/release/app-release.aab
             android/app/build/outputs/apk/release/app-release.apk
           retention-days: 30
+
+      # Publish the signed APK for direct download at
+      # https://<owner>.github.io/pegasus/app/pegasus.apk — the app/ subdir
+      # of the gh-pages state branch survives main deploys (sync-pages-branch
+      # keeps it like pr-*), and publish-pages.yml lists this workflow so the
+      # push actually deploys.
+      - name: Publish APK to GitHub Pages
+        run: |
+          mkdir -p pages-app
+          cp android/app/build/outputs/apk/release/app-release.apk pages-app/pegasus.apk
+
+      - uses: ./.github/actions/sync-pages-branch
+        with:
+          subdir: app
+          source-dir: pages-app
+          message: "Android APK build ${{ github.run_number }}"
 
       - name: Upload to Play internal track
         if: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
