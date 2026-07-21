@@ -21,7 +21,7 @@ rm -rf "$DEST"
 mkdir -p "$DEST"
 touch "$DEST/.gitkeep"
 
-cp index.html manifest.json mq_js_bundle.js LICENSE third-party-licenses.html "$DEST/"
+cp index.html manifest.json mq_js_bundle.js LICENSE third-party-licenses.html privacy.html "$DEST/"
 cp -R levels "$DEST/levels"
 
 # wasm-opt (brew install binaryen) is optional locally — it only shrinks the
