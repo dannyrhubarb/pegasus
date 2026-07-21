@@ -59,6 +59,9 @@ runs:
         # attribution page (linked from the About screen) ship with the site.
         cp LICENSE site/
         cp third-party-licenses.html site/
+        # Standalone privacy policy (linked from the Play Store listing;
+        # same content as the About screen's privacy note).
+        cp privacy.html site/
         # Levels are runtime data (fetched by index.html) — new levels ship
         # by editing levels/ + manifest.json, no wasm rebuild needed.
         cp -r levels site/
