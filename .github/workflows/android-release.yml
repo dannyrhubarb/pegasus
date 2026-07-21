@@ -1,0 +1,117 @@
+# Build the signed Android release (AAB for Play + universal APK for direct
+# sideloading) and, when the Play service-account secret is configured,
+# upload the AAB to the Play internal testing track — the Android twin of
+# ios-testflight.yml.
+#
+# Runs on manual dispatch, and on pushes to main that touch the Android
+# shell. Game-content changes ship by re-running manually.
+#
+# Required repository secrets (signing):
+#   ANDROID_KEYSTORE_BASE64     the upload keystore (.jks), base64-encoded
+#   ANDROID_KEYSTORE_PASSWORD   keystore password
+#   ANDROID_KEY_ALIAS           key alias inside the keystore
+#   ANDROID_KEY_PASSWORD        key password
+# Optional (Play upload — until it exists, the workflow just attaches the
+# signed artifacts and skips the upload step):
+#   PLAY_SERVICE_ACCOUNT_JSON   a Google Cloud service-account JSON key with
+#                               release access in Play Console → API access
+#
+# versionCode = the workflow run number (monotonic); versionName stays
+# whatever app/build.gradle.kts sets. NOTE: the very first AAB must be
+# uploaded to Play Console manually (Google requirement) — grab it from
+# this workflow's artifacts.
+name: Android release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "android/**"
+      - ".github/workflows/android-release.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      PEGASUS_VERSION_CODE: ${{ github.run_number }}
+      PEGASUS_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      PEGASUS_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      PEGASUS_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - name: Check secrets
+        run: |
+          missing=0
+          for v in PEGASUS_KEYSTORE_PASSWORD PEGASUS_KEY_ALIAS PEGASUS_KEY_PASSWORD; do
+            if [ -z "${!v}" ]; then echo "::error::missing secret behind $v"; missing=1; fi
+          done
+          if [ -z "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+            echo "::error::missing secret ANDROID_KEYSTORE_BASE64"; missing=1
+          fi
+          exit $missing
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
+
+      - name: Install Rust
+        run: |
+          if ! command -v cargo >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-android-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-android-
+
+      - name: Install wasm-opt
+        run: sudo apt-get install -y binaryen
+
+      - name: Assemble webroot
+        run: ./android/sync-web.sh
+
+      - name: Write keystore
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          echo "PEGASUS_KEYSTORE_FILE=$RUNNER_TEMP/upload.jks" >> "$GITHUB_ENV"
+
+      - name: Build signed AAB + APK
+        run: gradle -p android bundleRelease assembleRelease
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pegasus-release
+          path: |
+            android/app/build/outputs/bundle/release/app-release.aab
+            android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 30
+
+      - name: Upload to Play internal track
+        if: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: se.danielfalk.pegasus
+          releaseFiles: android/app/build/outputs/bundle/release/app-release.aab
+          track: internal
+          status: completed

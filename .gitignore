@@ -2,3 +2,10 @@
 /pegasus.wasm
 /ios/Pegasus/WebRoot/*
 !/ios/Pegasus/WebRoot/.gitkeep
+/android/app/src/main/assets/webroot/*
+!/android/app/src/main/assets/webroot/.gitkeep
+/android/.gradle/
+/android/build/
+/android/app/build/
+/android/local.properties
+*.jks
