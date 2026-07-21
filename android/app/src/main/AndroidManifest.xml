@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Online high scores, the ghost and analytics; the game itself is
+         fully bundled and runs offline. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:label="Pegasus"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="true"
+        android:hardwareAccelerated="true"
+        android:theme="@style/AppTheme">
+        <!-- configChanges keeps the activity (and the WebView with the live
+             game state) alive across rotation — a recreate would reload the
+             page mid-flight. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode|density">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

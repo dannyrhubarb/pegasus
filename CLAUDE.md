@@ -1567,6 +1567,39 @@ Not part of the web deploy pipeline; `index.html` needed zero changes.
   `ITSAppUsesNonExemptEncryption = false` so TestFlight builds skip the
   per-upload compliance question.
 
+## Android app (`android/`)
+
+The Android twin of `ios/`: a thin Kotlin `WebView` shell bundling the web
+build, offline-capable, buildable anywhere with a JDK + Android SDK (no
+Mac). `android/README.md` has the build/signing/Play walkthrough.
+- `android/sync-web.sh` assembles `app/src/main/assets/webroot/`
+  (**gitignored**, `.gitkeep` holds the folder) — mirrors `ios/sync-web.sh`
+  and `.github/actions/build-site` (keep all three in sync); revision
+  suffixed **`-android`**, no `version.json`, `config.json` from the live
+  deployment.
+- `MainActivity.kt` serves webroot via **`WebViewAssetLoader`** on the
+  reserved `appassets.androidplatform.net` origin (fetch/localStorage need
+  a real origin — same reason as the iOS scheme handler) with a CUSTOM
+  path handler that answers **real 404s** for missing optional files
+  (stock `AssetsPathHandler` would fall through to the network, where the
+  reserved domain fails DNS and fetch ERRORS instead of 404ing). System
+  back = the game's own one-screen-back history stack (the site already
+  implements Android back); external links open the browser;
+  `android:configChanges` keeps the activity (= the live game) alive
+  across rotation; edge-to-edge immersive with cutout `shortEdges`.
+- **CI**: `android-build.yml` (PRs touching `android/` — debug APK built
+  on ubuntu + attached as an installable artifact, no secrets) and
+  `android-release.yml` (manual dispatch + `main` pushes touching
+  `android/` — signed AAB + universal APK artifacts; uploads the AAB to
+  the **Play internal track** when `PLAY_SERVICE_ACCOUNT_JSON` is set,
+  skipped otherwise; needs the four `ANDROID_KEYSTORE_*`/`ANDROID_KEY_*`
+  secrets; versionCode = workflow run number; **the first Play upload
+  must be manual** — Google requirement). Release signing reads
+  `PEGASUS_KEYSTORE_*` env vars in `app/build.gradle.kts`; nothing
+  signing-related lives in the repo.
+- Launcher icons rendered from `icon.svg` (adaptive foreground 108dp
+  densities + legacy sizes); re-render if the SVG changes.
+
 ## License
 
 Pegasus is **GPL-3.0-or-later** (`LICENSE`). Contributors sign on via the
