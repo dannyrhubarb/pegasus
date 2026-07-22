@@ -1,5 +1,25 @@
 [
  {
+  "rev": "0a528c2",
+  "date": "2026-07-22T15:55:09+02:00",
+  "note": "The Android and iOS apps show their app version and build number on the About screen"
+ },
+ {
+  "rev": "2899854",
+  "date": "2026-07-22T15:55:09+02:00",
+  "note": "The website now keeps the screen awake while you fly or watch a replay, like the apps"
+ },
+ {
+  "rev": "7fb16e5",
+  "date": "2026-07-22T15:55:09+02:00",
+  "note": "The Android and iOS apps show the status bar (clock, battery) on top of the game"
+ },
+ {
+  "rev": "3aae33f",
+  "date": "2026-07-22T15:55:09+02:00",
+  "note": "The Android and iOS apps now keep the screen awake while you fly or watch a replay"
+ },
+ {
   "rev": "a7c89d3",
   "date": "2026-07-18T00:43:38+02:00",
   "note": "Retired The Caves — four distinct worlds remain"

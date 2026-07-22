@@ -1035,11 +1035,17 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">897fc15</div>
+        <div class="info-value" id="git-rev">0a528c2</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-21T23:54:55Z</div>
+        <div class="info-value" id="build-time">2026-07-22T13:56:03Z</div>
+      </div>
+      <!-- App shells only (iOS/Android): the installed app's version +
+           build number, filled from the shell bridge; hidden on the web. -->
+      <div class="info-row" id="app-build-row" style="display:none">
+        <div class="info-label">App build</div>
+        <div class="info-value" id="app-build"></div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors, which site
@@ -1369,6 +1375,7 @@
       // screen isn't up, so this entry point is what keeps it fresh).
       if (id === "scr-scores") renderScores();
       if (id === "scr-about") renderBuildTime();
+      syncWakeLock();
       pegAnalytics.screen(id); // funnel signal (consecutive-deduped inside)
       syncHistory();
     }
@@ -1377,8 +1384,57 @@
       menuEl.classList.remove("open");
       hudBtns.classList.add("on");
       setPause(0);
+      syncWakeLock();
       syncHistory();
     }
+
+    // Screen wake lock: a hands-off stretch (coasting a long glide,
+    // watching a replay) has no touches, so the OS screen timeout would
+    // otherwise dim mid-run. While the canvas is live — no menu screen up:
+    // flight, the wreck phase, or replay playback — hold the screen awake;
+    // any open screen releases it. Three holders, each feature-detected +
+    // try/caught so every build uses what it has: the iOS shell's
+    // `pegasusKeepAwake` message handler (→ isIdleTimerDisabled), the
+    // Android shell's `PegasusApp` JS interface (→ keepScreenOn), and the
+    // browser's Screen Wake Lock API for the plain website (Safari 16.4+ /
+    // Chrome; older browsers just keep their timeout).
+    let wantAwake = false;
+    let webLock = null;      // held Screen Wake Lock sentinel
+    let webLockBusy = false; // a request() is in flight
+    function acquireWebLock() {
+      if (!("wakeLock" in navigator) || webLock || webLockBusy) return;
+      webLockBusy = true;
+      navigator.wakeLock.request("screen").then(s => {
+        webLockBusy = false;
+        // The want flipped (or the sentinel already died) while the async
+        // request ran — don't adopt it.
+        if (!wantAwake || s.released) { s.release().catch(() => {}); return; }
+        webLock = s;
+        // The browser force-releases on tab-hide; track it so the
+        // visibilitychange handler below knows to re-acquire.
+        s.addEventListener("release", () => { if (webLock === s) webLock = null; });
+      }).catch(() => { webLockBusy = false; }); // denied (hidden tab, battery saver)
+    }
+    function syncWakeLock() {
+      const on = overlay === null;
+      if (on === wantAwake) return;
+      wantAwake = on;
+      try {
+        if (window.PegasusApp && PegasusApp.setKeepAwake) PegasusApp.setKeepAwake(on);
+      } catch (e) { /* a wake-lock holder must never break the game */ }
+      try {
+        const wk = window.webkit;
+        if (wk && wk.messageHandlers && wk.messageHandlers.pegasusKeepAwake)
+          wk.messageHandlers.pegasusKeepAwake.postMessage(on);
+      } catch (e) { /* ditto */ }
+      try {
+        if (on) acquireWebLock();
+        else if (webLock) { webLock.release().catch(() => {}); webLock = null; }
+      } catch (e) { /* ditto */ }
+    }
+    document.addEventListener("visibilitychange", () => {
+      if (wantAwake && document.visibilityState === "visible") acquireWebLock();
+    });
 
     // Taps inside the menu / corner buttons must never reach the canvas
     // (mousedown fires the thruster on desktop).
@@ -1878,6 +1934,23 @@
     if (rawBuildTime.startsWith("__")) {
       buildTime.textContent = "dev (local build)";
     }
+    // App shells also show the INSTALLED app's version — "1.0 (42)",
+    // marketing version + the build number CI stamps from the workflow
+    // run (iOS CFBundleVersion / Android versionCode) — which can lag the
+    // bundled web revision above and is what App Store / Play releases
+    // are identified by. Android answers synchronously on the PegasusApp
+    // interface; iOS injects window.__pegAppBuild via a document-start
+    // user script. Neither exists on the plain website: the row stays
+    // hidden.
+    try {
+      let appBuild = "";
+      if (window.PegasusApp && PegasusApp.appBuild) appBuild = String(PegasusApp.appBuild());
+      else if (window.__pegAppBuild) appBuild = String(window.__pegAppBuild);
+      if (appBuild) {
+        document.getElementById("app-build").textContent = appBuild;
+        document.getElementById("app-build-row").style.display = "";
+      }
+    } catch (e) { /* a shell bridge must never break the game */ }
     // Render the baked UTC build time like the board timestamps (viewer's
     // timezone + region-derived locale). Called when About opens, so the
     // deferred locale scan has settled; unparseable values (dev fallback,
@@ -1933,7 +2006,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "897fc15";
+    const wasmRev = "0a528c2";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
