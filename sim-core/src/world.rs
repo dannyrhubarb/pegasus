@@ -90,6 +90,21 @@ pub struct Level {
     pub seed: u32,
     pub endless: bool, // no x-wrap: value-noise cave that never repeats
     pub terrain: Option<Terrain>, // Some = hand-drawn world, procedural gen off
+    // Hard run clock in physics ticks (0 = none): the run ENDS the tick the
+    // clock reaches the limit (`Sim.completed`, like a time level's last
+    // pad) — e.g. The Flux Sprint's "as far as you can in 60 seconds". The
+    // level file key is `time_limit` in SECONDS; it is stored as ticks so
+    // the cutoff is exact integer arithmetic (no float-accumulation drift
+    // between live play and resim). Physics-relevant → rides in
+    // LevelParams (replay format v5).
+    pub time_limit_ticks: u32,
+    // Goal time trial (0 = none): a FINISH pad at x = ±goal_distance metres
+    // whose first landing ENDS a time-scored run (`Sim.completed`) — e.g.
+    // The Flux Dash's "fly 1,000 m as fast as possible". Procedural levels
+    // only (hand-drawn maps place pads by hand; parse zeroes it under
+    // `terrain`). Physics-relevant (the finish decks are colliders) → rides
+    // in LevelParams (replay format v5).
+    pub goal_distance: f32,
     // `seed = random` in the level file: the frontend rolls a FRESH concrete
     // `seed` at every load/reset, so each attempt flies brand-new rock.
     // Metadata only — world generation reads `seed`, never this flag, and it
@@ -111,6 +126,8 @@ impl Level {
             seed: 0,
             endless: false,
             terrain: None,
+            time_limit_ticks: 0,
+            goal_distance: 0.0,
             random_seed: false,
         }
     }
@@ -158,6 +175,22 @@ impl Level {
                 "pad_spacing" => {
                     if let Ok(f) = v.parse::<f32>() {
                         lvl.pad_spacing = f.clamp(40.0, 2000.0);
+                    }
+                }
+                // Seconds in the file, ticks in the Level (see the field
+                // doc). Clamped well under the backend's 30-min resim cap.
+                "time_limit" => {
+                    if let Ok(f) = v.parse::<f32>() {
+                        lvl.time_limit_ticks =
+                            (f.clamp(5.0, 1200.0) / crate::sim::PHYSICS_DT).round() as u32;
+                    }
+                }
+                // Metres to the finish pad (see the field doc). The floor
+                // keeps the finish clear of the spawn/reset clearances; the
+                // cap keeps honest runs well under the resim ceiling.
+                "goal_distance" => {
+                    if let Ok(f) = v.parse::<f32>() {
+                        lvl.goal_distance = f.clamp(100.0, 20_000.0);
                     }
                 }
                 "seed" => {
@@ -210,6 +243,9 @@ impl Level {
             lvl.terrain = Some(Terrain { polys, pads, start, spawn_y });
             lvl.shafts = false;
             lvl.obstacles = false;
+            // The finish pad is procedural machinery (it sits on the cave
+            // floor curves) — hand-drawn maps place their pads by hand.
+            lvl.goal_distance = 0.0;
         }
         lvl
     }
@@ -260,6 +296,8 @@ impl Level {
             seed: self.seed,
             endless: self.endless as u8,
             terrain: self.terrain.clone(),
+            time_limit_ticks: self.time_limit_ticks,
+            goal_distance: self.goal_distance,
         }
     }
 
@@ -279,6 +317,8 @@ impl Level {
             seed: p.seed,
             endless: p.endless != 0,
             terrain: p.terrain.clone(),
+            time_limit_ticks: p.time_limit_ticks,
+            goal_distance: p.goal_distance,
             // A replay is always of ONE concrete world — the rolled seed
             // above is that world; re-rolling would break resim.
             random_seed: false,
@@ -362,6 +402,16 @@ impl Level {
                 ground = ground.max(pad.y);
             }
         }
+        // A goal level's finish deck counts too (inert on shipped levels —
+        // the spawn is never near the finish — but a reset/restore onto the
+        // deck must stand ON it, not inside it).
+        for side in [1i8, -1] {
+            if let Some(pad) = self.goal_pad_spec(side)
+                && (pad.cx - x).abs() <= PAD_HALF_W
+            {
+                ground = ground.max(pad.y);
+            }
+        }
         ground + 0.78
     }
 
@@ -407,6 +457,8 @@ pub fn shipped_levels() -> Vec<(&'static str, Level)> {
         ("expanse", Level::parse(include_str!("../../levels/expanse.level"))),
         ("glide", Level::parse(include_str!("../../levels/glide.level"))),
         ("flux", Level::parse(include_str!("../../levels/flux.level"))),
+        ("flux-sprint", Level::parse(include_str!("../../levels/flux-sprint.level"))),
+        ("flux-dash", Level::parse(include_str!("../../levels/flux-dash.level"))),
         ("hollows", Level::parse(include_str!("../../levels/hollows.level"))),
     ]
 }
@@ -551,6 +603,12 @@ impl Level {
             return None;
         }
 
+        // Keep a goal level's finish-pad approach clear (same idea as the
+        // spawn clearance — the finish must always be landable).
+        if self.goal_distance > 0.0 && (cx.abs() - self.goal_distance).abs() < 9.0 {
+            return None;
+        }
+
         let cy_wall = self.cave_center(cx);
         let hw = self.cave_half_width(cx);
 
@@ -620,18 +678,50 @@ pub const PAD_POINTS: u32 = 100;       // score for a first landing
 pub const PAD_LAND_TIME: f32 = 0.8;    // seconds settled before a landing counts
 pub const PAD_REFUEL_PER_S: f32 = 25.0; // fuel per second while parked on a pad
 
+// `Sim.pads` keys for the FINISH pads of a goal level ((slot, layer) like
+// every pad; sentinel slots far outside any real slot range — the sliding
+// window treats them by their true x position). Bit 0 / bit 1 of the
+// keyframe `visited` mask on goal levels (see `Sim::visited_mask`).
+pub const GOAL_SLOT_POS: i64 = i64::MAX;     // the +x finish
+pub const GOAL_SLOT_NEG: i64 = i64::MAX - 1; // the −x finish
+
 pub struct PadSpec {
     pub cx: f32,
     pub y: f32, // deck top = collider line
 }
 
 impl Level {
+    // The FINISH pad of a goal level (side +1 = x = +goal_distance, −1 =
+    // the mirror): a plain deck whose first landing ends a time-scored run.
+    // Unlike pad_spec slots it is NEVER skipped — the finish must exist
+    // whatever the local cave shape — so obstacle_spec and pad_spec keep
+    // clear of it instead (below). Same deck-over-max-floor construction
+    // as pad_spec, so the collider never dips into rock.
+    pub fn goal_pad_spec(&self, side: i8) -> Option<PadSpec> {
+        if self.goal_distance <= 0.0 {
+            return None;
+        }
+        let cx = self.goal_distance * side as f32;
+        let mut y = f32::NEG_INFINITY;
+        for i in 0..=12 {
+            let x = cx - PAD_HALF_W + i as f32 * (PAD_HALF_W / 6.0);
+            y = y.max(self.cave_center(x) - self.cave_half_width(x));
+        }
+        Some(PadSpec { cx, y: y + 0.1 })
+    }
+
     pub fn pad_spec(&self, p: i64) -> Option<PadSpec> {
         let mut rng = Rng::new(self.slot_seed(p as u32) ^ 0x50AD_5EED);
         let cx = p as f32 * self.pad_spacing + rng.range(-20.0, 20.0);
 
         // Need headroom to come down vertically.
         if self.cave_half_width(cx) < 5.0 {
+            return None;
+        }
+
+        // Keep clear of a goal level's finish pads — overlapping decks
+        // would double-stack colliders at the finish.
+        if self.goal_distance > 0.0 && (cx.abs() - self.goal_distance).abs() < 12.0 {
             return None;
         }
 
