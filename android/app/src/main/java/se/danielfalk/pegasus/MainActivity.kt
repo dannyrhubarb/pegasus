@@ -48,7 +48,7 @@ class MainActivity : Activity() {
             allowFileAccess = false
             allowContentAccess = false
         }
-        // The page's syncNativeWake calls this while the canvas is live
+        // The page's syncWakeLock calls this while the canvas is live
         // (flying / watching a replay) so a hands-off glide can't hit the
         // screen timeout; any open menu screen toggles it back off. Only
         // bundled content runs in this WebView (external links leave for

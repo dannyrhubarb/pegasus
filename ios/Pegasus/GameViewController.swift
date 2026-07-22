@@ -27,7 +27,7 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
         config.setURLSchemeHandler(WebRootSchemeHandler(), forURLScheme: WebRootSchemeHandler.scheme)
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
-        // The page's syncNativeWake posts here while the canvas is live
+        // The page's syncWakeLock posts here while the canvas is live
         // (flying / watching a replay) so the screen stays on through a
         // hands-off glide; any menu screen posts false and the idle timer
         // resumes. (The controller lives for the whole app lifetime, so the
