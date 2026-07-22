@@ -1556,7 +1556,9 @@ WakeLock permission, auto-released when the window isn't visible).
   origin for localStorage. The handler **strips query strings** (`?v=`,
   `?fresh=`) and **404s missing optional files** — both load-bearing. The
   webview fills the WHOLE screen, not the safe area (the page reads
-  `env(safe-area-inset-*)` itself via `viewport-fit=cover`); scrolling/
+  `env(safe-area-inset-*)` itself via `viewport-fit=cover`); the **status
+  bar stays visible** (light content), drawn over the game's starfield —
+  the HUD/menu already lay out below the top safe-area inset; scrolling/
   bounce off; **back-forward gestures ON** (edge-swipe = the game's own
   one-screen-back history stack, same as Safari); http(s) links open in
   Safari, `target="_blank"` bundle pages (third-party licenses) load in
@@ -1599,9 +1601,10 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   back = the game's own one-screen-back history stack (the site already
   implements Android back); external links open the browser;
   `android:configChanges` keeps the activity (= the live game) alive
-  across rotation; edge-to-edge immersive with cutout `shortEdges`; the
-  `PegasusApp` JS interface is the Android half of the keep-awake bridge
-  (see "iOS app").
+  across rotation; edge-to-edge with cutout `shortEdges` — the **status
+  bar stays visible** (transparent, over the game), only the navigation
+  bar is hidden (swipe to reveal); the `PegasusApp` JS interface is the
+  Android half of the keep-awake bridge (see "iOS app").
 - **CI**: `android-build.yml` (PRs touching `android/` — debug APK built
   on ubuntu + attached as an installable artifact, no secrets) and
   `android-release.yml` (manual dispatch + `main` pushes touching
