@@ -1528,16 +1528,18 @@ iOS app — the game runs unmodified in a full-screen WKWebView (same WebKit
 as iOS Safari). Built and signed on a Mac with Xcode; `ios/README.md` has
 the full walkthrough (free-Apple-ID device signing vs. the paid program).
 Not part of the web deploy pipeline. `index.html`'s only app-awareness is
-the **native keep-awake bridge** (`syncNativeWake`, next to
+the **screen wake lock** (`syncWakeLock`, next to
 `showScreen`/`closeMenu`): while the canvas is live — no menu screen up:
-flight, the wreck phase, or replay playback — the page asks the wrapper to
-hold the screen on (a hands-off glide or replay has no touches, so the OS
-screen timeout would otherwise dim mid-run), and any open screen releases
-it. Both bridge endpoints are feature-detected + try/caught, so the plain
-website is a no-op: iOS = the `pegasusKeepAwake` `WKScriptMessageHandler`
-(→ `UIApplication.isIdleTimerDisabled`), Android = the `PegasusApp`
-`@JavascriptInterface` (→ `webView.keepScreenOn` — a View flag, no
-WakeLock permission, auto-released when the window isn't visible).
+flight, the wreck phase, or replay playback — the page holds the screen
+on (a hands-off glide or replay has no touches, so the OS screen timeout
+would otherwise dim mid-run), and any open screen releases it. Three
+holders, each feature-detected + try/caught: iOS = the `pegasusKeepAwake`
+`WKScriptMessageHandler` (→ `UIApplication.isIdleTimerDisabled`), Android
+= the `PegasusApp` `@JavascriptInterface` (→ `webView.keepScreenOn` — a
+View flag, no WakeLock permission, auto-released when the window isn't
+visible), and the plain website = the browser **Screen Wake Lock API**
+(Safari 16.4+/Chrome; the sentinel is force-released on tab-hide and
+re-acquired on the `visibilitychange` back while still wanted).
 - `ios/sync-web.sh` assembles `ios/Pegasus/WebRoot/` (**gitignored** build
   product, like `pegasus.wasm`; a `.gitkeep` holds the folder for Xcode).
   It mirrors `.github/actions/build-site` — **keep them in sync when the

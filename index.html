@@ -1369,7 +1369,7 @@
       // screen isn't up, so this entry point is what keeps it fresh).
       if (id === "scr-scores") renderScores();
       if (id === "scr-about") renderBuildTime();
-      syncNativeWake();
+      syncWakeLock();
       pegAnalytics.screen(id); // funnel signal (consecutive-deduped inside)
       syncHistory();
     }
@@ -1378,33 +1378,57 @@
       menuEl.classList.remove("open");
       hudBtns.classList.add("on");
       setPause(0);
-      syncNativeWake();
+      syncWakeLock();
       syncHistory();
     }
 
-    // Native-app screen wake lock: a hands-off stretch (coasting a long
-    // glide, watching a replay) has no touches, so the OS screen timeout
-    // would otherwise dim mid-run. While the canvas is live — no menu
-    // screen up: flight, the wreck phase, or replay playback — ask the
-    // wrapping app to hold the screen awake; any open screen releases it.
-    // Both bridges are absent on the plain website, so this is a no-op
-    // there: the iOS shell installs a `pegasusKeepAwake` script message
-    // handler (→ isIdleTimerDisabled), the Android shell a `PegasusApp`
-    // JS interface (→ keepScreenOn).
-    let nativeAwake = false;
-    function syncNativeWake() {
+    // Screen wake lock: a hands-off stretch (coasting a long glide,
+    // watching a replay) has no touches, so the OS screen timeout would
+    // otherwise dim mid-run. While the canvas is live — no menu screen up:
+    // flight, the wreck phase, or replay playback — hold the screen awake;
+    // any open screen releases it. Three holders, each feature-detected +
+    // try/caught so every build uses what it has: the iOS shell's
+    // `pegasusKeepAwake` message handler (→ isIdleTimerDisabled), the
+    // Android shell's `PegasusApp` JS interface (→ keepScreenOn), and the
+    // browser's Screen Wake Lock API for the plain website (Safari 16.4+ /
+    // Chrome; older browsers just keep their timeout).
+    let wantAwake = false;
+    let webLock = null;      // held Screen Wake Lock sentinel
+    let webLockBusy = false; // a request() is in flight
+    function acquireWebLock() {
+      if (!("wakeLock" in navigator) || webLock || webLockBusy) return;
+      webLockBusy = true;
+      navigator.wakeLock.request("screen").then(s => {
+        webLockBusy = false;
+        // The want flipped (or the sentinel already died) while the async
+        // request ran — don't adopt it.
+        if (!wantAwake || s.released) { s.release().catch(() => {}); return; }
+        webLock = s;
+        // The browser force-releases on tab-hide; track it so the
+        // visibilitychange handler below knows to re-acquire.
+        s.addEventListener("release", () => { if (webLock === s) webLock = null; });
+      }).catch(() => { webLockBusy = false; }); // denied (hidden tab, battery saver)
+    }
+    function syncWakeLock() {
       const on = overlay === null;
-      if (on === nativeAwake) return;
-      nativeAwake = on;
+      if (on === wantAwake) return;
+      wantAwake = on;
       try {
         if (window.PegasusApp && PegasusApp.setKeepAwake) PegasusApp.setKeepAwake(on);
-      } catch (e) { /* a shell bridge must never break the game */ }
+      } catch (e) { /* a wake-lock holder must never break the game */ }
       try {
         const wk = window.webkit;
         if (wk && wk.messageHandlers && wk.messageHandlers.pegasusKeepAwake)
           wk.messageHandlers.pegasusKeepAwake.postMessage(on);
       } catch (e) { /* ditto */ }
+      try {
+        if (on) acquireWebLock();
+        else if (webLock) { webLock.release().catch(() => {}); webLock = null; }
+      } catch (e) { /* ditto */ }
     }
+    document.addEventListener("visibilitychange", () => {
+      if (wantAwake && document.visibilityState === "visible") acquireWebLock();
+    });
 
     // Taps inside the menu / corner buttons must never reach the canvas
     // (mousedown fires the thruster on desktop).
