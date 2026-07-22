@@ -10,7 +10,10 @@ import WebKit
 final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDelegate {
     private var webView: WKWebView!
 
-    override var prefersStatusBarHidden: Bool { true }
+    // The status bar stays visible, drawn over the game's starfield (the
+    // page lays its HUD out below env(safe-area-inset-top), so nothing
+    // hides behind it); light content for the dark background.
+    override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
     // First bottom swipe shows the home indicator, second leaves the app —
     // keeps an accidental swipe during a low pass from killing the run.
