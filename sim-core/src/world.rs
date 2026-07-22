@@ -90,6 +90,14 @@ pub struct Level {
     pub seed: u32,
     pub endless: bool, // no x-wrap: value-noise cave that never repeats
     pub terrain: Option<Terrain>, // Some = hand-drawn world, procedural gen off
+    // Hard run clock in physics ticks (0 = none): the run ENDS the tick the
+    // clock reaches the limit (`Sim.completed`, like a time level's last
+    // pad) — e.g. The Flux Sprint's "as far as you can in 60 seconds". The
+    // level file key is `time_limit` in SECONDS; it is stored as ticks so
+    // the cutoff is exact integer arithmetic (no float-accumulation drift
+    // between live play and resim). Physics-relevant → rides in
+    // LevelParams (replay format v5).
+    pub time_limit_ticks: u32,
     // `seed = random` in the level file: the frontend rolls a FRESH concrete
     // `seed` at every load/reset, so each attempt flies brand-new rock.
     // Metadata only — world generation reads `seed`, never this flag, and it
@@ -111,6 +119,7 @@ impl Level {
             seed: 0,
             endless: false,
             terrain: None,
+            time_limit_ticks: 0,
             random_seed: false,
         }
     }
@@ -158,6 +167,14 @@ impl Level {
                 "pad_spacing" => {
                     if let Ok(f) = v.parse::<f32>() {
                         lvl.pad_spacing = f.clamp(40.0, 2000.0);
+                    }
+                }
+                // Seconds in the file, ticks in the Level (see the field
+                // doc). Clamped well under the backend's 30-min resim cap.
+                "time_limit" => {
+                    if let Ok(f) = v.parse::<f32>() {
+                        lvl.time_limit_ticks =
+                            (f.clamp(5.0, 1200.0) / crate::sim::PHYSICS_DT).round() as u32;
                     }
                 }
                 "seed" => {
@@ -260,6 +277,7 @@ impl Level {
             seed: self.seed,
             endless: self.endless as u8,
             terrain: self.terrain.clone(),
+            time_limit_ticks: self.time_limit_ticks,
         }
     }
 
@@ -279,6 +297,7 @@ impl Level {
             seed: p.seed,
             endless: p.endless != 0,
             terrain: p.terrain.clone(),
+            time_limit_ticks: p.time_limit_ticks,
             // A replay is always of ONE concrete world — the rolled seed
             // above is that world; re-rolling would break resim.
             random_seed: false,
@@ -407,6 +426,7 @@ pub fn shipped_levels() -> Vec<(&'static str, Level)> {
         ("expanse", Level::parse(include_str!("../../levels/expanse.level"))),
         ("glide", Level::parse(include_str!("../../levels/glide.level"))),
         ("flux", Level::parse(include_str!("../../levels/flux.level"))),
+        ("flux-sprint", Level::parse(include_str!("../../levels/flux-sprint.level"))),
         ("hollows", Level::parse(include_str!("../../levels/hollows.level"))),
     ]
 }
