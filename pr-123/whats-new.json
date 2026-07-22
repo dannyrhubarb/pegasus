@@ -1,5 +1,10 @@
 [
  {
+  "rev": "eb943b6",
+  "date": "2026-07-22T12:50:57Z",
+  "note": "The website now keeps the screen awake while you fly or watch a replay, like the apps"
+ },
+ {
   "rev": "2e9221c",
   "date": "2026-07-22T12:37:24Z",
   "note": "The Android and iOS apps show the status bar (clock, battery) on top of the game"
