@@ -91,9 +91,11 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Edge-to-edge immersive: the game draws under the cutout and system
-     * bars (the page uses viewport-fit=cover and lays itself out via
-     * safe-area insets); bars reappear on a swipe.
+     * Edge-to-edge: the game draws under the cutout and system bars (the
+     * page uses viewport-fit=cover and lays itself out via safe-area
+     * insets). The STATUS bar stays visible — transparent (theme), drawn
+     * over the game's starfield; only the navigation bar is hidden and
+     * reappears on a swipe.
      */
     private fun enterImmersiveMode() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -103,7 +105,7 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.setDecorFitsSystemWindows(false)
             window.insetsController?.let {
-                it.hide(android.view.WindowInsets.Type.systemBars())
+                it.hide(android.view.WindowInsets.Type.navigationBars())
                 it.systemBarsBehavior =
                     android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             }
@@ -111,7 +113,6 @@ class MainActivity : Activity() {
             @Suppress("DEPRECATION")
             window.decorView.systemUiVisibility = (
                 View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                    or View.SYSTEM_UI_FLAG_FULLSCREEN
                     or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                     or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
                     or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
