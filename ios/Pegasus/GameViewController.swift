@@ -33,6 +33,19 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
         // resumes. (The controller lives for the whole app lifetime, so the
         // handler's strong reference to it is harmless.)
         config.userContentController.add(self, name: "pegasusKeepAwake")
+        // Surface the INSTALLED app's version to the page for the About
+        // screen's "App build" row: "1.0 (42)" — CFBundleShortVersionString
+        // + CFBundleVersion (CI stamps the latter with the workflow run
+        // number). Injected before the page's scripts run so the About
+        // code can read it synchronously.
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        config.userContentController.addUserScript(WKUserScript(
+            source: "window.__pegAppBuild = \"\(version) (\(build))\"",
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        ))
 
         webView = WKWebView(frame: view.bounds, configuration: config)
         // Fill the WHOLE screen, not the safe area: the page uses

@@ -48,12 +48,11 @@ class MainActivity : Activity() {
             allowFileAccess = false
             allowContentAccess = false
         }
-        // The page's syncWakeLock calls this while the canvas is live
-        // (flying / watching a replay) so a hands-off glide can't hit the
-        // screen timeout; any open menu screen toggles it back off. Only
-        // bundled content runs in this WebView (external links leave for
-        // the browser), so exposing the interface is safe.
-        webView.addJavascriptInterface(KeepAwakeBridge(), "PegasusApp")
+        // The page's shell bridge (wake lock + app version — see
+        // PegasusBridge). Only bundled content runs in this WebView
+        // (external links leave for the browser), so exposing the
+        // interface is safe.
+        webView.addJavascriptInterface(PegasusBridge(), "PegasusApp")
         WebView.setWebContentsDebuggingEnabled(
             applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
         )
@@ -122,14 +121,35 @@ class MainActivity : Activity() {
     }
 
     /**
-     * JS bridge behind `window.PegasusApp`: the wake lock rides the View
-     * flag (not a WakeLock permission) and only holds while this window is
-     * visible, so backgrounding the app always releases it.
+     * JS bridge behind `window.PegasusApp`.
+     *
+     * setKeepAwake: the page's syncWakeLock holds the screen on while the
+     * canvas is live (flying / watching a replay) — a View flag (not a
+     * WakeLock permission) that only holds while this window is visible,
+     * so backgrounding the app always releases it.
+     *
+     * appBuild: the INSTALLED app's version for the About screen's "App
+     * build" row — "1.0 (42)", versionName + the versionCode CI stamps
+     * with the workflow run number.
      */
-    private inner class KeepAwakeBridge {
+    private inner class PegasusBridge {
         @JavascriptInterface
         fun setKeepAwake(on: Boolean) {
             runOnUiThread { webView.keepScreenOn = on }
+        }
+
+        @JavascriptInterface
+        fun appBuild(): String = try {
+            val info = packageManager.getPackageInfo(packageName, 0)
+            val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                info.longVersionCode
+            } else {
+                @Suppress("DEPRECATION")
+                info.versionCode.toLong()
+            }
+            "${info.versionName} ($code)"
+        } catch (e: Exception) {
+            ""
         }
     }
 

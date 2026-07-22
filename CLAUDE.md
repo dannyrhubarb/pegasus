@@ -203,7 +203,12 @@ while the wasm loads):
   submit-score dialog in edit mode (see "Online high scores").
 - **scr-about**: build **git revision** + **build time** (deploy-time `sed`
   of `__GIT_REVISION__` / `__BUILD_TIME__` placeholders by `build-site`;
-  local fallback "dev (local build)" via `startsWith("__")`), the
+  local fallback "dev (local build)" via `startsWith("__")`), an **App
+  build** row shown only in the app shells (`#app-build-row`, the
+  INSTALLED app's version — "1.0 (42)", marketing version + the CI
+  run-number build — read from the shell bridges: Android
+  `PegasusApp.appBuild()`, iOS the `window.__pegAppBuild` document-start
+  user script; hidden on the plain website), the
   **What's new** button (`#btn-whatsnew` → **scr-whatsnew**, the changelog
   screen — see "What's new page") and the
   **⟳ Reload latest build** button (`#force-reload`, same `?fresh=<ts>`
@@ -1564,8 +1569,12 @@ re-acquired on the `visibilitychange` back while still wanted).
   bounce off; **back-forward gestures ON** (edge-swipe = the game's own
   one-screen-back history stack, same as Safari); http(s) links open in
   Safari, `target="_blank"` bundle pages (third-party licenses) load in
-  place with swipe-back. WebRoot ships as an Xcode **folder reference**,
-  so re-running the sync + rebuilding needs no project edits.
+  place with swipe-back. A document-start `WKUserScript` injects
+  `window.__pegAppBuild` ("1.0 (42)" — CFBundleShortVersionString +
+  CFBundleVersion, the latter stamped with the CI run number) for the
+  About screen's App build row. WebRoot ships as an Xcode **folder
+  reference**, so re-running the sync + rebuilding needs no project
+  edits.
 - App icon: `icon.svg` rendered to an opaque 1024×1024 PNG in
   `Assets.xcassets` (no alpha — App Store validation rejects it);
   re-render if the SVG changes.
@@ -1606,7 +1615,9 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   across rotation; edge-to-edge with cutout `shortEdges` — the **status
   bar stays visible** (transparent, over the game), only the navigation
   bar is hidden (swipe to reveal); the `PegasusApp` JS interface is the
-  Android half of the keep-awake bridge (see "iOS app").
+  Android half of the keep-awake bridge (see "iOS app") and also answers
+  `appBuild()` (versionName + versionCode) for the About screen's App
+  build row.
 - **CI**: `android-build.yml` (PRs touching `android/` — debug APK built
   on ubuntu + attached as an installable artifact, no secrets) and
   `android-release.yml` (manual dispatch + `main` pushes touching
