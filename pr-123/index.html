@@ -1035,11 +1035,17 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">eb943b6-pr-123</div>
+        <div class="info-value" id="git-rev">c70f88a-pr-123</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-22T12:51:54Z</div>
+        <div class="info-value" id="build-time">2026-07-22T13:08:08Z</div>
+      </div>
+      <!-- App shells only (iOS/Android): the installed app's version +
+           build number, filled from the shell bridge; hidden on the web. -->
+      <div class="info-row" id="app-build-row" style="display:none">
+        <div class="info-label">App build</div>
+        <div class="info-value" id="app-build"></div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors, which site
@@ -1928,6 +1934,23 @@
     if (rawBuildTime.startsWith("__")) {
       buildTime.textContent = "dev (local build)";
     }
+    // App shells also show the INSTALLED app's version — "1.0 (42)",
+    // marketing version + the build number CI stamps from the workflow
+    // run (iOS CFBundleVersion / Android versionCode) — which can lag the
+    // bundled web revision above and is what App Store / Play releases
+    // are identified by. Android answers synchronously on the PegasusApp
+    // interface; iOS injects window.__pegAppBuild via a document-start
+    // user script. Neither exists on the plain website: the row stays
+    // hidden.
+    try {
+      let appBuild = "";
+      if (window.PegasusApp && PegasusApp.appBuild) appBuild = String(PegasusApp.appBuild());
+      else if (window.__pegAppBuild) appBuild = String(window.__pegAppBuild);
+      if (appBuild) {
+        document.getElementById("app-build").textContent = appBuild;
+        document.getElementById("app-build-row").style.display = "";
+      }
+    } catch (e) { /* a shell bridge must never break the game */ }
     // Render the baked UTC build time like the board timestamps (viewer's
     // timezone + region-derived locale). Called when About opens, so the
     // deferred locale scan has settled; unparseable values (dev fallback,
@@ -1983,7 +2006,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "eb943b6-pr-123";
+    const wasmRev = "c70f88a-pr-123";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
