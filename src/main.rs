@@ -2295,18 +2295,37 @@ async fn main() {
                 draw_line(top.x, top.y + deck_h, bot.x, bot.y, 3.0 * dpi,
                     Color::from_rgba(60, 68, 82, 255));
             }
-            // Beacons: blinking green until first landing, then steady blue.
+            // Beacons: blinking green until first landing, then steady
+            // blue. The FINISH pad of a goal level blinks gold instead —
+            // faster and bigger, it reads as "objective", distinct from
+            // the refuel pads on the way.
+            let is_goal = pad_key.0 == GOAL_SLOT_POS || pad_key.0 == GOAL_SLOT_NEG;
             let visited = world_sim.visited_pads.contains(&pad_key);
-            let bc = if visited {
+            let bc = if is_goal {
+                if visited {
+                    Color::from_rgba(255, 210, 90, 230)
+                } else if (get_time() * 9.0).sin() > 0.0 {
+                    Color::from_rgba(255, 200, 60, 255)
+                } else {
+                    Color::from_rgba(120, 90, 25, 255)
+                }
+            } else if visited {
                 Color::from_rgba(110, 140, 200, 200)
             } else if (get_time() * 5.0).sin() > 0.0 {
                 Color::from_rgba(80, 240, 120, 255)
             } else {
                 Color::from_rgba(30, 90, 50, 255)
             };
+            let br = if is_goal { 3.5 } else { 2.5 };
             for side in [-1.0f32, 1.0] {
                 let p = w2s(pad.cx + side * (PAD_HALF_W - 0.15), pad.y + 0.12, sh, cam_x, cam_y);
-                draw_circle(p.x, p.y, 2.5 * dpi, bc);
+                draw_circle(p.x, p.y, br * dpi, bc);
+            }
+            // …plus a centre beacon on the finish, so the trio is
+            // unmistakable at speed.
+            if is_goal {
+                let p = w2s(pad.cx, pad.y + 0.12, sh, cam_x, cam_y);
+                draw_circle(p.x, p.y, br * dpi, bc);
             }
         }
 
@@ -2975,12 +2994,15 @@ async fn main() {
                 let y = to_mm_y(pad.y).clamp(mm_oy, mm_oy + mm_h);
                 let x0 = to_mm_x(pad.cx - PAD_HALF_W).clamp(mm_ox, mm_ox + mm_w);
                 let x1 = to_mm_x(pad.cx + PAD_HALF_W).clamp(mm_ox, mm_ox + mm_w);
-                let c = if world_sim.visited_pads.contains(&pad_key) {
+                let is_goal = pad_key.0 == GOAL_SLOT_POS || pad_key.0 == GOAL_SLOT_NEG;
+                let c = if is_goal {
+                    Color::from_rgba(255, 200, 60, 255) // the gold finish
+                } else if world_sim.visited_pads.contains(&pad_key) {
                     Color::from_rgba(110, 140, 200, 220)
                 } else {
                     Color::from_rgba(90, 240, 130, 255)
                 };
-                draw_line(x0, y, x1, y, 2.0 * dpi, c);
+                draw_line(x0, y, x1, y, if is_goal { 3.0 } else { 2.0 } * dpi, c);
             }
 
             // Start platform: neutral grey line, matching its in-world deck.
@@ -3069,14 +3091,23 @@ async fn main() {
                 format!("BEST {:.0} m", get_best_dist()),
             ),
             Scoring::Pads => (format!("{}", world_sim.score), "SCORE".to_string()),
-            // Time level: pads visited over the total, with the run clock
+            // Time level: pads visited over the total (or, on a goal time
+            // trial, progress toward the finish pad), with the run clock
             // beneath (frozen by the sim once the level completes).
             Scoring::Time => (
-                format!(
-                    "{}/{}",
-                    world_sim.visited_pads.len(),
-                    world_sim.level.terrain.as_ref().map_or(0, |t| t.pads.len())
-                ),
+                if world_sim.level.goal_distance > 0.0 {
+                    format!(
+                        "{:.0}/{:.0} m",
+                        world_sim.max_dist.min(world_sim.level.goal_distance),
+                        world_sim.level.goal_distance
+                    )
+                } else {
+                    format!(
+                        "{}/{}",
+                        world_sim.visited_pads.len(),
+                        world_sim.level.terrain.as_ref().map_or(0, |t| t.pads.len())
+                    )
+                },
                 format!("TIME {}", fmt_run_time(world_sim.run_ticks)),
             ),
         };
@@ -3852,6 +3883,18 @@ mod tests {
             (60.0 / PHYSICS_DT).round() as u32,
             "the Sprint's clock is exactly one minute"
         );
+
+        // The Flux Dash: the same endless random cave as a 1,000 m time
+        // trial — land on the finish pad, lowest time wins.
+        let dash = Level::parse(include_str!("../levels/flux-dash.level"));
+        assert_eq!(dash.name, "The Flux Dash");
+        assert_eq!(dash.scoring, Scoring::Time);
+        assert!(dash.endless);
+        assert!(!dash.shafts);
+        assert!(dash.obstacles);
+        assert!(dash.random_seed, "the Dash reshuffles per attempt like The Flux");
+        assert_eq!(dash.goal_distance, 1000.0, "the finish pad sits 1,000 m out");
+        assert_eq!(dash.time_limit_ticks, 0, "the Dash has no hard clock — the clock IS the score");
     }
 
     #[test]

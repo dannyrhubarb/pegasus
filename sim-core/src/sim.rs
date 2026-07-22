@@ -319,6 +319,21 @@ impl Sim {
             self.completed = self.level.scoring == Scoring::Time
                 && !t.pads.is_empty()
                 && self.visited_pads.len() == t.pads.len();
+        } else if self.level.goal_distance > 0.0 {
+            // Goal levels: mask bits 0/1 are the finish pads (restored on
+            // layer 0 — which y-wrap copy was landed is cosmetic). A set
+            // bit means the finish was reached: the run is complete, and
+            // the ship sits parked on the deck like a Hollows finish.
+            // Regular pad visits keep their session-state semantics.
+            for (bit, slot) in [(1u64, GOAL_SLOT_POS), (2u64, GOAL_SLOT_NEG)] {
+                if kf.visited & bit != 0 {
+                    self.visited_pads.insert((slot, 0));
+                } else {
+                    self.visited_pads.retain(|&(s, _)| s != slot);
+                }
+            }
+            self.completed =
+                self.level.scoring == Scoring::Time && kf.visited & 3 != 0;
         }
         // Time-limited runs: the clock rides in the keyframe, so a restore
         // at or past the limit lands on the frozen finish — completed and
@@ -381,13 +396,21 @@ impl Sim {
         }
     }
 
-    // The hand-drawn pad-visit bitmask for keyframes (bit i = terrain pad i
-    // visited; 0 on procedural levels — see the Keyframe doc in replay.rs).
+    // The pad-visit bitmask for keyframes: bit i = terrain pad i visited on
+    // hand-drawn levels; on goal levels bit 0 = the +x finish pad, bit 1 =
+    // the −x one (any layer — the y-wrap copies are the same finish); 0 on
+    // plain procedural levels — see the Keyframe doc in replay.rs.
     pub fn visited_mask(&self) -> u64 {
-        let Some(t) = &self.level.terrain else { return 0 };
-        (0..t.pads.len().min(64))
-            .filter(|&i| self.visited_pads.contains(&(i as i64, 0)))
-            .fold(0u64, |m, i| m | (1 << i))
+        if let Some(t) = &self.level.terrain {
+            (0..t.pads.len().min(64))
+                .filter(|&i| self.visited_pads.contains(&(i as i64, 0)))
+                .fold(0u64, |m, i| m | (1 << i))
+        } else if self.level.goal_distance > 0.0 {
+            let bit = |slot: i64| self.visited_pads.iter().any(|&(s, _)| s == slot) as u64;
+            bit(GOAL_SLOT_POS) | (bit(GOAL_SLOT_NEG) << 1)
+        } else {
+            0
+        }
     }
 
     // Advance the world by one PHYSICS_DT under `input`.
@@ -559,18 +582,29 @@ impl Sim {
                                 self.score += PAD_POINTS;
                                 report.scored = true;
                             }
-                            // Time level: the visit flashes on the HUD, and
-                            // the LAST pad completes the level — run over,
-                            // run_ticks (frozen above from the next tick) is
-                            // the score.
+                            // Time level: the completing landing ends the
+                            // run — run_ticks (frozen from the next tick)
+                            // is the score. On a hand-drawn level that is
+                            // the LAST unvisited pad (the visit flashes on
+                            // the HUD); on a goal level it is the FINISH
+                            // pad only — regular pads just register (beacon
+                            // turns blue) and refuel, no flash.
                             Scoring::Time => {
-                                report.scored = true;
-                                if self.level.terrain.as_ref().is_some_and(|t| {
-                                    !t.pads.is_empty()
-                                        && self.visited_pads.len() == t.pads.len()
-                                }) {
-                                    self.completed = true;
-                                    report.completed = true;
+                                if self.level.goal_distance > 0.0 {
+                                    if key.0 == GOAL_SLOT_POS || key.0 == GOAL_SLOT_NEG {
+                                        report.scored = true;
+                                        self.completed = true;
+                                        report.completed = true;
+                                    }
+                                } else {
+                                    report.scored = true;
+                                    if self.level.terrain.as_ref().is_some_and(|t| {
+                                        !t.pads.is_empty()
+                                            && self.visited_pads.len() == t.pads.len()
+                                    }) {
+                                        self.completed = true;
+                                        report.completed = true;
+                                    }
                                 }
                             }
                             Scoring::Distance => {}
@@ -795,7 +829,16 @@ impl Sim {
         let p_left = ((win_left_x - 20.0) / level.pad_spacing).floor() as i64;
         let p_right = ((win_right_x + 20.0) / level.pad_spacing).ceil() as i64;
         self.pads.retain(|&(p, layer), pad| {
-            if p < p_left || p > p_right || layer < lay_lo || layer > lay_hi {
+            // Finish pads are keyed on the GOAL_SLOT_* sentinels (outside
+            // any real slot range), so their window test uses the true x
+            // position — with the same ±20 m margin as the slot window, so
+            // retain and the insert below agree and never churn.
+            let in_x = if p == GOAL_SLOT_POS || p == GOAL_SLOT_NEG {
+                pad.cx >= win_left_x - 20.0 && pad.cx <= win_right_x + 20.0
+            } else {
+                p >= p_left && p <= p_right
+            };
+            if !in_x || layer < lay_lo || layer > lay_hi {
                 colliders.remove(pad.handle, island_manager, bodies, false);
                 false
             } else {
@@ -808,6 +851,32 @@ impl Sim {
                 let Some(spec) = level.pad_spec(p) else { continue };
                 let y = spec.y + layer as f32 * V_PERIOD;
                 // High friction, no restitution: settle, don't skate.
+                let handle = colliders.insert(
+                    ColliderBuilder::segment(
+                        point![spec.cx - PAD_HALF_W, y],
+                        point![spec.cx + PAD_HALF_W, y],
+                    )
+                    .friction(0.9)
+                    .build(),
+                );
+                e.insert(Pad { handle, cx: spec.cx, y });
+            }
+        }
+
+        // Finish pads (goal levels): one deck at x = ±goal_distance per
+        // layer, keyed on the GOAL_SLOT_* sentinels — never skipped (the
+        // finish must exist) and replicated per layer like every pad (the
+        // y-wrap). Inserted after the slot pads each sync, so the op
+        // sequence stays a pure function of the window-key sequence
+        // (deterministic handle numbering, same as everything above).
+        for (slot, side) in [(GOAL_SLOT_POS, 1i8), (GOAL_SLOT_NEG, -1)] {
+            let Some(spec) = level.goal_pad_spec(side) else { continue };
+            if spec.cx < win_left_x - 20.0 || spec.cx > win_right_x + 20.0 {
+                continue;
+            }
+            for layer in lay_lo..=lay_hi {
+                let Entry::Vacant(e) = self.pads.entry((slot, layer)) else { continue };
+                let y = spec.y + layer as f32 * V_PERIOD;
                 let handle = colliders.insert(
                     ColliderBuilder::segment(
                         point![spec.cx - PAD_HALF_W, y],
@@ -1196,6 +1265,91 @@ mod tests {
         let live_kfs = rec.keyframes.clone();
         // Post-completion keyframes carry the frozen clock.
         assert!(live_kfs.last().unwrap().run_ticks == 720);
+        let blob = rec.serialize(0);
+        assert_eq!(
+            u16::from_le_bytes([blob[4], blob[5]]),
+            crate::replay::REPLAY_FORMAT_VERSION_V5
+        );
+        let (back, _) = Recording::deserialize(&blob).expect("v5 blob decodes");
+        let resimmed = resim(&back);
+        assert_eq!(resimmed.len(), live_kfs.len());
+        for (a, b) in live_kfs.iter().zip(&resimmed) {
+            assert_physics_eq(a, b);
+        }
+    }
+
+    #[test]
+    fn landing_on_the_finish_pad_completes_a_goal_time_trial() {
+        // A goal level (procedural time trial): settling on the FINISH pad
+        // at x = ±goal_distance ends the run — completed fires, the mask
+        // carries the goal bit, the clock freezes, and a keyframe restore
+        // lands back on the completed finish.
+        let level = Level::parse(
+            "name = D\nscoring = time\nshafts = off\nobstacles = on\n\
+             endless = on\nseed = 9\ngoal_distance = 100",
+        );
+        assert_eq!(level.goal_distance, 100.0);
+        let mut sim = Sim::new(level.clone());
+        // Stand the ship on the finish deck (stand_y prefers it) and let
+        // the settle timer register the landing — no piloting needed.
+        sim.restore(&spawn_keyframe(&level, 100.0));
+        let mut completed_at = None;
+        for t in 0..600 {
+            let rep = sim.tick(InputState::default());
+            if rep.completed {
+                completed_at = Some(t);
+                break;
+            }
+        }
+        let at = completed_at.expect("settling on the finish pad must end the run");
+        assert!(sim.completed && !sim.crashed);
+        assert!(
+            at as f32 * PHYSICS_DT >= PAD_LAND_TIME - 0.1,
+            "landing registered before the settle time: tick {at}"
+        );
+        assert_eq!(sim.visited_mask(), 1, "the +x finish is mask bit 0");
+        let final_ticks = sim.run_ticks;
+        // Controls are dead and the clock stays frozen.
+        for _ in 0..120 {
+            let rep = sim.tick(InputState::from_controls(1.0, 0, 0.0, 0.0, false));
+            assert!(!rep.completed, "completed must fire exactly once");
+        }
+        assert_eq!(sim.run_ticks, final_ticks, "run clock must stay frozen");
+        // A keyframe taken now restores the completed finish state.
+        let kf2 = sim.keyframe(final_ticks + 120, 0.0);
+        assert_eq!(kf2.visited, 1);
+        let mut sim2 = Sim::new(level);
+        sim2.restore(&kf2);
+        assert!(sim2.completed, "a restored finish keyframe lands completed");
+        assert!(sim2.visited_pads.iter().any(|&(s, _)| s == GOAL_SLOT_POS));
+    }
+
+    #[test]
+    fn resim_reproduces_on_a_goal_level_bit_exactly() {
+        // The finish pad is physics (colliders + a run-ending landing), so
+        // the goal rides the v5 header and resim must reproduce the
+        // identical run — completion and goal-visit mask included —
+        // through a serialize → deserialize round trip. Keyframe 0 is a
+        // state standing on the finish deck (resim restores keyframe 0
+        // verbatim; only the backend verifier demands a spawn start).
+        let level = Level::parse(
+            "name = D\nscoring = time\nshafts = off\nobstacles = on\n\
+             endless = on\nseed = 9\ngoal_distance = 100",
+        );
+        let mut sim = Sim::new(level.clone());
+        sim.restore(&spawn_keyframe(&level, 100.0));
+        let mut rec = Recording::new(sim_params(), level.to_params(), u32::MAX);
+        rec.push_keyframe(sim.keyframe(0, 0.0));
+        for _ in 0..(4 * KEYFRAME_EVERY) {
+            let input = InputState::default();
+            sim.tick(input);
+            if rec.record_tick(input) {
+                rec.push_keyframe(sim.keyframe(rec.ticks(), 0.0));
+            }
+        }
+        assert!(sim.completed, "the finish landing must have ended the run");
+        let live_kfs = rec.keyframes.clone();
+        assert_eq!(live_kfs.last().unwrap().visited, 1);
         let blob = rec.serialize(0);
         assert_eq!(
             u16::from_le_bytes([blob[4], blob[5]]),

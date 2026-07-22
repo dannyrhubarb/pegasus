@@ -517,12 +517,13 @@ generator — all world generation is `Level` methods, so a level IS the world:
 |-----|--------|--------|
 | `name` | text | Cosmetic (picker label, not in replay headers) |
 | `description` | text | Cosmetic one-liner shown under the name in the level picker (JS-only — the wasm parser ignores it like any unknown key) |
-| `scoring` | `pads` / `distance` / `time` | Pads: +100 per first landing. Distance: score = max \|x\| reached (`Sim::max_dist`; big HUD readout, `best` beneath). Time: visit EVERY pad — the run ENDS the tick the last pad's landing registers (`Sim.completed`, `TickReport::completed`); score = completion time in seconds (`Sim.run_ticks × PHYSICS_DT`, **lower is better**), HUD shows `visited/total` + a running `TIME m:ss.t` clock at near-headline size (the clock IS the score; frozen at completion), with `BEST m:ss.t` + the "by <pilot>" record attribution beneath (`BEST_TIME`, seeded from the global all-time record like the distance BEST — see "Online high scores"). A crash/fuel-out is a DNF — no board entry. Time levels are hand-drawn (finite pad set); `terrain.pads.len()` is the total |
+| `scoring` | `pads` / `distance` / `time` | Pads: +100 per first landing. Distance: score = max \|x\| reached (`Sim::max_dist`; big HUD readout, `best` beneath). Time: visit EVERY pad — the run ENDS the tick the last pad's landing registers (`Sim.completed`, `TickReport::completed`); score = completion time in seconds (`Sim.run_ticks × PHYSICS_DT`, **lower is better**), HUD shows `visited/total` + a running `TIME m:ss.t` clock at near-headline size (the clock IS the score; frozen at completion), with `BEST m:ss.t` + the "by <pilot>" record attribution beneath (`BEST_TIME`, seeded from the global all-time record like the distance BEST — see "Online high scores"). A crash/fuel-out is a DNF — no board entry. Time levels are hand-drawn (finite pad set; `terrain.pads.len()` is the total) — or procedural with a `goal_distance` finish pad (see that row): there the HUD's big line is distance progress (`837/1000 m`) and ONLY the finish pad completes (regular pads register + refuel silently, no flash) |
 | `endless` | on/off | On: the cave's periodic harmonics (`cave_center`/`cave_half_width`) are replaced by hash-based **value noise** (`Level::vnoise`, smoothstep-interpolated lattice hashes) with the SAME amplitude bounds — the tunnel never wraps in x, every stretch is unique rock in both directions. The no-pinch / no-blowout guarantee carries over (unit-tested over ±34 km); C1-continuous so colliders/lattice stay seamless. Procedural only (ignored under `terrain`) |
 | `shafts` | on/off | Off: `seg_in_opening` is always false (sealed cave), no shaft colliders load, minimap skips the carve |
 | `obstacles` | on/off | Off: `obstacle_spec` returns None everywhere (pads then skip the boulder-overlap check) |
 | `pad_spacing` | 40–2000 (clamped) | Metres between pad slots (`PAD_SPACING = 130` is the default) |
 | `time_limit` | 5–1200 s (clamped) | **Hard run clock** (2026-07, The Flux Sprint): the run ENDS the tick the clock reaches the limit — `Sim.completed` fires like a time level's last pad, and the sim **parks the ship where it is** (photo finish: forces/torques reset, velocities zeroed, gravity scale 0, `prev_vel` zeroed so the park can't read as an impact dv) so the controls-dead ship can't coast into rock during the game-over grace. Stored as `Level.time_limit_ticks` (seconds ÷ `PHYSICS_DT`, exact integer cutoff — identical in live play and resim; `Sim::restore` re-seeds the completed+parked state from a keyframe's `run_ticks`, so replay seeks land on the frozen finish). Score keeps the level's own scoring — on `distance` the score is the frozen `max_dist` (`max_dist` is gated on `!completed`). HUD shows a **countdown** (`TIME m:ss.t` remaining, clock-sized, amber ≤ 10 s / red ≤ 5 s; the BEST line moves down into the attribution slot); banners/game-over read **TIME'S UP** instead of LEVEL COMPLETE (`complete_msg`, `levelHasTimeLimit` JS-side). Forces **replay format v5** (see "Hybrid recording"); the clamp keeps runs far below the backend's 30-min resim cap |
+| `goal_distance` | 100–20000 m (clamped) | **Goal time trial** (2026-07, The Flux Dash): a **FINISH pad** at x = ±goal_distance (both directions — deck built like `pad_spec` over the max floor, but NEVER skipped; `Level::goal_pad_spec`), keyed in `Sim.pads` on the `GOAL_SLOT_POS`/`GOAL_SLOT_NEG` sentinels (i64::MAX / MAX−1 — the pads window tests them by true x position, same ±20 m margin as the slot window so retain/insert never churn; replicated per layer like every pad). On a `time`-scored level the finish pad's FIRST landing ends the run (`Sim.completed`; the ship is already settled on the deck, so no park is needed — unlike `time_limit`); regular pads along the way register + refuel but never flash or complete. `obstacle_spec` keeps 9 m and `pad_spec` 12 m clear of the finish; `stand_y` prefers the finish deck (inert on shipped levels, load-bearing for tests/restores onto it). Keyframe `visited` mask on goal levels: bit 0 = +x finish, bit 1 = −x (restore rebuilds visits + completed from them). Procedural only — parse zeroes it under `terrain`. Forces **replay format v5** |
 | `seed` | u32 / `random` | **0 = the legacy world bit-for-bit** (zero harmonic phases, untouched slot hashes — pinned by the pre-Level unit tests still passing unchanged). Any other seed re-phases the cave harmonics and re-keys every slot hash. The half-width harmonics guarantee ≥ 2.5 m clearance for ANY phases (unit-tested), so no seed can pinch the cave shut. **`seed = random`** (`Level::random_seed`, 2026-07): the game rolls a fresh CONCRETE seed at every level load AND every restart (`with_rolled_seed` in main.rs — frame-side wall clock × counter, never 0; nondeterminism stays out of sim.rs), so each attempt flies brand-new rock. The flag is metadata only: world gen reads `seed`, `LevelParams` carries the rolled concrete value (not the flag), so replays/ghost/verification re-sim the exact world flown. The identical-re-push no-op uses `Level::same_file_as` (seed-neutralized for random levels) instead of `==`. The racing ghost is naturally inert on such levels — a pushed ghost's recorded seed never matches the fresh world, so the existing params equality drops it (BEST/record name still work) |
 | `poly` | `x,y x,y …` | **Hand-drawn terrain** (Across / Elasto Mania model): one SOLID ROCK polygon per line (≥ 3 verts, concave OK, overlaps OK — buried edges are unreachable; winding normalized to CCW on parse). Any `poly` line puts the level in hand-drawn mode: `Level.terrain = Some(Terrain)`, procedural gen off (shafts/obstacles forced off), every edge a segment collider loaded ONCE (no sliding window — hand-drawn maps are finite; `Sim.terrain_loaded` guards the one-shot insert, fixed file order keeps Rapier handle numbering deterministic) |
 | `pad` | `x,y` | Hand-placed pad (deck centre x, deck top y) — terrain levels only; keyed `(index, 0)` in `Sim.pads`, same landing/refuel/score logic |
@@ -543,7 +544,12 @@ Flux Sprint** (2026-07: The Flux's endless random cave under a hard
 **one-minute clock** — `time_limit = 60`, see the `time_limit` row: as far
 as you can before the horn, still distance-scored/boarded in metres; full
 throttle burns the tank in ~28 s, so the minute is also a fuel problem) —
-all distance-scored — plus **The
+all distance-scored — plus two time-scored levels: **The Flux Dash**
+(2026-07: the endless random cave as a **1,000 m time trial** —
+`goal_distance = 1000`, see that row: race to the gold FINISH pad at
+±1000 m, landing on it ends the run, lowest time wins; the kilometre
+outlasts the tank, so refuel stops on the way are part of the trade) and
+**The
 Hollows** (2026-07: the first HAND-DRAWN level — five chambers joined by
 tunnels, five pads scattered through them (incl. a perch on the west
 tunnel's sill) plus a neutral `start` platform in the spawn chamber,
@@ -755,11 +761,13 @@ level's params (THE REPIN RULE in the backend repo's CLAUDE.md). The
 newly shipped level verifies immediately as an unknown stem (the level
 check is skipped by design, physics still fully verified) and gains its
 params pinning at the next repin — EXCEPT when the level also needs a new
-recording format: The Flux Sprint writes **v5** (the `time_limit_ticks`
-header field), which the pinned verifier must decode, so its submissions
-are silently discarded until the v5 repin ships (prepared on the backend's
+recording format: The Flux Sprint and The Flux Dash write **v5** (the
+`time_limit_ticks` + `goal_distance` header fields), which the pinned
+verifier must decode, so their submissions are silently discarded until
+the v5 repin ships (prepared on the backend's
 `claude/flux-one-minute-level-c3d5zy` branch together with the verifier's
-run-clock forgery guard — see the backend CLAUDE.md).
+run-clock forgery guard and goal-level checks — see the backend
+CLAUDE.md).
 
 ## Rendering architecture
 - **High-DPI**: `high_dpi: true` in `window_conf`. The code treats
@@ -1300,9 +1308,10 @@ for now:
   byte/Terrain block in LevelParams and visited+run_ticks per keyframe,
   chosen PER RECORDING — only endless / hand-drawn / time-scored levels
   write v4, so v3 blobs stay valid and keep decoding; **v5** = v4 +
-  `time_limit_ticks` u32 right after the flags byte, written only by
-  time-LIMITED levels — The Flux Sprint — same per-recording rule, so
-  v3/v4 blobs stay byte-identical). **No backward
+  `time_limit_ticks` u32 + `goal_distance` f32 right after the flags
+  byte, written only by time-LIMITED or GOAL levels — The Flux Sprint /
+  The Flux Dash — same per-recording rule, so v3/v4 blobs stay
+  byte-identical). **No backward
   compatibility while iterating** — `deserialize` rejects pre-v3
   versions, so older server blobs stop decoding (watch/ghost pushes
   no-op gracefully); add version-tolerant reads when the game is
