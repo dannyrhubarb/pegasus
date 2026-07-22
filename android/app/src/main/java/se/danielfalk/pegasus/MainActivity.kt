@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
+import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -47,6 +48,12 @@ class MainActivity : Activity() {
             allowFileAccess = false
             allowContentAccess = false
         }
+        // The page's syncNativeWake calls this while the canvas is live
+        // (flying / watching a replay) so a hands-off glide can't hit the
+        // screen timeout; any open menu screen toggles it back off. Only
+        // bundled content runs in this WebView (external links leave for
+        // the browser), so exposing the interface is safe.
+        webView.addJavascriptInterface(KeepAwakeBridge(), "PegasusApp")
         WebView.setWebContentsDebuggingEnabled(
             applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
         )
@@ -110,6 +117,18 @@ class MainActivity : Activity() {
                     or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                     or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
                 )
+        }
+    }
+
+    /**
+     * JS bridge behind `window.PegasusApp`: the wake lock rides the View
+     * flag (not a WakeLock permission) and only holds while this window is
+     * visible, so backgrounding the app always releases it.
+     */
+    private inner class KeepAwakeBridge {
+        @JavascriptInterface
+        fun setKeepAwake(on: Boolean) {
+            runOnUiThread { webView.keepScreenOn = on }
         }
     }
 
