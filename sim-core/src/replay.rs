@@ -37,10 +37,12 @@ pub const REPLAY_MAGIC: [u8; 4] = *b"PGRP";
 // every existing blob keeps decoding and the backend keeps verifying legacy
 // submissions without a re-pin. (Runs on the NEW levels DO need the backend
 // re-pinned to a sim-core rev that understands v4.)
-// v5: the LevelParams block gains time_limit_ticks (u32, right after the
-// flags byte) — the hard run clock of time-LIMITED levels (The Flux
-// Sprint). Same per-recording choice as v4: only a time-limited level
-// writes v5, so v3/v4 blobs stay byte-identical and keep decoding.
+// v5: the LevelParams block gains time_limit_ticks (u32) + goal_distance
+// (f32), right after the flags byte — the hard run clock of time-LIMITED
+// levels (The Flux Sprint) and the finish-pad distance of GOAL levels
+// (The Flux Dash). Same per-recording choice as v4: only a level using
+// one of them writes v5, so v3/v4 blobs stay byte-identical and keep
+// decoding.
 pub const REPLAY_FORMAT_VERSION: u16 = 3;
 pub const REPLAY_FORMAT_VERSION_EXT: u16 = 4;
 pub const REPLAY_FORMAT_VERSION_V5: u16 = 5;
@@ -164,13 +166,14 @@ pub struct LevelParams {
     pub endless: u8, // no x-wrap: value-noise cave (format v4)
     pub terrain: Option<crate::world::Terrain>, // Some = hand-drawn world (format v4)
     pub time_limit_ticks: u32, // hard run clock, 0 = none (format v5)
+    pub goal_distance: f32,    // finish-pad distance, 0 = none (format v5)
 }
 
 impl LevelParams {
     // The lowest format version whose layout can express this level — the
     // per-recording version choice that keeps every older blob decoding.
     fn format_version(&self) -> u16 {
-        if self.time_limit_ticks != 0 {
+        if self.time_limit_ticks != 0 || self.goal_distance != 0.0 {
             REPLAY_FORMAT_VERSION_V5
         } else if self.endless != 0 || self.terrain.is_some() || self.scoring >= 2 {
             REPLAY_FORMAT_VERSION_EXT
@@ -286,8 +289,8 @@ impl Recording {
     // Header: magic(4) version(2) build_id(4) params(15×4)
     //         level: scoring(1) shafts(1) obstacles(1) pad_spacing(4) seed(4)
     //         [v4/v5 only, right after seed: flags(1) — bit 0 endless,
-    //          bit 1 terrain present; v5 only: time_limit_ticks(4);
-    //          if flags bit 1: terrain — n_polys(2),
+    //          bit 1 terrain present; v5 only: time_limit_ticks(4) +
+    //          goal_distance(4); if flags bit 1: terrain — n_polys(2),
     //          per poly n_verts(2) + verts(2×4 each); n_pads(2) +
     //          pads(2×4 each); has_start(1) [+ start 2×4]; spawn_y(4)]
     //         ticks(4) n_events(4) n_keyframes(4)      = 93 B (v3, no extras)
@@ -319,6 +322,7 @@ impl Recording {
         }
         if version == REPLAY_FORMAT_VERSION_V5 {
             out.extend_from_slice(&self.level.time_limit_ticks.to_le_bytes());
+            out.extend_from_slice(&self.level.goal_distance.to_le_bytes());
         }
         if let Some(t) = &self.level.terrain {
             out.extend_from_slice(&(t.polys.len() as u16).to_le_bytes());
@@ -393,12 +397,14 @@ impl Recording {
             endless: 0,
             terrain: None,
             time_limit_ticks: 0,
+            goal_distance: 0.0,
         };
         if version != REPLAY_FORMAT_VERSION {
             let flags = r.u8()?;
             level.endless = flags & 1;
             if version == REPLAY_FORMAT_VERSION_V5 {
                 level.time_limit_ticks = r.u32()?;
+                level.goal_distance = r.f32()?;
             }
             if flags & 2 != 0 {
                 // Same hostile-count rule as events/keyframes below: cap
@@ -536,7 +542,7 @@ mod tests {
     fn lparams() -> LevelParams {
         LevelParams {
             scoring: 0, shafts: 1, obstacles: 1, pad_spacing: 130.0, seed: 0,
-            endless: 0, terrain: None, time_limit_ticks: 0,
+            endless: 0, terrain: None, time_limit_ticks: 0, goal_distance: 0.0,
         }
     }
 
@@ -658,6 +664,19 @@ mod tests {
         let blob = rec.serialize(3);
         assert_eq!(u16::from_le_bytes([blob[4], blob[5]]), REPLAY_FORMAT_VERSION_EXT);
         let (back, _) = Recording::deserialize(&blob).expect("deserialize v4");
+        assert_eq!(back.level, lp);
+    }
+
+    #[test]
+    fn goal_levels_roundtrip_as_v5() {
+        // A finish-pad distance forces the v5 layout too (The Flux Dash:
+        // endless + time-scored + goal) and must round-trip exactly.
+        let lp = LevelParams { endless: 1, scoring: 2, goal_distance: 1000.0, ..lparams() };
+        let mut rec = Recording::new(params(), lp.clone(), u32::MAX);
+        rec.push_keyframe(kf(0));
+        let blob = rec.serialize(4);
+        assert_eq!(u16::from_le_bytes([blob[4], blob[5]]), REPLAY_FORMAT_VERSION_V5);
+        let (back, _) = Recording::deserialize(&blob).expect("deserialize v5 goal");
         assert_eq!(back.level, lp);
     }
 
