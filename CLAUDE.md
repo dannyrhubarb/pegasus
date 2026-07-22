@@ -1527,7 +1527,17 @@ A thin native wrapper that bundles the web build into an offline-capable
 iOS app — the game runs unmodified in a full-screen WKWebView (same WebKit
 as iOS Safari). Built and signed on a Mac with Xcode; `ios/README.md` has
 the full walkthrough (free-Apple-ID device signing vs. the paid program).
-Not part of the web deploy pipeline; `index.html` needed zero changes.
+Not part of the web deploy pipeline. `index.html`'s only app-awareness is
+the **native keep-awake bridge** (`syncNativeWake`, next to
+`showScreen`/`closeMenu`): while the canvas is live — no menu screen up:
+flight, the wreck phase, or replay playback — the page asks the wrapper to
+hold the screen on (a hands-off glide or replay has no touches, so the OS
+screen timeout would otherwise dim mid-run), and any open screen releases
+it. Both bridge endpoints are feature-detected + try/caught, so the plain
+website is a no-op: iOS = the `pegasusKeepAwake` `WKScriptMessageHandler`
+(→ `UIApplication.isIdleTimerDisabled`), Android = the `PegasusApp`
+`@JavascriptInterface` (→ `webView.keepScreenOn` — a View flag, no
+WakeLock permission, auto-released when the window isn't visible).
 - `ios/sync-web.sh` assembles `ios/Pegasus/WebRoot/` (**gitignored** build
   product, like `pegasus.wasm`; a `.gitkeep` holds the folder for Xcode).
   It mirrors `.github/actions/build-site` — **keep them in sync when the
@@ -1589,7 +1599,9 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   back = the game's own one-screen-back history stack (the site already
   implements Android back); external links open the browser;
   `android:configChanges` keeps the activity (= the live game) alive
-  across rotation; edge-to-edge immersive with cutout `shortEdges`.
+  across rotation; edge-to-edge immersive with cutout `shortEdges`; the
+  `PegasusApp` JS interface is the Android half of the keep-awake bridge
+  (see "iOS app").
 - **CI**: `android-build.yml` (PRs touching `android/` — debug APK built
   on ubuntu + attached as an installable artifact, no secrets) and
   `android-release.yml` (manual dispatch + `main` pushes touching

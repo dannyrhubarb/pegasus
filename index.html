@@ -1369,6 +1369,7 @@
       // screen isn't up, so this entry point is what keeps it fresh).
       if (id === "scr-scores") renderScores();
       if (id === "scr-about") renderBuildTime();
+      syncNativeWake();
       pegAnalytics.screen(id); // funnel signal (consecutive-deduped inside)
       syncHistory();
     }
@@ -1377,7 +1378,32 @@
       menuEl.classList.remove("open");
       hudBtns.classList.add("on");
       setPause(0);
+      syncNativeWake();
       syncHistory();
+    }
+
+    // Native-app screen wake lock: a hands-off stretch (coasting a long
+    // glide, watching a replay) has no touches, so the OS screen timeout
+    // would otherwise dim mid-run. While the canvas is live — no menu
+    // screen up: flight, the wreck phase, or replay playback — ask the
+    // wrapping app to hold the screen awake; any open screen releases it.
+    // Both bridges are absent on the plain website, so this is a no-op
+    // there: the iOS shell installs a `pegasusKeepAwake` script message
+    // handler (→ isIdleTimerDisabled), the Android shell a `PegasusApp`
+    // JS interface (→ keepScreenOn).
+    let nativeAwake = false;
+    function syncNativeWake() {
+      const on = overlay === null;
+      if (on === nativeAwake) return;
+      nativeAwake = on;
+      try {
+        if (window.PegasusApp && PegasusApp.setKeepAwake) PegasusApp.setKeepAwake(on);
+      } catch (e) { /* a shell bridge must never break the game */ }
+      try {
+        const wk = window.webkit;
+        if (wk && wk.messageHandlers && wk.messageHandlers.pegasusKeepAwake)
+          wk.messageHandlers.pegasusKeepAwake.postMessage(on);
+      } catch (e) { /* ditto */ }
     }
 
     // Taps inside the menu / corner buttons must never reach the canvas

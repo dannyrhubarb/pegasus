@@ -24,6 +24,12 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
         config.setURLSchemeHandler(WebRootSchemeHandler(), forURLScheme: WebRootSchemeHandler.scheme)
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
+        // The page's syncNativeWake posts here while the canvas is live
+        // (flying / watching a replay) so the screen stays on through a
+        // hands-off glide; any menu screen posts false and the idle timer
+        // resumes. (The controller lives for the whole app lifetime, so the
+        // handler's strong reference to it is harmless.)
+        config.userContentController.add(self, name: "pegasusKeepAwake")
 
         webView = WKWebView(frame: view.bounds, configuration: config)
         // Fill the WHOLE screen, not the safe area: the page uses
@@ -79,5 +85,16 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
             }
         }
         return nil
+    }
+}
+
+extension GameViewController: WKScriptMessageHandler {
+    func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage
+    ) {
+        if message.name == "pegasusKeepAwake" {
+            UIApplication.shared.isIdleTimerDisabled = (message.body as? Bool) ?? false
+        }
     }
 }
