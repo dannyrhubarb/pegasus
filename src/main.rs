@@ -491,6 +491,12 @@ fn fmt_run_time(ticks: u32) -> String {
     format!("{}:{:04.1}", m as u32, secs - m * 60.0)
 }
 
+// Completion banner: a time level completes by visiting every pad; a
+// time-LIMITED level (distance sprint) completes by its clock running out.
+fn complete_msg(level: &Level) -> &'static str {
+    if level.scoring == Scoring::Time { "LEVEL COMPLETE" } else { "TIME'S UP" }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn set_best_name(len: u32) {
     let b = BLOB_IN.lock().unwrap();
@@ -1485,16 +1491,23 @@ async fn main() {
                 }
             }
         }
-        // Time level completed (last pad visited): the run is over — the
-        // sim froze the clock and killed the controls. Publish NOW (score =
-        // completion time in seconds; the recorder snapshot ends at the
-        // completing tick) so the submit dialog can't miss it, then hold a
-        // short "LEVEL COMPLETE" grace before the game-over dialog.
+        // Run completed: a time level's last pad visited, or a time-limited
+        // level's clock running out — either way the sim froze the clock
+        // and killed the controls. Publish NOW (the recorder snapshot ends
+        // at the completing tick) so the submit dialog can't miss it, then
+        // hold a short banner grace before the game-over dialog. The score
+        // matches the level's scoring: completion seconds on a time level,
+        // the frozen distance on a time-limited sprint.
         if frame_completed && mode == Mode::Flying && !sim.crashed && !run_over {
             run_over = true;
-            let secs = sim.run_ticks as f32 * PHYSICS_DT;
-            raise_best_time(secs);
-            report_run_end(&recorder, secs);
+            if sim.level.scoring == Scoring::Time {
+                let secs = sim.run_ticks as f32 * PHYSICS_DT;
+                raise_best_time(secs);
+                report_run_end(&recorder, secs);
+            } else {
+                raise_best_dist(&sim.level, sim.max_dist);
+                report_run_end(&recorder, sim.max_dist);
+            }
             report_run_analytics(3, recorder.ticks(), sim.max_dist, sim.fuel, sim.hull);
             complete_timer = COMPLETE_DIALOG_DELAY;
         }
@@ -2540,7 +2553,7 @@ async fn main() {
             let (msg, col) = if sim.crashed {
                 ("CRASHED", Color::from_rgba(255, 90, 60, 255))
             } else if sim.completed {
-                ("LEVEL COMPLETE", Color::from_rgba(120, 255, 160, 255))
+                (complete_msg(&sim.level), Color::from_rgba(120, 255, 160, 255))
             } else {
                 ("OUT OF FUEL", Color::from_rgba(255, 180, 60, 255))
             };
@@ -2580,7 +2593,7 @@ async fn main() {
             // like live play. Not part of the auto-hiding transport GUI —
             // it's game state.
             if replay_player.as_ref().is_some_and(|p| p.sim.completed) {
-                let msg = "LEVEL COMPLETE";
+                let msg = complete_msg(&replay_player.as_ref().unwrap().sim.level);
                 let fs = 48.0 * ui;
                 let dims = measure_text(msg, None, fs as u16, 1.0);
                 draw_text(msg, (sw - dims.width) / 2.0, sh * 0.42, fs,
@@ -2611,7 +2624,13 @@ async fn main() {
                     inp.stick_held != 0, 1.0);
             }
         } else if complete_timer > 0.0 {
-            let msg = format!("LEVEL COMPLETE  {}", fmt_run_time(sim.run_ticks));
+            // The banner leads with what the run scored: the completion
+            // clock on a time level, the frozen distance on a sprint.
+            let msg = if sim.level.scoring == Scoring::Time {
+                format!("LEVEL COMPLETE  {}", fmt_run_time(sim.run_ticks))
+            } else {
+                format!("TIME'S UP  {:.0} m", sim.max_dist)
+            };
             let fs = 64.0 * ui;
             let dims = measure_text(&msg, None, fs as u16, 1.0);
             draw_text(&msg, (sw - dims.width) / 2.0, sh * 0.42, fs,
@@ -3031,7 +3050,20 @@ async fn main() {
         // Prominent distance / score readout text + sizing, computed here (but
         // drawn further below, once the gauges are laid out) so `small_fs` —
         // the "BEST …" size — is available to the gauge percentage labels too.
+        // Time-limited sprint (Distance scoring + a hard clock): the
+        // secondary line is the COUNTDOWN — remaining time, frozen at
+        // 0:00.0 once the horn fires — drawn clock-sized like a time
+        // level's clock (the BEST line moves down a slot, below).
+        let limit_ticks = world_sim.level.time_limit_ticks;
+        let time_limited = limit_ticks > 0 && world_sim.level.scoring == Scoring::Distance;
         let (big, small) = match world_sim.level.scoring {
+            Scoring::Distance if time_limited => (
+                format!("{:.0} m", world_sim.max_dist),
+                format!(
+                    "TIME {}",
+                    fmt_run_time(limit_ticks.saturating_sub(world_sim.run_ticks))
+                ),
+            ),
             Scoring::Distance => (
                 format!("{:.0} m", world_sim.max_dist),
                 format!("BEST {:.0} m", get_best_dist()),
@@ -3165,12 +3197,23 @@ async fn main() {
         // On a time level the clock IS the score, so its line draws at
         // near-headline size (and brighter); elsewhere the secondary line
         // is the small BEST/SCORE label.
-        let small_draw_fs = if world_sim.level.scoring == Scoring::Time {
+        let small_draw_fs = if world_sim.level.scoring == Scoring::Time || time_limited {
             big_fs * 0.62
         } else {
             small_fs
         };
-        let small_col = if world_sim.level.scoring == Scoring::Time {
+        let small_col = if time_limited {
+            // The countdown turns urgent as the horn approaches.
+            let remain =
+                limit_ticks.saturating_sub(world_sim.run_ticks) as f32 * PHYSICS_DT;
+            if remain <= 5.0 {
+                Color::from_rgba(255, 70, 60, 255)
+            } else if remain <= 10.0 {
+                Color::from_rgba(255, 210, 70, 255)
+            } else {
+                Color::from_rgba(190, 215, 245, 245)
+            }
+        } else if world_sim.level.scoring == Scoring::Time {
             Color::from_rgba(190, 215, 245, 245)
         } else {
             Color::from_rgba(150, 180, 220, 220)
@@ -3180,6 +3223,16 @@ async fn main() {
         // Record attribution under the BEST line ("by <pilot>" — or "by you"
         // once the record falls); empty name = no line (offline, pads).
         if world_sim.level.scoring == Scoring::Distance {
+            // On a time-limited sprint the secondary line above is the
+            // countdown, so the BEST readout takes the attribution slot's
+            // first line (same layout as time levels) with "by <pilot>"
+            // beneath.
+            let mut by_base = ro_y + small_draw_fs + 4.0 * ui;
+            if time_limited {
+                let bt = format!("BEST {:.0} m", get_best_dist());
+                by_base += small_fs + 4.0 * ui;
+                draw_text(&bt, ro_x, by_base, small_fs, Color::from_rgba(130, 155, 190, 200));
+            }
             let name = BEST_NAME.lock().unwrap();
             if !name.is_empty() {
                 // Names render uppercase everywhere (boards, picker, ghost).
@@ -3189,7 +3242,7 @@ async fn main() {
                 if by_dim.width > mm_w - ro_margin {
                     by_fs *= (mm_w - ro_margin) / by_dim.width;
                 }
-                draw_text(&by, ro_x, ro_y + small_draw_fs + 4.0 * ui + by_fs + 4.0 * ui,
+                draw_text(&by, ro_x, by_base + by_fs + 4.0 * ui,
                     by_fs, Color::from_rgba(130, 155, 190, 200));
             }
         } else if world_sim.level.scoring == Scoring::Time {
@@ -3784,6 +3837,21 @@ mod tests {
         assert!(!flux.shafts);
         assert!(flux.obstacles);
         assert!(flux.random_seed, "The Flux must roll a fresh world per attempt");
+
+        // The Flux Sprint: the same endless random cave under a hard
+        // one-minute clock — as far as you can before the horn.
+        let sprint = Level::parse(include_str!("../levels/flux-sprint.level"));
+        assert_eq!(sprint.name, "The Flux Sprint");
+        assert_eq!(sprint.scoring, Scoring::Distance);
+        assert!(sprint.endless);
+        assert!(!sprint.shafts);
+        assert!(sprint.obstacles);
+        assert!(sprint.random_seed, "the Sprint reshuffles per attempt like The Flux");
+        assert_eq!(
+            sprint.time_limit_ticks,
+            (60.0 / PHYSICS_DT).round() as u32,
+            "the Sprint's clock is exactly one minute"
+        );
     }
 
     #[test]
@@ -3873,6 +3941,14 @@ mod tests {
         assert_eq!(l.pad_spacing, 40.0);
         assert!(l.shafts && l.obstacles);
         assert_eq!(Level::parse(""), Level::demo());
+        // time_limit clamps to [5 s, 1200 s] (in seconds, stored as ticks —
+        // the cap keeps every honest run well under the backend's 30-min
+        // resim ceiling); junk leaves it off.
+        assert_eq!(Level::parse("time_limit = 1").time_limit_ticks,
+            (5.0 / PHYSICS_DT).round() as u32);
+        assert_eq!(Level::parse("time_limit = 99999").time_limit_ticks,
+            (1200.0 / PHYSICS_DT).round() as u32);
+        assert_eq!(Level::parse("time_limit = soon").time_limit_ticks, 0);
     }
 
     #[test]

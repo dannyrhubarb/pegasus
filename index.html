@@ -1723,7 +1723,10 @@
         // unfinished attempt is a DNF. Other levels keep distance + best.
         const complete = wasm_exports.run_end_cause
           && wasm_exports.run_end_cause() === 3;
-        goTitle.textContent = complete ? "LEVEL COMPLETE" : "GAME OVER";
+        goTitle.textContent = complete
+          ? (levelHasTimeLimit(currentLevelFile) && !levelIsTime(currentLevelFile)
+              ? "TIME'S UP" : "LEVEL COMPLETE")
+          : "GAME OVER";
         goTitle.classList.toggle("win", complete);
         if (levelIsTime(currentLevelFile)) {
           goDist.textContent = complete
@@ -2152,6 +2155,13 @@
     function levelIsTime(file) {
       const t = file && levelTexts[file];
       return !!t && /^\s*scoring\s*=\s*time\s*$/mi.test(t);
+    }
+    // Time-LIMITED levels (a `time_limit =` key — The Flux Sprint's hard
+    // one-minute clock) end in TIME'S UP rather than LEVEL COMPLETE; their
+    // scores stay plain distance.
+    function levelHasTimeLimit(file) {
+      const t = file && levelTexts[file];
+      return !!t && /^\s*time_limit\s*=/mi.test(t);
     }
     function fmtClock(secs) {
       const m = Math.floor(secs / 60), r = secs - m * 60;

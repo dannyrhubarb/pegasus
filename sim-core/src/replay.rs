@@ -37,8 +37,13 @@ pub const REPLAY_MAGIC: [u8; 4] = *b"PGRP";
 // every existing blob keeps decoding and the backend keeps verifying legacy
 // submissions without a re-pin. (Runs on the NEW levels DO need the backend
 // re-pinned to a sim-core rev that understands v4.)
+// v5: the LevelParams block gains time_limit_ticks (u32, right after the
+// flags byte) — the hard run clock of time-LIMITED levels (The Flux
+// Sprint). Same per-recording choice as v4: only a time-limited level
+// writes v5, so v3/v4 blobs stay byte-identical and keep decoding.
 pub const REPLAY_FORMAT_VERSION: u16 = 3;
 pub const REPLAY_FORMAT_VERSION_EXT: u16 = 4;
+pub const REPLAY_FORMAT_VERSION_V5: u16 = 5;
 
 // Resolved control values in effect for a physics step, quantized for
 // storage. "Resolved" = after the input-combining logic (stick ramp gates,
@@ -158,12 +163,20 @@ pub struct LevelParams {
     pub seed: u32,
     pub endless: u8, // no x-wrap: value-noise cave (format v4)
     pub terrain: Option<crate::world::Terrain>, // Some = hand-drawn world (format v4)
+    pub time_limit_ticks: u32, // hard run clock, 0 = none (format v5)
 }
 
 impl LevelParams {
-    // Does this level use any capability the v3 layout can't express?
-    fn needs_ext_format(&self) -> bool {
-        self.endless != 0 || self.terrain.is_some() || self.scoring >= 2
+    // The lowest format version whose layout can express this level — the
+    // per-recording version choice that keeps every older blob decoding.
+    fn format_version(&self) -> u16 {
+        if self.time_limit_ticks != 0 {
+            REPLAY_FORMAT_VERSION_V5
+        } else if self.endless != 0 || self.terrain.is_some() || self.scoring >= 2 {
+            REPLAY_FORMAT_VERSION_EXT
+        } else {
+            REPLAY_FORMAT_VERSION
+        }
     }
 }
 
@@ -272,26 +285,23 @@ impl Recording {
     // --- Serialization (little-endian) ---
     // Header: magic(4) version(2) build_id(4) params(15×4)
     //         level: scoring(1) shafts(1) obstacles(1) pad_spacing(4) seed(4)
-    //         [v4 only, right after seed: flags(1) — bit 0 endless,
-    //          bit 1 terrain present; if bit 1: terrain — n_polys(2),
+    //         [v4/v5 only, right after seed: flags(1) — bit 0 endless,
+    //          bit 1 terrain present; v5 only: time_limit_ticks(4);
+    //          if flags bit 1: terrain — n_polys(2),
     //          per poly n_verts(2) + verts(2×4 each); n_pads(2) +
     //          pads(2×4 each); has_start(1) [+ start 2×4]; spawn_y(4)]
     //         ticks(4) n_events(4) n_keyframes(4)      = 93 B (v3, no extras)
     // Event:  tick(4) throttle(1) rot(1) steer_x(1) steer_y(1) held(1) = 9 B
     // Keyframe: tick(4) + 11×f32                          = 48 B (v3)
-    //           v4 appends visited(8) + run_ticks(4)      = 60 B
+    //           v4/v5 append visited(8) + run_ticks(4)    = 60 B
     // The version is picked per recording: a legacy procedural level writes
     // the byte-identical v3 layout; endless / terrain / time-scored levels
-    // write v4.
+    // write v4; time-limited levels write v5.
 
     pub fn serialize(&self, build_id: u32) -> Vec<u8> {
         let mut out = Vec::with_capacity(93 + self.events.len() * 9 + self.keyframes.len() * 48);
         out.extend_from_slice(&REPLAY_MAGIC);
-        let version = if self.level.needs_ext_format() {
-            REPLAY_FORMAT_VERSION_EXT
-        } else {
-            REPLAY_FORMAT_VERSION
-        };
+        let version = self.level.format_version();
         out.extend_from_slice(&version.to_le_bytes());
         out.extend_from_slice(&build_id.to_le_bytes());
         for f in self.params.to_array() {
@@ -302,10 +312,13 @@ impl Recording {
         out.push(self.level.obstacles);
         out.extend_from_slice(&self.level.pad_spacing.to_le_bytes());
         out.extend_from_slice(&self.level.seed.to_le_bytes());
-        if version == REPLAY_FORMAT_VERSION_EXT {
+        if version != REPLAY_FORMAT_VERSION {
             let flags = (self.level.endless & 1)
                 | if self.level.terrain.is_some() { 2 } else { 0 };
             out.push(flags);
+        }
+        if version == REPLAY_FORMAT_VERSION_V5 {
+            out.extend_from_slice(&self.level.time_limit_ticks.to_le_bytes());
         }
         if let Some(t) = &self.level.terrain {
             out.extend_from_slice(&(t.polys.len() as u16).to_le_bytes());
@@ -345,7 +358,7 @@ impl Recording {
                       k.fuel, k.hull, k.glow, k.land_timer] {
                 out.extend_from_slice(&f.to_le_bytes());
             }
-            if version == REPLAY_FORMAT_VERSION_EXT {
+            if version != REPLAY_FORMAT_VERSION {
                 out.extend_from_slice(&k.visited.to_le_bytes());
                 out.extend_from_slice(&k.run_ticks.to_le_bytes());
             }
@@ -359,7 +372,10 @@ impl Recording {
             return Err("bad magic");
         }
         let version = r.u16()?;
-        if version != REPLAY_FORMAT_VERSION && version != REPLAY_FORMAT_VERSION_EXT {
+        if !matches!(
+            version,
+            REPLAY_FORMAT_VERSION | REPLAY_FORMAT_VERSION_EXT | REPLAY_FORMAT_VERSION_V5
+        ) {
             return Err("unsupported version");
         }
         let build_id = r.u32()?;
@@ -376,10 +392,14 @@ impl Recording {
             seed: r.u32()?,
             endless: 0,
             terrain: None,
+            time_limit_ticks: 0,
         };
-        if version == REPLAY_FORMAT_VERSION_EXT {
+        if version != REPLAY_FORMAT_VERSION {
             let flags = r.u8()?;
             level.endless = flags & 1;
+            if version == REPLAY_FORMAT_VERSION_V5 {
+                level.time_limit_ticks = r.u32()?;
+            }
             if flags & 2 != 0 {
                 // Same hostile-count rule as events/keyframes below: cap
                 // every Vec::with_capacity by what the remaining bytes
@@ -428,7 +448,7 @@ impl Recording {
                 },
             });
         }
-        let kf_size = if version == REPLAY_FORMAT_VERSION_EXT { 60 } else { 48 };
+        let kf_size = if version == REPLAY_FORMAT_VERSION { 48 } else { 60 };
         let mut keyframes = Vec::with_capacity(n_keyframes.min(r.remaining() / kf_size));
         for _ in 0..n_keyframes {
             let tick = r.u32()?;
@@ -436,10 +456,10 @@ impl Recording {
             for v in &mut f {
                 *v = r.f32()?;
             }
-            let (visited, run_ticks) = if version == REPLAY_FORMAT_VERSION_EXT {
-                (r.u64()?, r.u32()?)
-            } else {
+            let (visited, run_ticks) = if version == REPLAY_FORMAT_VERSION {
                 (0, tick) // pre-extension state: the clock never froze
+            } else {
+                (r.u64()?, r.u32()?)
             };
             keyframes.push(Keyframe {
                 tick,
@@ -516,7 +536,7 @@ mod tests {
     fn lparams() -> LevelParams {
         LevelParams {
             scoring: 0, shafts: 1, obstacles: 1, pad_spacing: 130.0, seed: 0,
-            endless: 0, terrain: None,
+            endless: 0, terrain: None, time_limit_ticks: 0,
         }
     }
 
@@ -639,6 +659,30 @@ mod tests {
         assert_eq!(u16::from_le_bytes([blob[4], blob[5]]), REPLAY_FORMAT_VERSION_EXT);
         let (back, _) = Recording::deserialize(&blob).expect("deserialize v4");
         assert_eq!(back.level, lp);
+    }
+
+    #[test]
+    fn time_limited_levels_roundtrip_as_v5() {
+        // A hard run clock forces the v5 layout (v4 has no slot for it) and
+        // must round-trip exactly — including alongside the endless flag,
+        // The Flux Sprint's actual combination.
+        let lp = LevelParams { endless: 1, scoring: 1, time_limit_ticks: 7200, ..lparams() };
+        let mut rec = Recording::new(params(), lp.clone(), u32::MAX);
+        rec.push_keyframe(kf(0));
+        for _ in 0..KEYFRAME_EVERY {
+            if rec.record_tick(InputState { throttle: 255, ..Default::default() }) {
+                let mut k = kf(rec.ticks());
+                k.run_ticks = rec.ticks().min(7200); // the frozen-clock shape
+                rec.push_keyframe(k);
+            }
+        }
+        let blob = rec.serialize(9);
+        assert_eq!(u16::from_le_bytes([blob[4], blob[5]]), REPLAY_FORMAT_VERSION_V5);
+        let (back, build_id) = Recording::deserialize(&blob).expect("deserialize v5");
+        assert_eq!(build_id, 9);
+        assert_eq!(back.level, lp);
+        assert_eq!(back.events, rec.events);
+        assert_eq!(back.keyframes, rec.keyframes);
     }
 
     #[test]
