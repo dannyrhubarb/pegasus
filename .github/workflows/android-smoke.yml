@@ -1,0 +1,94 @@
+# Android emulator smoke test: boot the debug APK on a real emulator, wait,
+# screenshot, and dump logcat — added after a field report of a
+# crash-at-boot that couldn't be diagnosed without a stack trace. Fails on
+# FATAL EXCEPTION; the screenshot + full logcat are always uploaded as
+# artifacts for inspection either way.
+name: Android smoke test
+
+on:
+  pull_request:
+    paths:
+      - "android/**"
+      - ".github/workflows/android-smoke.yml"
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
+
+      - name: Install Rust
+        run: |
+          if ! command -v cargo >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-android-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-android-
+
+      - name: Install wasm-opt
+        run: sudo apt-get install -y binaryen
+
+      - name: Assemble webroot
+        run: ./android/sync-web.sh
+
+      - name: Build debug APK
+        run: gradle -p android assembleDebug
+
+      - name: Boot emulator and smoke test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: |
+            adb install android/app/build/outputs/apk/debug/app-debug.apk
+            adb logcat -c
+            adb shell am start -n se.danielfalk.pegasus/.MainActivity
+            sleep 35
+            adb exec-out screencap -p > smoke-screen.png
+            adb logcat -d > smoke-logcat.txt
+            if grep -q "FATAL EXCEPTION" smoke-logcat.txt; then
+              echo "::error::app crashed on boot — full trace in the smoke-logcat artifact"
+              grep -A 40 "FATAL EXCEPTION" smoke-logcat.txt | head -80
+              exit 1
+            fi
+            echo "No fatal exception; screenshot captured."
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-smoke
+          path: |
+            smoke-screen.png
+            smoke-logcat.txt
+          retention-days: 7
