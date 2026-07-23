@@ -51,6 +51,13 @@ class MainActivity : Activity() {
         // PegasusBridge). Only bundled content runs in this WebView
         // (external links leave for the browser), so exposing the
         // interface is safe.
+        // Belt-and-braces against gesture claiming: never let the WebView's
+        // long-press (text selection / drag) or overscroll machinery steal
+        // an in-progress touch from the game.
+        webView.overScrollMode = View.OVER_SCROLL_NEVER
+        webView.isLongClickable = false
+        webView.setOnLongClickListener { true }
+        webView.isHapticFeedbackEnabled = false
         webView.addJavascriptInterface(PegasusBridge(), "PegasusApp")
         WebView.setWebContentsDebuggingEnabled(
             applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0

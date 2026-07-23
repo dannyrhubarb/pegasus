@@ -1646,7 +1646,18 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   `sync-pages-branch` (whose root replace keeps `app/` like `pr-*`) and
   `publish-pages.yml` triggers on this workflow's name.
 - Launcher icons rendered from `icon.svg` (adaptive foreground 108dp
-  densities + legacy sizes); re-render if the SVG changes.
+  densities + legacy sizes); re-render if the SVG changes. **Render the
+  adaptive foreground with Playwright (viewport = exact pixel size), NOT
+  `chromium --screenshot`** — the CLI's window-size doesn't reliably match
+  the layout viewport, which shipped a mispositioned foreground once
+  (field screenshot: faint ship sliver top-right of the icon circle);
+  verify by simulating the launcher mask (`clip-path: circle(33.3%)`).
+  The in-page **touch tracer** (bottom-left overlay, only while the Debug
+  HUD setting is on — standalone script at the end of `index.html`)
+  counts raw touchstart/move/end/CANCEL at the window capture phase:
+  built to bisect the Android-app "touches sometimes ignored" report
+  (CANCEL jumping = something claims the gesture; nothing incrementing =
+  events never delivered).
 
 ## License
 
