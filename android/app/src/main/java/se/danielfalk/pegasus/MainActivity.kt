@@ -90,35 +90,34 @@ class MainActivity : Activity() {
         // NPEs inside PhoneWindow on Android 11+ (crash-at-boot, found by the
         // emulator smoke test; the pre-11 fallback path masked it by creating
         // the decor as a side effect).
-        enterImmersiveMode()
+        enterEdgeToEdge()
         webView.loadUrl("https://${WebViewAssetLoader.DEFAULT_DOMAIN}/index.html")
     }
 
     /**
-     * Edge-to-edge: the game draws under the cutout and system bars (the
-     * page uses viewport-fit=cover and lays itself out via safe-area
-     * insets). The STATUS bar stays visible — transparent (theme), drawn
-     * over the game's starfield; only the navigation bar is hidden and
-     * reappears on a swipe.
+     * Edge-to-edge, NO hidden bars: the game draws under the cutout and the
+     * transparent status/navigation bars (the page uses viewport-fit=cover
+     * and lays itself out via safe-area insets) — the same configuration as
+     * the game running in Chrome, which is the proven-good touch baseline.
+     *
+     * Do NOT hide the navigation bar with
+     * BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE: any upward swipe near the
+     * bottom (= where the touch stick lives) transiently reveals the bars,
+     * and while they are showing the NEXT touch is consumed to dismiss
+     * them — in the field that read as "only every few touches goes
+     * through" (tester report, 2026-07).
      */
-    private fun enterImmersiveMode() {
+    private fun enterEdgeToEdge() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             window.attributes.layoutInDisplayCutoutMode =
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.setDecorFitsSystemWindows(false)
-            window.insetsController?.let {
-                it.hide(android.view.WindowInsets.Type.navigationBars())
-                it.systemBarsBehavior =
-                    android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            }
         } else {
             @Suppress("DEPRECATION")
             window.decorView.systemUiVisibility = (
-                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                    or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                    or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
                     or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                     or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
                 )
@@ -160,7 +159,9 @@ class MainActivity : Activity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) enterImmersiveMode()
+        // Re-assert the legacy layout flags on < R (the system can clear
+        // them); on R+ the decor-fits setting is sticky.
+        if (hasFocus) enterEdgeToEdge()
     }
 
     // The game mirrors its screen stack into session history, so system

@@ -1617,9 +1617,17 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   back = the game's own one-screen-back history stack (the site already
   implements Android back); external links open the browser;
   `android:configChanges` keeps the activity (= the live game) alive
-  across rotation; edge-to-edge with cutout `shortEdges` — the **status
-  bar stays visible** (transparent, over the game), only the navigation
-  bar is hidden (swipe to reveal); the `PegasusApp` JS interface is the
+  across rotation; edge-to-edge with cutout `shortEdges` and **NO hidden
+  system bars** — status AND navigation bars stay visible (transparent,
+  over the game), matching the game-in-Chrome baseline. **Do not hide the
+  nav bar with `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE`** (field lesson,
+  2026-07): any upward swipe near the bottom — where the stick lives —
+  transiently reveals the bars, and the NEXT touch is consumed to dismiss
+  them, which players reported as "only every few touches registers".
+  Also: `window.insetsController` NPEs before `setContentView` on
+  Android 11+ (the boot-crash the emulator smoke test caught — the pre-11
+  path masked it by creating the decor as a side effect); the
+  edge-to-edge call must come after. The `PegasusApp` JS interface is the
   Android half of the keep-awake bridge (see "iOS app") and also answers
   `appBuild()` (versionName + versionCode) for the About screen's App
   build row.
