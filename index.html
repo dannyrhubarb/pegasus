@@ -1035,11 +1035,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">861803c</div>
+        <div class="info-value" id="git-rev">4553eb7</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-23T12:11:55Z</div>
+        <div class="info-value" id="build-time">2026-07-23T12:44:07Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -2006,7 +2006,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "861803c";
+    const wasmRev = "4553eb7";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -3304,6 +3304,54 @@
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") checkVersion();
     });
+  </script>
+
+  <!-- Touch tracer (debug aid): visible only while the Settings "Debug
+       HUD" toggle is on. Counts raw touch events at the window capture
+       phase — built to diagnose the Android-app "touches sometimes
+       ignored" field report: if CANCEL jumps when input dies, something
+       (system gesture nav, the WebView) is claiming the gesture; if
+       nothing increments at all, events were never delivered. Standalone
+       like the boot guard: no dependencies, unique globals, try/caught. -->
+  <script>
+    (function () {
+      try {
+        if (localStorage.getItem("pegasus_debug_hud") !== "1") return;
+        var tt = document.createElement("div");
+        tt.id = "touch-trace";
+        tt.style.cssText = "position:fixed;left:8px;bottom:8px;z-index:99;" +
+          "color:#7fffd4;font:11px/1.4 ui-monospace,monospace;" +
+          "background:rgba(0,0,0,.55);padding:4px 6px;border-radius:4px;" +
+          "pointer-events:none;white-space:pre";
+        document.body.appendChild(tt);
+        var tc = { start: 0, move: 0, end: 0, cancel: 0, pcancel: 0 };
+        var ttLast = "";
+        function ttUpd() {
+          tt.textContent = "ts " + tc.start + "  tm " + tc.move + "  te " + tc.end +
+            "\nCANCEL " + tc.cancel + "  pcancel " + tc.pcancel +
+            (ttLast ? "\n" + ttLast : "");
+        }
+        function ttHook(key, name) {
+          window.addEventListener(name, function (e) {
+            tc[key]++;
+            var t = (e.touches && e.touches[0]) ||
+                    (e.changedTouches && e.changedTouches[0]);
+            ttLast = name + (t ? " @" + Math.round(t.clientX) + "," +
+                     Math.round(t.clientY) : "") +
+                     " n=" + (e.touches ? e.touches.length : 0);
+            ttUpd();
+          }, { capture: true, passive: true });
+        }
+        ttHook("start", "touchstart");
+        ttHook("move", "touchmove");
+        ttHook("end", "touchend");
+        ttHook("cancel", "touchcancel");
+        window.addEventListener("pointercancel", function () {
+          tc.pcancel++; ttUpd();
+        }, { capture: true, passive: true });
+        ttUpd();
+      } catch (e) {}
+    })();
   </script>
 </body>
 </html>
