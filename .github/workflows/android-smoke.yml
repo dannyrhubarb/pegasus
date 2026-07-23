@@ -63,6 +63,10 @@ jobs:
       - name: Build debug APK
         run: gradle -p android assembleDebug
 
+      # NOTE: the emulator runner executes each script line as a SEPARATE
+      # sh -c command — no multi-line constructs here (a first-version
+      # if/fi block died with a shell syntax error). Analysis happens in
+      # the next step, which is ordinary bash.
       - name: Boot emulator and smoke test
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -77,12 +81,17 @@ jobs:
             sleep 35
             adb exec-out screencap -p > smoke-screen.png
             adb logcat -d > smoke-logcat.txt
-            if grep -q "FATAL EXCEPTION" smoke-logcat.txt; then
-              echo "::error::app crashed on boot — full trace in the smoke-logcat artifact"
-              grep -A 40 "FATAL EXCEPTION" smoke-logcat.txt | head -80
-              exit 1
-            fi
-            echo "No fatal exception; screenshot captured."
+
+      - name: Check for crash
+        run: |
+          echo "=== app / WebView / runtime lines (tail) ==="
+          grep -iE "pegasus|AndroidRuntime|chromium|cr_" smoke-logcat.txt | tail -120 || true
+          if grep -q "FATAL EXCEPTION" smoke-logcat.txt; then
+            echo "::error::app crashed on boot — trace follows"
+            grep -B 2 -A 60 "FATAL EXCEPTION" smoke-logcat.txt | head -120
+            exit 1
+          fi
+          echo "No fatal exception; boot looks clean (see smoke-screen.png artifact)."
 
       - uses: actions/upload-artifact@v4
         if: always()
