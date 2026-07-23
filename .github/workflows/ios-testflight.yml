@@ -133,3 +133,19 @@ jobs:
             -authenticationKeyID "$ASC_KEY_ID" \
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             -authenticationKeyPath "$HOME/private_keys/AuthKey_$ASC_KEY_ID.p8"
+
+      # Hands-free distribution: wait for Apple to process the build, submit
+      # it to Beta App Review, and attach it to the beta group so testers
+      # (incl. the public link) get it with zero console clicks. The group
+      # name comes from the TESTFLIGHT_GROUP_NAME repo variable (default
+      # "Public beta"); a group that doesn't exist yet is a soft no-op.
+      - name: Assign build to TestFlight group
+        env:
+          BUNDLE_ID: se.danielfalk.pegasus
+          BUILD_VERSION: ${{ github.run_number }}
+          GROUP_NAME: ${{ vars.TESTFLIGHT_GROUP_NAME || 'Public beta' }}
+        run: |
+          python3 -m pip install --quiet --user PyJWT cryptography \
+            || python3 -m pip install --quiet --break-system-packages PyJWT cryptography
+          export ASC_KEY_PATH="$HOME/private_keys/AuthKey_$ASC_KEY_ID.p8"
+          python3 ios/testflight-distribute.py

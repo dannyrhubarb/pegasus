@@ -1591,7 +1591,12 @@ re-acquired on the `visibilitychange` back while still wanted).
   on a fresh runner can't see locally auto-generated schemes — and
   `fetch-depth: 0` (What's New). `Info.plist` carries
   `ITSAppUsesNonExemptEncryption = false` so TestFlight builds skip the
-  per-upload compliance question.
+  per-upload compliance question. After the upload,
+  `ios/testflight-distribute.py` (ASC API, same key) waits out Apple's
+  build processing, submits the build to Beta App Review and attaches it
+  to the beta group named by the `TESTFLIGHT_GROUP_NAME` repo variable
+  (default "Public beta") — external testers get every build hands-free;
+  a group that doesn't exist yet is a soft no-op.
 
 ## Android app (`android/`)
 
