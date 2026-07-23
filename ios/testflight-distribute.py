@@ -53,7 +53,7 @@ def req(method, path, body=None, quiet_statuses=()):
     except urllib.error.HTTPError as e:
         detail = e.read().decode(errors="replace")
         if e.code in quiet_statuses:
-            return e.code, None
+            return e.code, detail
         print(f"::error::{method} {path} -> {e.code}: {detail[:600]}")
         sys.exit(1)
 
@@ -100,15 +100,27 @@ def main():
     print(f"Build {version} processed (id {build_id}).")
 
     # External distribution needs a Beta App Review submission per build.
-    # 409 = one already exists (or review state forbids a duplicate) — fine.
-    status, _ = req(
+    # 409 = one already exists — fine. 422 ANOTHER_BUILD_IN_REVIEW = an
+    # earlier build's review is still pending (Apple allows one per train)
+    # — a normal transient state, not a pipeline failure: skip the
+    # submission, still attach to the group, and the next build (or a
+    # manual re-run once the pending review completes) catches up.
+    status, detail = req(
         "POST", "/v1/betaAppReviewSubmissions",
         {"data": {"type": "betaAppReviewSubmissions", "relationships": {
             "build": {"data": {"type": "builds", "id": build_id}}}}},
-        quiet_statuses=(409,))
-    print("Submitted for Beta App Review."
-          if status in (200, 201) else
-          "Beta App Review submission already exists — fine.")
+        quiet_statuses=(409, 422))
+    if status in (200, 201):
+        print("Submitted for Beta App Review.")
+    elif status == 409:
+        print("Beta App Review submission already exists — fine.")
+    elif "ANOTHER_BUILD_IN_REVIEW" in (detail or ""):
+        print("::notice::an earlier build is still in Beta App Review — "
+              "skipping this build's review submission (it can be submitted "
+              "once the pending review completes).")
+    else:
+        print(f"::error::beta review submission rejected: {(detail or '')[:600]}")
+        sys.exit(1)
 
     # Match the group by name client-side (filter[name] support varies).
     groups = [g for g in get(f"/v1/betaGroups?filter[app]={app_id}&limit=200")["data"]
@@ -121,13 +133,19 @@ def main():
         return
     group_id = groups[0]["id"]
 
-    status, _ = req(
+    status, detail = req(
         "POST", f"/v1/betaGroups/{group_id}/relationships/builds",
         {"data": [{"type": "builds", "id": build_id}]},
-        quiet_statuses=(409,))
-    print(f"Build {version} assigned to beta group '{group_name}'."
-          if status == 204 else
-          f"Build {version} was already in beta group '{group_name}'.")
+        quiet_statuses=(409, 422))
+    if status == 204:
+        print(f"Build {version} assigned to beta group '{group_name}'.")
+    elif status == 409:
+        print(f"Build {version} was already in beta group '{group_name}'.")
+    else:
+        # 422: the build isn't attachable yet (e.g. its review submission
+        # was skipped above). Soft outcome — a later build supersedes it.
+        print(f"::notice::could not attach build {version} to "
+              f"'{group_name}' yet: {(detail or '')[:300]}")
 
 
 if __name__ == "__main__":
