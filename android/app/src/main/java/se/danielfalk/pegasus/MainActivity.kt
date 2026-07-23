@@ -32,7 +32,6 @@ class MainActivity : Activity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enterImmersiveMode()
 
         val assetLoader = WebViewAssetLoader.Builder()
             .addPathHandler("/", WebRootPathHandler(this))
@@ -86,6 +85,12 @@ class MainActivity : Activity() {
         }
 
         setContentView(webView)
+        // AFTER setContentView: window.insetsController needs the DecorView,
+        // which doesn't exist yet at the top of onCreate — accessing it there
+        // NPEs inside PhoneWindow on Android 11+ (crash-at-boot, found by the
+        // emulator smoke test; the pre-11 fallback path masked it by creating
+        // the decor as a side effect).
+        enterImmersiveMode()
         webView.loadUrl("https://${WebViewAssetLoader.DEFAULT_DOMAIN}/index.html")
     }
 
