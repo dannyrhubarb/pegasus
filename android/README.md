@@ -39,6 +39,25 @@ changes.
   the AAB to the **Play internal testing track** once
   `PLAY_SERVICE_ACCOUNT_JSON` is configured (the step is skipped until
   then). `versionCode` = the workflow run number.
+- **`android-test-apk.yml`** — **opt-in per PR**: add the **`test-apk`
+  label** to a pull request and it builds an installable APK, published at
+  `https://dannyrhubarb.github.io/pegasus/pr-<n>/app/pegasus.apk` and
+  linked from a sticky PR comment. While the label stays on, every push to
+  the PR refreshes it; a manual dispatch takes a PR number instead. Most
+  PRs never need a device build, which is why it isn't automatic.
+
+  The build is the **`preview` type**: the release app under the
+  applicationId `se.danielfalk.pegasus.preview`, labelled **"Pegasus PR"**
+  in the launcher. That means a tester installs it **alongside** the real
+  app — nothing is replaced, no uninstall, and the installed app keeps its
+  settings, pilot name and cached boards. It's signed with the same upload
+  key, so re-testing a PR upgrades the test app in place. Check
+  About → **App build** reads `1.0-pr<n> (<run>)` before testing; Android
+  will otherwise happily serve a cached APK and the test proves nothing.
+
+  The APK lands **inside** the PR's preview directory, so
+  `preview-teardown.yml` deletes it along with the rest of the preview when
+  the PR closes, and the main `app/pegasus.apk` download is never touched.
 
 ### Signing secrets (one-time)
 
