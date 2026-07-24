@@ -927,6 +927,45 @@ struct TouchStick {
     held: bool,
 }
 
+// Which touch the floating stick should adopt this frame, given the ids that
+// were on screen last frame.
+//
+// **Never test `TouchPhase::Started` to decide a touch is new.** macroquad
+// keeps ONE entry per touch id and `touch_event` overwrites it wholesale, so
+// the phase a frame observes is only whatever arrived LAST before that frame
+// ran. A touchstart immediately followed by a touchmove — routine on Android,
+// where touch sampling runs at 120–240 Hz against a 60 Hz frame loop, and
+// guaranteed whenever the finger is already moving as it lands — collapses to
+// a single `Moved` entry and the `Started` phase is never seen at all. The old
+// phase test therefore dropped a large share of touchdowns; because the claim
+// could only ever happen on `Started`, the finger then stayed dead for its
+// whole press and the player had to lift and touch again (field report from an
+// Android tester, 2026-07 — the in-page touch tracer proved the events were
+// arriving with correct coordinates while the stick sat parked).
+//
+// Identity, not phase, is what makes a touch fresh: an id absent last frame is
+// a new finger whatever phase it reports. `Started` still counts on its own,
+// because browsers recycle ids (Chrome hands out 0 again for the next single
+// touch) and an end+start pair collapsing into one frame leaves a genuinely
+// new finger on a familiar id.
+fn fresh_touch<'a>(frame: &'a [Touch], prev_ids: &[u64]) -> Option<&'a Touch> {
+    frame.iter().find(|t| {
+        !matches!(t.phase, TouchPhase::Ended | TouchPhase::Cancelled)
+            && (t.phase == TouchPhase::Started || !prev_ids.contains(&t.id))
+    })
+}
+
+// True when the stick's claimed touch is gone. `Started` counts as gone: the
+// finger that owned the stick was lifted and a new one landed on the recycled
+// id between frames, so the claim is dropped here and `fresh_touch` re-centres
+// the stick under the new finger on the same frame.
+fn stick_touch_lost(owned: Option<&Touch>) -> bool {
+    !matches!(
+        owned.map(|t| t.phase),
+        Some(TouchPhase::Stationary) | Some(TouchPhase::Moved)
+    )
+}
+
 impl TouchStick {
     fn new() -> Self {
         TouchStick { id: None, center: Vec2::ZERO, knob: Vec2::ZERO, steer: Vec2::ZERO, held: false }
@@ -1146,6 +1185,9 @@ async fn main() {
     const COMPLETE_DIALOG_DELAY: f32 = 1.6;
     let mut complete_timer = 0.0f32;
     let mut stick = TouchStick::new();
+    // Touch ids that were on screen at the end of last frame — the stick's
+    // fresh-touch gate (see fresh_touch: a phase test can't spot a new finger).
+    let mut prev_touch_ids: Vec<u64> = Vec::new();
     // Hand-drawn terrain: cached ear-clip triangulation + per-polygon world
     // bboxes for the rock fill (main view + minimap). Keyed on the RENDERED
     // level's terrain — world_sim can switch to a replay's scratch sim, so
@@ -1283,30 +1325,37 @@ async fn main() {
         let tpos = |t: &Touch| t.position / touch_dpi;
         let invert = INVERT_STICK.load(Ordering::Relaxed) != 0;
         let stick_active = matches!(mode, Mode::Flying) && crash_timer <= 0.0 && !ui_paused;
+        let frame_touches = touches();
         // Keep following / release the claimed stick touch.
         if let Some(id) = stick.id {
-            match touches().iter().find(|t| t.id == id) {
-                Some(t) if !matches!(t.phase, TouchPhase::Ended | TouchPhase::Cancelled) => {
-                    stick.apply(tpos(t), invert);
-                }
+            match frame_touches.iter().find(|t| t.id == id) {
+                Some(t) if !stick_touch_lost(Some(t)) => stick.apply(tpos(t), invert),
                 _ => stick.release(),
             }
         }
         if !stick_active {
             stick.release();
         }
-        for t in touches() {
-            if t.phase != TouchPhase::Started {
-                continue;
-            }
-            if stick_active && stick.id.is_none() {
-                let p = tpos(&t);
-                stick.id = Some(t.id);
-                stick.center = p;
-                stick.held = true;
-                stick.apply(p, invert);
-            }
+        // Claim a fresh touch — by identity, not by phase (see fresh_touch).
+        let claim = if stick_active && stick.id.is_none() {
+            fresh_touch(&frame_touches, &prev_touch_ids)
+        } else {
+            None
+        };
+        if let Some(t) = claim {
+            let p = tpos(t);
+            stick.id = Some(t.id);
+            stick.center = p;
+            stick.held = true;
+            stick.apply(p, invert);
         }
+        prev_touch_ids.clear();
+        prev_touch_ids.extend(
+            frame_touches
+                .iter()
+                .filter(|t| !matches!(t.phase, TouchPhase::Ended | TouchPhase::Cancelled))
+                .map(|t| t.id),
+        );
 
         let stick_held = stick.held;
         let (steer_x, steer_y) = (stick.steer.x, stick.steer.y);
@@ -3239,6 +3288,58 @@ mod tests {
         assert_eq!(run_end_dist(), 123.5);
         assert_eq!(run_end_fuel(), 61.25);
         assert_eq!(run_end_hull(), 88.0);
+    }
+
+    fn touch(id: u64, phase: TouchPhase) -> Touch {
+        Touch { id, phase, position: vec2(10.0, 20.0) }
+    }
+
+    // The regression test for the Android "only every few touches goes
+    // through" report: macroquad collapses a touchstart+touchmove pair that
+    // lands between two frames into ONE entry phased `Moved`, so a claim rule
+    // that waits for `Started` never fires and the finger is dead until it's
+    // lifted. Freshness is identity, not phase.
+    #[test]
+    fn a_new_touch_is_claimed_even_when_its_started_phase_was_collapsed() {
+        let frame = [touch(0, TouchPhase::Moved)];
+        assert_eq!(fresh_touch(&frame, &[]).map(|t| t.id), Some(0));
+        // Same finger a frame later: already known, so it must not re-claim
+        // (that would re-centre the stick under a mid-gesture finger).
+        assert!(fresh_touch(&frame, &[0]).is_none());
+        assert!(fresh_touch(&[touch(0, TouchPhase::Stationary)], &[0]).is_none());
+    }
+
+    #[test]
+    fn a_recycled_id_reporting_started_is_a_fresh_touch() {
+        // Chrome hands identifier 0 back to the next single touch; an
+        // end+start pair collapsing into one frame leaves phase `Started` on
+        // an id we already knew — a new finger all the same.
+        let frame = [touch(0, TouchPhase::Started)];
+        assert_eq!(fresh_touch(&frame, &[0]).map(|t| t.id), Some(0));
+        // And the stick lets go of its claim so the new finger re-centres it.
+        assert!(stick_touch_lost(frame.first()));
+    }
+
+    #[test]
+    fn a_lifted_touch_is_never_claimed_and_releases_the_stick() {
+        for phase in [TouchPhase::Ended, TouchPhase::Cancelled] {
+            let frame = [touch(3, phase)];
+            assert!(fresh_touch(&frame, &[]).is_none());
+            assert!(stick_touch_lost(frame.first()));
+        }
+        // A vanished id (no event at all) also releases.
+        assert!(stick_touch_lost(None));
+        // A live finger keeps the claim.
+        assert!(!stick_touch_lost(Some(&touch(3, TouchPhase::Moved))));
+        assert!(!stick_touch_lost(Some(&touch(3, TouchPhase::Stationary))));
+    }
+
+    #[test]
+    fn a_second_finger_does_not_steal_a_held_stick() {
+        // The claim only runs while the stick is unowned, but the fresh scan
+        // itself must still prefer a genuinely new id over the resting one.
+        let frame = [touch(0, TouchPhase::Stationary), touch(1, TouchPhase::Moved)];
+        assert_eq!(fresh_touch(&frame, &[0]).map(|t| t.id), Some(1));
     }
 
     // The whole world is pure functions of (level, position/slot index).

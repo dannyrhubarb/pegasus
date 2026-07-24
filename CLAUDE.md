@@ -117,6 +117,25 @@ Four input paths feed the same physics, combined in the main loop:
     Release parks the stick bottom-right as a translucent ghost. Positions
     are physical px (`touches()` and `screen_*()` share that space; a mouse
     press maps in via `× dpi`).
+  - **"Fresh" is an id that wasn't there last frame — NEVER a
+    `TouchPhase::Started` test** (`fresh_touch` / `stick_touch_lost` +
+    `prev_touch_ids` in main.rs, unit-tested). macroquad keeps ONE entry per
+    touch id and `touch_event` overwrites it wholesale, so a frame observes
+    only the phase of whatever event arrived LAST before it ran: a
+    touchstart immediately followed by a touchmove — routine on Android
+    (touch sampling 120–240 Hz vs a 60 Hz frame loop) and certain whenever
+    the finger is already moving as it lands — collapses into one `Moved`
+    entry and `Started` is never seen at all. Claiming on the phase
+    therefore dropped a large share of touchdowns, and since the claim
+    could only fire on `Started` the finger stayed dead for its whole
+    press: the Android tester's "only every few touches goes through …
+    ignored until I release and touch again" (2026-07, diagnosed with the
+    in-page touch tracer — it showed touchmoves arriving at the right
+    coordinates while the stick sat parked, which exonerated the native
+    shell and the WebView). Recycled ids (Chrome reuses 0 for the next
+    single touch) mean `Started` still counts as fresh on its own, and the
+    stick drops a claim whose id reports `Started` so the new finger
+    re-centres it.
 - **Game controller** (BT/USB, web): `index.html` polls the **Web Gamepad API**
   each `requestAnimationFrame` and forwards to exported `set_pad_thrust(i32)` /
   `set_pad_torque(f32)` / `set_pad_reset()`. Mapping (standard layout): thrust =
