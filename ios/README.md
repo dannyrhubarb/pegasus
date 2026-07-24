@@ -107,4 +107,6 @@ The committed **shared scheme**
 auto-generates schemes locally. Keep it checked in.
 
 The TestFlight pipeline was verified end-to-end 2026-07-20 (build 5, the
-first accepted upload).
+first accepted upload). Re-checked 2026-07-24 after Apple approved the
+Beta App Review — this run exercises the full hands-free path incl. the
+automatic beta-group assignment.
