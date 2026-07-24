@@ -1,0 +1,182 @@
+# On-demand Android test APK for a PR — installable on a real phone from a
+# plain link, without merging and without disturbing the main download at
+# app/pegasus.apk.
+#
+# OPT-IN, not automatic: add the `test-apk` label to a PR and this builds one;
+# while the label stays on, every later push to that PR refreshes it. (Or run
+# it manually with a PR number.) Most PRs never need a device build, so the
+# default is to do nothing.
+#
+# The APK is the `preview` build type — the release app under the
+# applicationId se.danielfalk.pegasus.preview and the launcher label
+# "Pegasus PR", so it installs ALONGSIDE the real app rather than replacing
+# it. It's signed with the same upload key, so re-labelling a PR upgrades the
+# test app in place.
+#
+# Published to pr-<n>/app/pegasus.apk on the gh-pages branch, i.e. next to
+# the PR's web preview. Living inside pr-<n>/ means preview-teardown.yml
+# deletes it with the rest of the preview when the PR closes.
+name: Android test APK
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "PR number to build a test APK for"
+        required: true
+
+permissions:
+  contents: write # push the APK into the gh-pages state branch
+  pull-requests: write # comment the install link
+
+concurrency:
+  group: test-apk-${{ github.event.inputs.pr || github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  PR: ${{ github.event.inputs.pr || github.event.pull_request.number }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # `labeled` carries the added label; `synchronize` doesn't, so the second
+    # test keeps refreshing an already-labelled PR on every push. Fork PRs get
+    # a read-only token and no secrets, so they can't publish — same rule as
+    # preview-deploy. (A manual dispatch is a maintainer action and is trusted;
+    # note that dispatching one against a FORK's PR number would build fork
+    # code with access to the signing key.)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       (github.event.label.name == 'test-apk' ||
+        contains(github.event.pull_request.labels.*.name, 'test-apk')))
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The PR merged into its base — what the change will actually be.
+          # Spelled out so the dispatch and pull_request paths are identical.
+          ref: refs/pull/${{ env.PR }}/merge
+          fetch-depth: 0 # full history — gen-whats-new.py reads commit trailers
+
+      - name: Check signing secrets
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KP: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KA: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -z "$KS" ] || [ -z "$KP" ] || [ -z "$KA" ]; then
+            echo "::error::Android signing secrets are not configured — see android/README.md"
+            exit 1
+          fi
+
+      - name: Resolve PR head sha
+        id: rev
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              ...context.repo, pull_number: Number(process.env.PR),
+            });
+            core.setOutput('sha', pr.head.sha.slice(0, 7));
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
+
+      - name: Install Rust
+        run: |
+          if ! command -v cargo >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-android-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-android-
+
+      - name: Install wasm-opt
+        run: sudo apt-get install -y binaryen
+
+      - name: Assemble webroot
+        env:
+          # The About screen's revision row: the PR head sha, not the
+          # meaningless merge-commit sha the checkout sits on.
+          PEGASUS_REV: ${{ steps.rev.outputs.sha }}-pr-${{ env.PR }}-android
+        run: ./android/sync-web.sh
+
+      - name: Write keystore
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/upload.jks"
+          echo "PEGASUS_KEYSTORE_FILE=$RUNNER_TEMP/upload.jks" >> "$GITHUB_ENV"
+
+      - name: Build signed preview APK
+        env:
+          PEGASUS_VERSION_CODE: ${{ github.run_number }}
+          PEGASUS_VERSION_SUFFIX: -pr${{ env.PR }}
+          PEGASUS_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          PEGASUS_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          PEGASUS_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: gradle -p android assemblePreview
+
+      - name: Stage APK for Pages
+        run: |
+          mkdir -p pages-apk
+          cp android/app/build/outputs/apk/preview/app-preview.apk pages-apk/pegasus.apk
+
+      - uses: ./.github/actions/sync-pages-branch
+        with:
+          subdir: pr-${{ env.PR }}/app
+          source-dir: pages-apk
+          message: "pr-${{ env.PR }}: test APK build ${{ github.run_number }}"
+
+      - name: Comment install link
+        uses: actions/github-script@v7
+        env:
+          BUILD: ${{ github.run_number }}
+          SHA: ${{ steps.rev.outputs.sha }}
+        with:
+          script: |
+            const pr = Number(process.env.PR);
+            let base = `https://${context.repo.owner}.github.io/${context.repo.repo}/`;
+            try {
+              const { data: pages } = await github.rest.repos.getPages(context.repo);
+              if (pages.html_url) base = pages.html_url;
+            } catch (e) { /* Pages not queryable with this token — use fallback */ }
+            const url = `${base.replace(/\/?$/, '/')}pr-${pr}/app/pegasus.apk`;
+            const marker = '<!-- test-apk -->';
+            const body = `${marker}\n### 📱 Test APK ready\n` +
+              `[Download and install](${url}) — \`${process.env.SHA}\`, ` +
+              `build ${process.env.BUILD}.\n\n` +
+              `Installs as **Pegasus PR** next to the real app ` +
+              `(\`.preview\` package), so nothing is replaced and the ` +
+              `installed app keeps its settings. Verify About → App build ` +
+              `reads \`1.0-pr${pr} (${process.env.BUILD})\` before testing — ` +
+              `Android will happily serve a cached APK.\n\n` +
+              `_Refreshes on every push while the \`test-apk\` label is on. ` +
+              `Pages takes a minute or two to publish after this comment appears._`;
+            const { data: comments } = await github.rest.issues.listComments({
+              ...context.repo, issue_number: pr,
+            });
+            const existing = comments.find(c => c.body?.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                ...context.repo, comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: pr, body,
+              });
+            }

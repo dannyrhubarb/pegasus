@@ -12,12 +12,18 @@ name: Publish Pages
 # "GitHub Actions".
 #
 # The workflow names below must match the `name:` of deploy.yml,
-# preview-deploy.yml, preview-teardown.yml and android-release.yml exactly
-# (the Android release pushes the APK into the branch's app/ dir).
+# preview-deploy.yml, preview-teardown.yml, android-release.yml and
+# android-test-apk.yml exactly (the Android release pushes the APK into the
+# branch's app/ dir; the on-demand test APK into pr-<n>/app/).
 
 on:
   workflow_run:
-    workflows: ["Main deploy", "Preview deploy", "Preview teardown", "Android release"]
+    workflows:
+      - "Main deploy"
+      - "Preview deploy"
+      - "Preview teardown"
+      - "Android release"
+      - "Android test APK"
     types: [completed]
 
 permissions:
