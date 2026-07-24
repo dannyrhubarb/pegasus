@@ -31,7 +31,10 @@ else
   cp "$WASM_SRC" "$DEST/pegasus.wasm"
 fi
 
-REV="$(git rev-parse --short=8 HEAD)-android"
+# PEGASUS_REV lets CI name the build itself — the on-demand PR test APK
+# passes the PR HEAD sha, since the merge ref this checkout sits on has a
+# merge-commit sha that means nothing to a tester reading the About screen.
+REV="${PEGASUS_REV:-$(git rev-parse --short=8 HEAD)-android}"
 BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 perl -pi -e "s/__GIT_REVISION__/${REV}/g; s/__BUILD_TIME__/${BUILD_TIME}/g" "$DEST/index.html"
 

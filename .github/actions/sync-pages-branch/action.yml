@@ -59,8 +59,16 @@ runs:
               ! -name 'pr-*' ! -name 'app' ! -name '.git' -exec rm -rf {} +
             cp -a "$SRC"/. "$WT"/
           elif [[ -n "$SRC" ]]; then
-            rm -rf "$WT/${SUBDIR:?}"
-            mkdir -p "$WT/$SUBDIR"
+            # Replace the subdir but keep its app/ downloads dir — same rule
+            # as the root above. A PR's test APK (android-test-apk.yml, on
+            # demand) lives at pr-<n>/app/ and has its own lifecycle; without
+            # this, the next push to the PR would rebuild pr-<n>/ from
+            # scratch and silently delete the APK out from under the tester.
+            # Nesting it inside pr-<n>/ is also what makes preview-teardown
+            # clean it up for free when the PR closes.
+            mkdir -p "$WT/${SUBDIR:?}"
+            find "$WT/${SUBDIR:?}" -mindepth 1 -maxdepth 1 \
+              ! -name 'app' -exec rm -rf {} +
             cp -a "$SRC"/. "$WT/$SUBDIR"/
           else
             rm -rf "$WT/${SUBDIR:?}"

@@ -15,7 +15,7 @@ Deploy is automatic: any push to `main` triggers `.github/workflows/deploy.yml` 
 The published site lives on the **`gh-pages` state branch**: the `main` build at
 the root, one **per-PR preview** in `pr-<n>/` (served at
 `https://<owner>.github.io/pegasus/pr-<n>/` — works because every asset URL
-in `index.html`/`manifest.json` is relative). Four workflows, sharing two
+in `index.html`/`manifest.json` is relative). Five workflows, sharing two
 composite actions (`.github/actions/build-site` = wasm build + icons + overlay
 injection; `.github/actions/sync-pages-branch` = commit into `gh-pages` with a
 push-retry loop for concurrent deploys):
@@ -28,10 +28,20 @@ push-retry loop for concurrent deploys):
   fork PRs (read-only token).
 - `preview-teardown.yml` (**Preview teardown**, PR closed): delete `pr-<n>/`,
   comment.
+- `android-test-apk.yml` (**Android test APK**, OPT-IN per PR): build the
+  `preview` APK → sync `pr-<n>/app/` → sticky comment (`<!-- test-apk -->`)
+  with the install link. See "Android app" for the build type; the
+  **`pr-<n>/app/` placement is load-bearing** — a subdir sync REPLACES its
+  directory, so `sync-pages-branch` excludes a nested `app` exactly like the
+  root excludes `pr-*`/`app`, otherwise the next push to the PR would delete
+  the APK out from under the tester. Nesting it inside `pr-<n>/` also means
+  **preview-teardown cleans it up for free**.
 - `publish-pages.yml` (**Publish Pages**): the *only* workflow that calls
   `deploy-pages`. Triggered by `workflow_run` on the three above plus
-  **Android release** (must match their `name:` strings exactly) and
-  snapshots the whole `gh-pages` branch.
+  **Android release** and **Android test APK** (must match their `name:`
+  strings exactly — a workflow that pushes to `gh-pages` without being listed
+  here lands on the branch and is never deployed) and snapshots the whole
+  `gh-pages` branch.
   **Gotcha**: the auto-created `github-pages` environment only allows
   deployments from `main`, so PR-triggered workflows can't deploy directly;
   `workflow_run` workflows execute from the default branch, which passes the
@@ -1664,6 +1674,25 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   sideload link): it syncs the `app/` subdir of `gh-pages` via
   `sync-pages-branch` (whose root replace keeps `app/` like `pr-*`) and
   `publish-pages.yml` triggers on this workflow's name.
+- **On-demand PR test APK** (`android-test-apk.yml`, 2026-07): put a
+  **`test-apk` label** on a PR and it builds one, refreshing on every push
+  while the label stays on (`types: [labeled, synchronize]`, gated on the
+  added label OR `labels.*.name` already containing it); manual dispatch
+  takes a PR number instead. Deliberately OPT-IN — most PRs never need a
+  device build. It builds the **`preview` build type**: `initWith(release)`
+  plus `applicationIdSuffix = ".preview"` and the launcher label
+  "Pegasus PR" (a `${appLabel}` manifest placeholder, defaulted in
+  `defaultConfig`), so a tester installs it **next to** the real app instead
+  of over it — no uninstall, and the real app keeps its localStorage
+  (settings, pilot name, board cache). `initWith` carries the release
+  signing config over, so successive PR builds upgrade in place rather than
+  tripping a signature mismatch; `versionNameSuffix` comes from
+  `PEGASUS_VERSION_SUFFIX` so the About screen's App build row reads
+  `1.0-pr<n> (<run>)` and names the PR being tested. The workflow also sets
+  `PEGASUS_REV` (sync-web.sh honours it) to the PR **head** sha — the merge
+  ref the checkout sits on has a merge-commit sha that means nothing to a
+  tester. Published to `pr-<n>/app/pegasus.apk`, NOT the main `app/`
+  download (see "Deploy pipeline" for why that path and its teardown).
 - Launcher icons rendered from `icon.svg` (adaptive foreground 108dp
   densities + legacy sizes); re-render if the SVG changes. **Render the
   adaptive foreground with Playwright (viewport = exact pixel size), NOT
