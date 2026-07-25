@@ -1,5 +1,10 @@
 [
  {
+  "rev": "3b3dee7",
+  "date": "2026-07-25T14:11:18+02:00",
+  "note": "Fixed touches being ignored on Android until you lifted your finger and tapped again"
+ },
+ {
   "rev": "0a528c2",
   "date": "2026-07-22T15:55:09+02:00",
   "note": "The Android and iOS apps show their app version and build number on the About screen"
