@@ -1690,7 +1690,22 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   also happened to touch `android/`). Failing OPEN costs at most a wasted
   build; failing closed ships a stale app silently. A rebase merge of N
   commits is ONE push ⇒ one release run, and `concurrency` serializes
-  merges landing close together. Release signing reads
+  merges landing close together. The ignore list names the individual
+  irrelevant workflows rather than all of `.github/` **so each release
+  workflow's OWN file stays unignored** — a fix to it is then exercised by
+  the next merge, which is how `03e67a8` (a commit touching nothing but
+  `android-release.yml`) was verified.
+- **`tools/check-bundle-sync.py`** (CI, 2026-07) pins the three
+  hand-maintained copy lists — `build-site`, `ios/sync-web.sh`,
+  `android/sync-web.sh` — against each other. Adding a file to the website
+  and forgetting the shells is otherwise SILENT (the sync scripts still
+  exit 0, just one file lighter — running them in CI does not catch it),
+  and the apps ship incomplete. Intentional web-only files live in the
+  script's `WEB_ONLY` set, each with a reason: the generated `icon-*.png`
+  (nothing in a WKWebView/WebView reads `apple-touch-icon` or the web
+  manifest, and generating them would make librsvg an app-build
+  prerequisite) and `editor.html` (deliberately unlinked, so unreachable
+  from an app shell). Release signing reads
   `PEGASUS_KEYSTORE_*` env vars in `app/build.gradle.kts`; nothing
   signing-related lives in the repo. The release also **publishes the
   signed APK to GitHub Pages** at `app/pegasus.apk` (direct-download

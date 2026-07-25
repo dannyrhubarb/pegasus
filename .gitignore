@@ -12,3 +12,7 @@
 
 # Node deps for the touch e2e test (tests/touch-e2e)
 node_modules/
+
+# Python bytecode (tools/, ios/testflight-distribute.py)
+__pycache__/
+*.pyc

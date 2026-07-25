@@ -19,6 +19,12 @@ jobs:
       - name: Check whats-new generation
         run: python3 tools/gen-whats-new.py | python3 -m json.tool > /dev/null
 
+      # The website and both app bundles are assembled from three separate
+      # hand-maintained file lists; adding a file to one and not the others
+      # ships a working site and two quietly incomplete apps.
+      - name: Check bundle lists are in sync
+        run: python3 tools/check-bundle-sync.py
+
       - name: Install Rust wasm target
         run: rustup target add wasm32-unknown-unknown
 
