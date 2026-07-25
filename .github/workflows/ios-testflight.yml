@@ -40,15 +40,23 @@ on:
     # PR happened to also touch android/. An allowlist has to be remembered
     # every time a file is added; this fails OPEN instead, so the worst case
     # is one wasted build rather than a silently stale app.
-    #
-    # Listed here: things that cannot reach a device. .github/ included —
-    # the apps are assembled by ios/sync-web.sh, not by the site workflows.
-    # (Editing this workflow therefore won't trigger it: dispatch manually.)
     paths-ignore:
       - "docs/**"
       - "tests/**"
       - "**.md"
-      - ".github/**"
+      # Workflows that cannot change what lands on a device. NOT the whole
+      # of .github/: this workflow's OWN file must stay unignored so a fix
+      # to it is exercised by the next merge — that is how the Android
+      # release's `secrets in step if:` fix was verified (03e67a8, a
+      # commit touching nothing else). Forgetting to list a NEW workflow
+      # here costs one wasted build, which is the safe direction.
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/deploy.yml"
+      - ".github/workflows/preview-*.yml"
+      - ".github/workflows/publish-pages.yml"
+      - ".github/workflows/android-*.yml"
+      - ".github/workflows/ios-build.yml"
+      - ".github/actions/**"
   workflow_dispatch:
 
 concurrency:
