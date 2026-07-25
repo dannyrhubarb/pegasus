@@ -43,3 +43,39 @@ jobs:
 
       - name: Tests
         run: cargo test --workspace
+
+  # The in-canvas touch stick, driven end to end in a real browser: browser
+  # event -> mq_js_bundle -> wasm -> the game's claim rule. Its own job so a
+  # browser download doesn't slow the Rust checks. See docs/touch-input.md
+  # for why this is a browser test and not an emulator one.
+  touch-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-e2e-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      # The test serves the REAL wasm the deploy would ship, not a stub.
+      - name: Build wasm
+        run: cargo build --release --target wasm32-unknown-unknown
+
+      - name: Install test deps
+        working-directory: tests/touch-e2e
+        run: |
+          npm ci || npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Touch regression test
+        working-directory: tests/touch-e2e
+        run: npm test
