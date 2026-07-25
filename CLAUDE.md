@@ -79,6 +79,8 @@ geometry, TWR, damping), its effects, and preset recipes are documented in
 `docs/control-tuning.md` — update it in the same commit as any knob change.
 It also sketches the plumbing for the planned settings/controller-picker
 pane (localStorage → wasm exports → atomics, with three working examples).
+**`docs/touch-input.md`** is its counterpart for the touch PLUMBING: how an
+event reaches the stick, and the phase-collapse trap on the way.
 
 Four input paths feed the same physics, combined in the main loop:
 - **Keyboard** (desktop): `Down` thrust, `Left`/`Right` rotate, `R` reset.
@@ -145,7 +147,12 @@ Four input paths feed the same physics, combined in the main loop:
     shell and the WebView). Recycled ids (Chrome reuses 0 for the next
     single touch) mean `Started` still counts as fresh on its own, and the
     stick drops a claim whose id reports `Started` so the new finger
-    re-centres it.
+    re-centres it. **`docs/touch-input.md`** is the full write-up: the
+    event chain, the collapse, the two wrong fixes that preceded it, the
+    tracer reading that found it, and why the regression test is a browser
+    test (`tests/touch-e2e/`, in CI) rather than an emulator one — the bug
+    is a race, so an emulator can only pass by luck, while dispatching both
+    events in one JS task makes the collapse certain.
 - **Game controller** (BT/USB, web): `index.html` polls the **Web Gamepad API**
   each `requestAnimationFrame` and forwards to exported `set_pad_thrust(i32)` /
   `set_pad_torque(f32)` / `set_pad_reset()`. Mapping (standard layout): thrust =

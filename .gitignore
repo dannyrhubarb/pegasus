@@ -9,3 +9,6 @@
 /android/app/build/
 /android/local.properties
 *.jks
+
+# Node deps for the touch e2e test (tests/touch-e2e)
+node_modules/
