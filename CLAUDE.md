@@ -1656,10 +1656,15 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   across rotation; edge-to-edge with cutout `shortEdges` and **NO hidden
   system bars** — status AND navigation bars stay visible (transparent,
   over the game), matching the game-in-Chrome baseline. **Do not hide the
-  nav bar with `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE`** (field lesson,
-  2026-07): any upward swipe near the bottom — where the stick lives —
-  transiently reveals the bars, and the NEXT touch is consumed to dismiss
-  them, which players reported as "only every few touches registers".
+  nav bar with `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE`**: any upward swipe
+  near the bottom — where the stick lives — transiently reveals the bars,
+  and the NEXT touch is consumed to dismiss them, so gameplay's stream of
+  bottom-area swipes really does lose touches. **It was NOT, however, the
+  cause of the 2026-07 "only every few touches goes through" report** — it
+  was blamed for it and removed on that theory, the report survived, and
+  the real cause turned out to be game-side phase collapse (see
+  `docs/touch-input.md`). Keep the bars visible on the merits above; don't
+  cite it as that bug's fix.
   Also: `window.insetsController` NPEs before `setContentView` on
   Android 11+ (the boot-crash the emulator smoke test caught — the pre-11
   path masked it by creating the decor as a side effect); the
