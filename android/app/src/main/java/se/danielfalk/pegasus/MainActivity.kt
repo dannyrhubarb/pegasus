@@ -111,8 +111,16 @@ class MainActivity : Activity() {
      * BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE: any upward swipe near the
      * bottom (= where the touch stick lives) transiently reveals the bars,
      * and while they are showing the NEXT touch is consumed to dismiss
-     * them — in the field that read as "only every few touches goes
-     * through" (tester report, 2026-07).
+     * them. Gameplay is a stream of bottom-area swipes, so that mode does
+     * cost real touches.
+     *
+     * It was NOT the cause of the 2026-07 "only every few touches goes
+     * through" tester report, though — that was blamed on this and the
+     * mode was removed on that theory, but the report survived it. The
+     * real cause was game-side: macroquad collapses a touchstart+touchmove
+     * pair into one entry, so the stick's Started-phase claim never fired
+     * (docs/touch-input.md). Keeping the bars visible is still right on
+     * its own merits; it just wasn't that fix.
      */
     private fun enterEdgeToEdge() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
