@@ -1,8 +1,15 @@
 # Build, sign and upload the iOS app to TestFlight.
 #
-# Runs on manual dispatch, and on pushes to main that touch the iOS shell.
-# (Game-content changes ship to the app by re-running this manually — or
-# widen the paths filter if the app should track every main deploy.)
+# Runs on manual dispatch, and on EVERY push to main that could change what
+# lands on a device — which is nearly all of them, since the app bundles the
+# whole web build. Merging to main is the deliberate release boundary; a
+# rebase merge of N commits is one push, so it produces one upload, and
+# `concurrency` serializes merges that land close together.
+#
+# If two builds land inside Apple's Beta App Review window the second gets
+# ANOTHER_BUILD_IN_REVIEW; testflight-distribute.py treats that as a soft
+# notice and carries on, so the run stays green and the next build
+# supersedes it.
 #
 # Signing is xcodebuild "cloud signing": the App Store Connect API key lets
 # xcodebuild create/fetch the distribution certificate and provisioning
@@ -24,9 +31,24 @@ name: iOS TestFlight
 on:
   push:
     branches: [main]
-    paths:
-      - "ios/**"
-      - ".github/workflows/ios-testflight.yml"
+    # INVERTED ON PURPOSE — do not "tidy" this back into a paths: allowlist.
+    # The app bundles the whole web build, so ios/ holds only the SHELL: a
+    # change to src/, index.html, mq_js_bundle.js or levels/ changes what
+    # ships to a device just as much as a Swift change. The old
+    # ios/**-only filter meant game fixes reached the website and left both
+    # apps frozen — the 2026-07 Android touch fix shipped only because its
+    # PR happened to also touch android/. An allowlist has to be remembered
+    # every time a file is added; this fails OPEN instead, so the worst case
+    # is one wasted build rather than a silently stale app.
+    #
+    # Listed here: things that cannot reach a device. .github/ included —
+    # the apps are assembled by ios/sync-web.sh, not by the site workflows.
+    # (Editing this workflow therefore won't trigger it: dispatch manually.)
+    paths-ignore:
+      - "docs/**"
+      - "tests/**"
+      - "**.md"
+      - ".github/**"
   workflow_dispatch:
 
 concurrency:

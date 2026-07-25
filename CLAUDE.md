@@ -1616,7 +1616,8 @@ re-acquired on the `visibilitychange` back while still wanted).
   re-render if the SVG changes.
 - **CI**: `ios-build.yml` (PRs touching `ios/` — sync + UNSIGNED
   xcodebuild, no secrets) and `ios-testflight.yml` (manual dispatch +
-  `main` pushes touching `ios/` — cloud-signed archive → TestFlight;
+  **every `main` push that could reach a device** — cloud-signed archive
+  → TestFlight;
   needs the four `APP_STORE_CONNECT_API_*`/`APPLE_TEAM_ID` repo secrets
   and the ASC app record; build number = workflow run number). Both run on
   **`macos-26` and select the newest stable Xcode** — App Store Connect
@@ -1674,12 +1675,22 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   build row.
 - **CI**: `android-build.yml` (PRs touching `android/` — debug APK built
   on ubuntu + attached as an installable artifact, no secrets) and
-  `android-release.yml` (manual dispatch + `main` pushes touching
-  `android/` — signed AAB + universal APK artifacts; uploads the AAB to
+  `android-release.yml` (manual dispatch + **every `main` push that could
+  reach a device** — signed AAB + universal APK artifacts; uploads the AAB to
   the **Play internal track** when `PLAY_SERVICE_ACCOUNT_JSON` is set,
   skipped otherwise; needs the four `ANDROID_KEYSTORE_*`/`ANDROID_KEY_*`
   secrets; versionCode = workflow run number; **the first Play upload
-  must be manual** — Google requirement). Release signing reads
+  must be manual** — Google requirement). **Both release workflows filter
+  with `paths-ignore` (docs/tests/markdown/`.github`), NOT a `paths`
+  allowlist — INVERTED ON PURPOSE**: the apps bundle the whole web build,
+  so `ios/`+`android/` are only the SHELLS and a change to `src/`,
+  `index.html`, `mq_js_bundle.js` or `levels/` changes what ships to a
+  device. The old shell-only filters left both apps frozen while the
+  website moved (the 2026-07 Android touch fix shipped only because its PR
+  also happened to touch `android/`). Failing OPEN costs at most a wasted
+  build; failing closed ships a stale app silently. A rebase merge of N
+  commits is ONE push ⇒ one release run, and `concurrency` serializes
+  merges landing close together. Release signing reads
   `PEGASUS_KEYSTORE_*` env vars in `app/build.gradle.kts`; nothing
   signing-related lives in the repo. The release also **publishes the
   signed APK to GitHub Pages** at `app/pegasus.apk` (direct-download
