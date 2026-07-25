@@ -36,7 +36,20 @@ on:
       - "docs/**"
       - "tests/**"
       - "**.md"
-      - ".github/**"
+      # Workflows that cannot change what lands on a device. NOT the whole
+      # of .github/: this workflow's OWN file must stay unignored so a fix
+      # to it is exercised by the next merge — that is how this workflow's
+      # `secrets in step if:` fix was verified (03e67a8, a commit
+      # touching nothing else). Forgetting to list a NEW workflow
+      # here costs one wasted build, which is the safe direction.
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/deploy.yml"
+      - ".github/workflows/preview-*.yml"
+      - ".github/workflows/publish-pages.yml"
+      - ".github/workflows/ios-*.yml"
+      - ".github/workflows/android-build.yml"
+      - ".github/workflows/android-test-apk.yml"
+      - ".github/actions/**"
   workflow_dispatch:
 
 concurrency:
