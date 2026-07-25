@@ -3,8 +3,10 @@
 # upload the AAB to the Play internal testing track — the Android twin of
 # ios-testflight.yml.
 #
-# Runs on manual dispatch, and on pushes to main that touch the Android
-# shell. Game-content changes ship by re-running manually.
+# Runs on manual dispatch, and on EVERY push to main that could change what
+# lands on a device — which is nearly all of them, since the app bundles the
+# whole web build. Merging to main is the deliberate release boundary; a
+# rebase merge of N commits is one push, so it produces one release run.
 #
 # Required repository secrets (signing):
 #   ANDROID_KEYSTORE_BASE64     the upload keystore (.jks), base64-encoded
@@ -25,9 +27,16 @@ name: Android release
 on:
   push:
     branches: [main]
-    paths:
-      - "android/**"
-      - ".github/workflows/android-release.yml"
+    # INVERTED ON PURPOSE — see the twin comment in ios-testflight.yml. The
+    # app bundles the whole web build, so android/ is only the SHELL and a
+    # game change alters what ships to a device. An allowlist has to be
+    # remembered every time a file is added; this fails OPEN, so the worst
+    # case is a wasted build rather than a silently stale app.
+    paths-ignore:
+      - "docs/**"
+      - "tests/**"
+      - "**.md"
+      - ".github/**"
   workflow_dispatch:
 
 concurrency:

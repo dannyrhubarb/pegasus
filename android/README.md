@@ -31,8 +31,11 @@ changes.
 - **`android-build.yml`** — on every PR touching `android/`: builds a
   debug APK on an ubuntu runner and attaches it as an artifact, so every
   PR produces a directly installable build. No secrets needed.
-- **`android-release.yml`** — on manual dispatch and `main` pushes
-  touching `android/`: builds a **signed AAB + universal APK**
+- **`android-release.yml`** — on manual dispatch and on **every push to
+  `main` that could change what lands on a device** (the filter is
+  `paths-ignore` for docs/tests/markdown/`.github`, deliberately inverted —
+  the app bundles the whole web build, so a game change matters as much as
+  a Kotlin one): builds a **signed AAB + universal APK**
   (artifacts), **publishes the APK to GitHub Pages** at
   `https://dannyrhubarb.github.io/pegasus/app/pegasus.apk` (a public
   direct-download sideload link, refreshed every release), and uploads
