@@ -82,7 +82,12 @@ Two workflows, both on free public-repo macOS runners:
   and an **unsigned** `xcodebuild` so shell/project regressions are caught
   before anyone opens Xcode. Needs no secrets.
 - **`ios-testflight.yml`** — on manual dispatch (Actions → iOS TestFlight
-  → Run workflow) and on pushes to `main` touching `ios/`: archives with
+  → Run workflow) and on **every push to `main` that could change what
+  lands on a device** (the filter is `paths-ignore` for
+  docs/tests/markdown/`.github`, deliberately inverted — the app bundles
+  the whole web build, so a change to `src/` or `index.html` matters as
+  much as a Swift one; merging to `main` is the release boundary and a
+  rebase merge of N commits is one push, so one upload): archives with
   xcodebuild **cloud signing** (the App Store Connect API key creates and
   fetches the distribution certificate + profile on the fly — nothing
   signing-related lives in the repo) and uploads to TestFlight.
