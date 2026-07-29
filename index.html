@@ -38,6 +38,20 @@
       --panel: rgba(12, 22, 44, 0.55);
       --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Courier New", monospace;
       --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      /* Safe-area insets, ONE source of truth: every consumer below reads
+         --inset-*, never env() directly. env() alone is 0 at the iOS app
+         shell's FIRST PAINT (WKWebView propagates insets asynchronously,
+         a couple of frames after the page has painted), so the menu laid
+         out with its fallback padding and visibly jumped down ~31 pt a
+         beat after launch. The shell knows the real insets before the page
+         exists and injects them as --app-inset-* at document start
+         (GameViewController); max() lets whichever side knows the inset
+         win. On the plain website the --app-inset-* vars are unset (0px)
+         and this is exactly env(). */
+      --inset-top: max(env(safe-area-inset-top), var(--app-inset-top, 0px));
+      --inset-right: max(env(safe-area-inset-right), var(--app-inset-right, 0px));
+      --inset-bottom: max(env(safe-area-inset-bottom), var(--app-inset-bottom, 0px));
+      --inset-left: max(env(safe-area-inset-left), var(--app-inset-left, 0px));
     }
 
     /* --- In-game corner buttons (pause + restart) -------------------------
@@ -46,8 +60,8 @@
        canvas (which would fire the thruster). Hidden while the menu is up. */
     #hud-btns {
       position: fixed;
-      top: calc(env(safe-area-inset-top) + 12px);
-      right: calc(env(safe-area-inset-right) + 12px);
+      top: calc(var(--inset-top) + 12px);
+      right: calc(var(--inset-right) + 12px);
       display: none; /* shown when the menu closes */
       gap: 10px;
       z-index: 10;
@@ -87,7 +101,7 @@
       position: fixed;
       left: 50%;
       transform: translateX(-50%);
-      bottom: calc(env(safe-area-inset-bottom) + 16px);
+      bottom: calc(var(--inset-bottom) + 16px);
       display: none;
       flex-direction: column; /* buttons row on top, seek row beneath */
       align-items: stretch;
@@ -320,7 +334,7 @@
       width: 100%;
       max-height: 100%;
       overflow-y: auto;
-      padding: max(env(safe-area-inset-top), 28px) 24px max(env(safe-area-inset-bottom), 28px);
+      padding: max(var(--inset-top), 28px) 24px max(var(--inset-bottom), 28px);
       text-align: center;
     }
     .screen.on { display: flex; }
@@ -719,7 +733,7 @@
        fetched with the cache bypassed and a mismatch shows this. */
     #update-toast {
       position: fixed;
-      top: calc(env(safe-area-inset-top) + 64px);
+      top: calc(var(--inset-top) + 64px);
       left: 50%;
       transform: translateX(-50%) translateY(-16px);
       background: rgba(8, 16, 34, 0.95);
@@ -754,8 +768,8 @@
   <canvas id="glcanvas" tabindex="1"></canvas>
 
   <!-- Probe elements to read the safe-area insets in CSS pixels (all four sides) -->
-  <div id="safe-area-probe" style="position:fixed;top:0;left:0;height:env(safe-area-inset-top);width:env(safe-area-inset-left);pointer-events:none;"></div>
-  <div id="safe-area-probe-br" style="position:fixed;bottom:0;right:0;height:env(safe-area-inset-bottom);width:env(safe-area-inset-right);pointer-events:none;"></div>
+  <div id="safe-area-probe" style="position:fixed;top:0;left:0;height:var(--inset-top);width:var(--inset-left);pointer-events:none;"></div>
+  <div id="safe-area-probe-br" style="position:fixed;bottom:0;right:0;height:var(--inset-bottom);width:var(--inset-right);pointer-events:none;"></div>
 
   <!-- In-game corner buttons: pause + restart during play; during a replay
        they swap for a single ✕ (exit replay → ui_command 3). -->
