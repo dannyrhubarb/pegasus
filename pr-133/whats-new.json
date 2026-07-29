@@ -1,5 +1,10 @@
 [
  {
+  "rev": "4ecba5b",
+  "date": "2026-07-29T07:28:08Z",
+  "note": "Fixed everything shifting down a moment after launching from the Home Screen"
+ },
+ {
   "rev": "d7e4651",
   "date": "2026-07-29T07:02:35Z",
   "note": "Fixed everything shifting down a moment after the app opens"
