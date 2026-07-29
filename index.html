@@ -338,6 +338,16 @@
       text-align: center;
     }
     .screen.on { display: flex; }
+    /* Home-screen (standalone/PWA) launches paint before WebKit delivers
+       the safe-area insets, then everything relayouts ~31pt down when they
+       land (same late-inset root cause as the iOS app shell — see the
+       --inset-* note above; the PWA has no native shell to inject them).
+       The gate script (between the boot guard and the bundle) adds this
+       class on standalone boots and removes it when the insets arrive, so
+       the menu CONTENT's first visible paint is already in the final
+       position — the dark #menu backdrop still shows meanwhile, matching
+       the system launch screen. */
+    #menu.await-insets .screen { visibility: hidden; }
 
     .title {
       font-family: var(--mono);
@@ -1228,6 +1238,50 @@
           show("Game failed to start (wasm not running after 8 s).");
         }
       }, 8000);
+    })();
+  </script>
+  <script>
+    // Safe-area launch gate — its OWN tag (nothing here may interfere with
+    // the boot guard above), and it must run BEFORE the bundle <script src>
+    // below, the first point where the parser can yield and paint.
+    // Standalone (home-screen) launches paint before WebKit delivers the
+    // safe-area insets, so the menu laid out with its fallback padding and
+    // visibly jumped ~31pt down a beat into launch. There is no "insets
+    // changed" event, but the probe divs are sized by --inset-* — a
+    // ResizeObserver on them IS that callback. Gate only standalone boots
+    // (in-browser/desktop insets are legitimately 0 and would just eat the
+    // fallback delay); reveal when the insets land, or after 400 ms for
+    // devices whose insets really are 0 (e.g. Android PWA). Failure-safe:
+    // the class is only ever ADDED here, so if anything throws the menu
+    // simply boots ungated — exactly today's behavior.
+    (function () {
+      var menu = document.getElementById("menu");
+      try {
+        var standalone = navigator.standalone === true ||
+          (window.matchMedia && matchMedia("(display-mode: standalone)").matches);
+        if (!standalone || !window.ResizeObserver || !menu) return;
+        var pt = document.getElementById("safe-area-probe");
+        var pb = document.getElementById("safe-area-probe-br");
+        var have = function () {
+          return pt.getBoundingClientRect().height > 0 ||
+                 pb.getBoundingClientRect().height > 0;
+        };
+        if (have()) return; // insets already known (e.g. app-shell injection)
+        menu.classList.add("await-insets");
+        var ro;
+        var reveal = function () {
+          menu.classList.remove("await-insets");
+          if (ro) ro.disconnect();
+        };
+        setTimeout(reveal, 400);
+        // ResizeObserver reports the initial size on observe(), so an inset
+        // arriving between the have() check above and here is not missed.
+        ro = new ResizeObserver(function () { if (have()) reveal(); });
+        ro.observe(pt);
+        ro.observe(pb);
+      } catch (e) {
+        if (menu) menu.classList.remove("await-insets");
+      }
     })();
   </script>
   <script src="./mq_js_bundle.js"></script>

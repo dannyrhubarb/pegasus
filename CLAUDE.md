@@ -254,6 +254,25 @@ while the wasm loads):
   ends the run and opens the fly-mode level picker; home when there's no
   level list).
 
+**Standalone launch gate (PWA jank fix, 2026-07)**: home-screen
+(standalone) launches paint before WebKit delivers the safe-area insets,
+so the menu laid out with its fallback padding and visibly jumped ~31 pt
+down a beat into launch (same late-inset root cause as the iOS app shell
+— see "iOS app" — but a PWA has no native shell to inject them). There
+is **no "insets changed" DOM event; a ResizeObserver on the
+`--inset-*`-sized safe-area probe divs is that callback**. A small gate
+script (its own `<script>` tag between the boot guard and the bundle —
+the bundle `<script src>` is the first point the parser can yield and
+paint) adds `#menu.await-insets` (menu content `visibility:hidden`, dark
+backdrop still painted — matches the system launch screen) on standalone
+boots only, and removes it when an inset lands or after a 400 ms
+fallback (devices whose insets really are 0, e.g. Android PWA).
+In-browser/desktop boots are never gated (their insets are legitimately
+0 — the gate would just eat the fallback delay), and a boot where the
+insets are already known at parse time (the iOS shell's injection) skips
+the gate entirely. Failure-safe: the class is only ever ADDED by the
+gate script, so any error degrades to today's ungated boot.
+
 During flight the only HTML is two corner buttons (`#hud-btns`, top-right):
 **✕ menu** (opens scr-pause — an X, not a pause glyph, since it reads as
 "leave the game view") and **⟳ restart** (same path as the R key); during a
@@ -1615,8 +1634,11 @@ re-acquired on the `visibilitychange` back while still wanted).
   `env(safe-area-inset-*)` reads **0 at a WKWebView's first paint** —
   WebKit propagates the insets asynchronously a couple of frames later —
   so the menu painted with its 28px fallback padding tucked under the
-  Dynamic Island and then visibly jumped down ~31 pt during app launch
-  (diagnosed frame-by-frame from a screen recording). Fix:
+  Dynamic Island and then visibly jumped down ~31 pt during launch
+  (diagnosed frame-by-frame from a screen recording — which turned out to
+  be of the **home-screen PWA**, which shares the WebKit behavior but has
+  no shell to inject anything; the web side has its own standalone-boot
+  gate, see "Game menu"). App-shell fix:
   `GameViewController` defers `load()` to the first
   `viewDidLayoutSubviews` (in `viewDidLoad` the view isn't in a window
   yet, so `view.safeAreaInsets` is still zero) and injects the real
