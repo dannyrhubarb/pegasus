@@ -1611,6 +1611,28 @@ re-acquired on the `visibilitychange` back while still wanted).
   About screen's App build row. WebRoot ships as an Xcode **folder
   reference**, so re-running the sync + rebuilding needs no project
   edits.
+- **Safe-area inset injection (launch-jank fix, 2026-07)**:
+  `env(safe-area-inset-*)` reads **0 at a WKWebView's first paint** —
+  WebKit propagates the insets asynchronously a couple of frames later —
+  so the menu painted with its 28px fallback padding tucked under the
+  Dynamic Island and then visibly jumped down ~31 pt during app launch
+  (diagnosed frame-by-frame from a screen recording). Fix:
+  `GameViewController` defers `load()` to the first
+  `viewDidLayoutSubviews` (in `viewDidLoad` the view isn't in a window
+  yet, so `view.safeAreaInsets` is still zero) and injects the real
+  insets as the `--app-inset-*` CSS vars via a document-start user
+  script, re-pushed from `viewSafeAreaInsetsDidChange` (rotation moves
+  the notch inset to another edge; the user scripts are re-registered
+  too so a licenses-page navigation also boots current). `index.html`
+  folds them in as **`--inset-*` in `:root`
+  (`max(env(safe-area-inset-*), var(--app-inset-*, 0px))`) — every
+  safe-area consumer (menu `.screen` padding, corner buttons, update
+  toast, replay bar, the JS probe divs feeding `set_safe_area`) reads
+  `--inset-*`, NEVER `env()` directly; keep it that way for new CSS.**
+  On the plain website the `--app-inset-*` vars are unset ⇒ pure
+  `env()`, behavior unchanged (verified headless: unset vars reproduce
+  the old computed styles exactly). The Android shell doesn't inject
+  (no jank reported there); it can adopt the same vars if ever needed.
 - App icon: `icon.svg` rendered to an opaque 1024×1024 PNG in
   `Assets.xcassets` (no alpha — App Store validation rejects it);
   re-render if the SVG changes.

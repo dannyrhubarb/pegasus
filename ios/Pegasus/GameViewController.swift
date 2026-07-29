@@ -9,6 +9,8 @@ import WebKit
 /// (settings, pilot name, board cache).
 final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDelegate {
     private var webView: WKWebView!
+    private var appBuildScript: WKUserScript!
+    private var didStartLoad = false
 
     // The status bar stays visible, drawn over the game's starfield (the
     // page lays its HUD out below env(safe-area-inset-top), so nothing
@@ -41,11 +43,12 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
         let info = Bundle.main.infoDictionary
         let version = info?["CFBundleShortVersionString"] as? String ?? "?"
         let build = info?["CFBundleVersion"] as? String ?? "?"
-        config.userContentController.addUserScript(WKUserScript(
+        appBuildScript = WKUserScript(
             source: "window.__pegAppBuild = \"\(version) (\(build))\"",
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true
-        ))
+        )
+        config.userContentController.addUserScript(appBuildScript)
 
         webView = WKWebView(frame: view.bounds, configuration: config)
         // Fill the WHOLE screen, not the safe area: the page uses
@@ -63,8 +66,58 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
         // supports the iOS edge-swipe as "back one screen" — keep that.
         webView.allowsBackForwardNavigationGestures = true
         view.addSubview(webView)
+        // load() happens in viewDidLayoutSubviews, once the safe-area
+        // insets are known — see pushSafeAreaInsets.
+    }
 
+    // env(safe-area-inset-*) reaches the web content only AFTER its first
+    // paint (WKWebView propagates the insets asynchronously, a couple of
+    // frames later), so the menu briefly painted with its fallback padding
+    // and then visibly jumped down ~31 pt during launch. The shell knows
+    // the real insets before the page even exists, so it injects them as
+    // the --app-inset-* CSS variables (index.html folds them in via
+    // max(env(...), var(--app-inset-*, 0px)) — the plain website, where the
+    // vars stay unset, is untouched). The first load is deferred to the
+    // first layout pass because view.safeAreaInsets is still zero in
+    // viewDidLoad (the view isn't in a window yet).
+    private func pushSafeAreaInsets() {
+        let i = view.safeAreaInsets
+        let js = """
+        (function (s) {
+          s.setProperty("--app-inset-top", "\(Int(i.top.rounded()))px");
+          s.setProperty("--app-inset-right", "\(Int(i.right.rounded()))px");
+          s.setProperty("--app-inset-bottom", "\(Int(i.bottom.rounded()))px");
+          s.setProperty("--app-inset-left", "\(Int(i.left.rounded()))px");
+        })(document.documentElement.style);
+        """
+        // Re-register the document-start scripts so any future navigation
+        // (the bundled licenses page and back) also boots with the CURRENT
+        // insets, not the launch-time ones…
+        let ucc = webView.configuration.userContentController
+        ucc.removeAllUserScripts()
+        ucc.addUserScript(appBuildScript)
+        ucc.addUserScript(WKUserScript(
+            source: js, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        // …and update the live page directly (rotation happens mid-session).
+        if didStartLoad {
+            webView.evaluateJavaScript(js, completionHandler: nil)
+        }
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        guard !didStartLoad else { return }
+        pushSafeAreaInsets()
+        didStartLoad = true
         webView.load(URLRequest(url: URL(string: "\(WebRootSchemeHandler.scheme)://app/index.html")!))
+    }
+
+    // Keep the injected values current (rotation changes which edges carry
+    // the notch inset) — a stale portrait value would win the max() in
+    // landscape and push the menu down for no reason.
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        if didStartLoad { pushSafeAreaInsets() }
     }
 
     // http/https navigations (external links) leave the app for Safari;
