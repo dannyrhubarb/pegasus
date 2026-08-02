@@ -9,7 +9,6 @@
 # stop costs the settle time, so the trade is the level.
 name = The Flux Dash
 description = Race to the finish pad 1,000 m out. Fastest time wins
-icon = flag
 scoring = time
 shafts = off
 obstacles = on

@@ -197,8 +197,9 @@ while the wasm loads):
   `max-height:560px` so landscape phones keep the Fly button above the fold)
   + Fly / High scores / Settings / About. **No top-level Levels button** —
   level choice is a step inside Fly and High scores (see scr-levels).
-- **scr-levels**: the **shared level picker** — level rows (a **mode icon**
-  on the left — the level file's `icon` key, see the Levels table — then
+- **scr-levels**: the **shared level picker** — level rows (a **type icon**
+  on the left — derived from the level's mode keys, see the `icon` row in
+  the Levels table — then
   name with the
   level file's one-line `description` beneath it, + best),
   reached two ways via `openLevelPicker(mode)` (`levelPickerMode` drives its
@@ -555,7 +556,7 @@ generator — all world generation is `Level` methods, so a level IS the world:
 |-----|--------|--------|
 | `name` | text | Cosmetic (picker label, not in replay headers) |
 | `description` | text | Cosmetic one-liner shown under the name in the level picker (JS-only — the wasm parser ignores it like any unknown key) |
-| `icon` | `stopwatch` / `hourglass` / `flag` / `arrow` / `dice` / `plane` | Cosmetic picker-row glyph (JS-only, like `description`): small inline SVGs in `index.html`'s `LEVEL_ICONS` (self-contained — no icon fonts), cyan by default, **amber** for the clock/finish modes (`AMBER_ICONS`). Unknown/missing icon ⇒ derived from the mode keys: `goal_distance` → flag, time-scored → stopwatch, `time_limit` → hourglass, else arrow. Only names in the map reach innerHTML — level text can't inject markup |
+| `icon` | `stopwatch` / `hourglass` / `arrow` | Cosmetic picker-row TYPE glyph override (JS-only, like `description`) — normally omitted: the icon derives from the mode keys so levels of the same type share it (owner direction — the glyph classifies the game mode, not the level's personality): time-scored → stopwatch (Hollows, Dash — goal trials are clock-scored), `time_limit` → hourglass (Sprint), else double arrow (distance). Small inline SVGs in `index.html`'s `LEVEL_ICONS` (self-contained — no icon fonts), cyan for distance, **amber** for the clock modes (`AMBER_ICONS`). Only names in the map reach innerHTML — level text can't inject markup |
 | `scoring` | `pads` / `distance` / `time` | Pads: +100 per first landing. Distance: score = max \|x\| reached (`Sim::max_dist`; big HUD readout, `best` beneath). Time: visit EVERY pad — the run ENDS the tick the last pad's landing registers (`Sim.completed`, `TickReport::completed`); score = completion time in seconds (`Sim.run_ticks × PHYSICS_DT`, **lower is better**), HUD shows `visited/total` + a running `TIME m:ss.t` clock at near-headline size (the clock IS the score; frozen at completion), with `BEST m:ss.t` + the "by <pilot>" record attribution beneath (`BEST_TIME`, seeded from the global all-time record like the distance BEST — see "Online high scores"). A crash/fuel-out is a DNF — no board entry. Time levels are hand-drawn (finite pad set; `terrain.pads.len()` is the total) — or procedural with a `goal_distance` finish pad (see that row): there the HUD's big line is distance progress (`837/1000 m`) and ONLY the finish pad completes (regular pads register + refuel silently, no flash) |
 | `endless` | on/off | On: the cave's periodic harmonics (`cave_center`/`cave_half_width`) are replaced by hash-based **value noise** (`Level::vnoise`, smoothstep-interpolated lattice hashes) with the SAME amplitude bounds — the tunnel never wraps in x, every stretch is unique rock in both directions. The no-pinch / no-blowout guarantee carries over (unit-tested over ±34 km); C1-continuous so colliders/lattice stay seamless. Procedural only (ignored under `terrain`) |
 | `shafts` | on/off | Off: `seg_in_opening` is always false (sealed cave), no shaft colliders load, minimap skips the carve |
