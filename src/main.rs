@@ -3895,6 +3895,85 @@ mod tests {
         assert!(dash.random_seed, "the Dash reshuffles per attempt like The Flux");
         assert_eq!(dash.goal_distance, 1000.0, "the finish pad sits 1,000 m out");
         assert_eq!(dash.time_limit_ticks, 0, "the Dash has no hard clock — the clock IS the score");
+
+        // The Expanse and The Glide carry the same two variants — fixed
+        // seed 0 (identical world every attempt: the racing ghost works,
+        // unlike the reshuffling Flux family), each pinned to its base
+        // level's world params with only the mode keys added.
+        for (base, sprint_txt, dash_txt) in [
+            (
+                &expanse,
+                include_str!("../levels/expanse-sprint.level"),
+                include_str!("../levels/expanse-dash.level"),
+            ),
+            (
+                &glide,
+                include_str!("../levels/glide-sprint.level"),
+                include_str!("../levels/glide-dash.level"),
+            ),
+        ] {
+            let sprint = Level::parse(sprint_txt);
+            assert_eq!(sprint.name, format!("{} Sprint", base.name));
+            assert_eq!(sprint.scoring, Scoring::Distance);
+            assert_eq!(sprint.time_limit_ticks, (60.0 / PHYSICS_DT).round() as u32);
+            assert_eq!(sprint.goal_distance, 0.0);
+            // Same world as the base level: only the clock differs.
+            assert_eq!(
+                Level { name: base.name.clone(), time_limit_ticks: 0, ..sprint },
+                *base
+            );
+            let dash = Level::parse(dash_txt);
+            assert_eq!(dash.name, format!("{} Dash", base.name));
+            assert_eq!(dash.scoring, Scoring::Time);
+            assert_eq!(dash.goal_distance, 1000.0);
+            assert_eq!(dash.time_limit_ticks, 0);
+            assert_eq!(
+                Level {
+                    name: base.name.clone(),
+                    scoring: Scoring::Distance,
+                    goal_distance: 0.0,
+                    ..dash
+                },
+                *base
+            );
+        }
+    }
+
+    #[test]
+    fn shipped_dash_finish_decks_are_landable() {
+        // The finish pad is NEVER skipped, whatever the local cave shape —
+        // so lint the shipped goal worlds: the deck must keep enough
+        // headroom to descend onto (ship is ~1.5 m tall). Fixed-seed dashes
+        // are checked exactly; the reshuffling flux-dash is sampled across
+        // many rolled seeds to catch a systematically tight generator.
+        let headroom = |lvl: &Level| -> f32 {
+            let mut worst = f32::INFINITY;
+            for side in [1i8, -1] {
+                let pad = lvl.goal_pad_spec(side).expect("goal level must have a finish");
+                for i in 0..=12 {
+                    let x = pad.cx - PAD_HALF_W + i as f32 * (PAD_HALF_W / 6.0);
+                    let ceiling = lvl.cave_center(x) + lvl.cave_half_width(x);
+                    worst = worst.min(ceiling - pad.y);
+                }
+            }
+            worst
+        };
+        for stem in ["expanse-dash", "glide-dash"] {
+            let lvl = pegasus_sim::world::shipped_levels()
+                .into_iter()
+                .find(|(s, _)| *s == stem)
+                .unwrap()
+                .1;
+            let h = headroom(&lvl);
+            assert!(h >= 3.0, "{stem} finish deck headroom only {h} m");
+        }
+        let flux_dash = Level::parse(include_str!("../levels/flux-dash.level"));
+        let mut worst = f32::INFINITY;
+        for seed in 1..=300u32 {
+            let lvl = Level { seed: seed.wrapping_mul(0x9e37_79b9), ..flux_dash.clone() };
+            worst = worst.min(headroom(&lvl));
+        }
+        assert!(worst >= 2.5, "a rolled flux-dash finish got too tight: {worst} m");
     }
 
     #[test]
