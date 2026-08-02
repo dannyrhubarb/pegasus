@@ -3,7 +3,6 @@
 # but the walls you clip.
 name = The Glide
 description = Pure cave flying. Just you, the walls and the distance
-icon = plane
 scoring = distance
 shafts = off
 obstacles = off

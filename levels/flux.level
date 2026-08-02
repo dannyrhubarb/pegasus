@@ -10,7 +10,6 @@
 # off by nature (a ghost's world never matches the fresh one).
 name = The Flux
 description = An endless cave that reshuffles itself on every attempt
-icon = dice
 scoring = distance
 shafts = off
 obstacles = on

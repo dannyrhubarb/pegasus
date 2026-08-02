@@ -9,7 +9,6 @@
 # distance was banked, like any distance level.
 name = The Flux Sprint
 description = The endless cave, but the clock gives you 60 seconds. Floor it
-icon = hourglass
 scoring = distance
 shafts = off
 obstacles = on
