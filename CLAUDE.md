@@ -1477,7 +1477,9 @@ the real backend. All JS-side in `index.html`:
   This week /
   All time period chips fetch `/v1/levels/<stem>/scores?period=…` (top 50,
   ranked server-side); each row is TWO LINES — rank / [pilot name over a
-  timestamp (`fmtDateTime`, `.pcol` column)] / distance — plus a ▶ watch
+  date (`fmtDate`, the date-only twin of `fmtDateTime`, `.pcol` column;
+  the time of day was dropped 2026-08 — date is enough)] / distance —
+  plus a ▶ watch
   button when the entry has a replay. **Timestamp locale lesson
   (2026-07)**: language tags lie about region — a phone set to English in
   Sweden reports a bare `en-US` (verified in the field via a temporary
