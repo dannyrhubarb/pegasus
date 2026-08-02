@@ -1,5 +1,10 @@
 [
  {
+  "rev": "e58537a",
+  "date": "2026-08-02T23:26:10Z",
+  "note": "High score boards now show just the date, not the time"
+ },
+ {
   "rev": "3b3dee7",
   "date": "2026-07-25T14:11:18+02:00",
   "note": "Fixed touches being ignored on Android until you lifted your finger and tapped again"

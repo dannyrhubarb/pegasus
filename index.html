@@ -1035,11 +1035,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">8fa9c49</div>
+        <div class="info-value" id="git-rev">b8b0925</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-25T13:53:12Z</div>
+        <div class="info-value" id="build-time">2026-08-02T23:31:22Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -2006,7 +2006,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "8fa9c49";
+    const wasmRev = "b8b0925";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -2515,6 +2515,16 @@
       return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate())
         + " " + p(d.getHours()) + ":" + p(d.getMinutes());
     }
+    // Date-only twin of fmtDateTime — the board rows don't need the time.
+    function fmtDate(ts) {
+      const d = new Date(ts);
+      if (DATE_LOCALE) {
+        try { return d.toLocaleDateString(DATE_LOCALE, { dateStyle: "short" }); }
+        catch (e) { /* engine rejects the constructed tag — fall through */ }
+      }
+      const p = n => String(n).padStart(2, "0");
+      return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+    }
 
     fetch("config.json?nocache=" + Date.now(), { cache: "no-store" })
       .then(r => (r.ok ? r.json() : null))
@@ -2720,7 +2730,7 @@
 
     // Build the board rows for one score list (shared by cached + fresh
     // renders). Each entry is TWO LINES: rank / [name over localised
-    // date+time] / distance / ▶ watch. renderedBoardJson remembers what's
+    // date] / distance / ▶ watch. renderedBoardJson remembers what's
     // on screen so a background refetch that returns identical data doesn't
     // rebuild the DOM under an in-flight tap (same mis-tap hazard as the
     // level picker — see renderLevels).
@@ -2741,7 +2751,7 @@
         who.textContent = s.name;
         const when = document.createElement("span");
         when.className = "pdate";
-        when.textContent = s.ts ? fmtDateTime(s.ts) : "";
+        when.textContent = s.ts ? fmtDate(s.ts) : "";
         col.append(who, when);
         const dist = document.createElement("span");
         dist.className = "dist";
