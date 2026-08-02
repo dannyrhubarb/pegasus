@@ -1,5 +1,10 @@
 [
  {
+  "rev": "26d4fdd",
+  "date": "2026-08-02T23:50:34Z",
+  "note": "The Expanse and The Glide each get Sprint (60 seconds) and Dash (1,000 m race) variants — with the record ghost to race, since their worlds never change"
+ },
+ {
   "rev": "3b4d32d",
   "date": "2026-08-02T23:36:39Z",
   "note": "Level picker icons now show each level's type — stopwatch for race-the-clock, hourglass for a time limit, arrows for distance"
