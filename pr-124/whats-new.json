@@ -1,5 +1,10 @@
 [
  {
+  "rev": "3b4d32d",
+  "date": "2026-08-02T23:36:39Z",
+  "note": "Level picker icons now show each level's type — stopwatch for race-the-clock, hourglass for a time limit, arrows for distance"
+ },
+ {
   "rev": "c805153",
   "date": "2026-08-02T23:31:20Z",
   "note": "The level picker now shows an icon for each level's game mode — stopwatch, hourglass, finish flag, and friends"

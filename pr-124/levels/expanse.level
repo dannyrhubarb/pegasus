@@ -4,7 +4,6 @@
 # refueling pads every ~130 m.
 name = The Expanse
 description = One long winding tunnel full of boulders. Fly as far as you dare
-icon = arrow
 scoring = distance
 shafts = off
 obstacles = on
