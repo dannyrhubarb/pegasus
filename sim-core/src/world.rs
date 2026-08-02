@@ -455,7 +455,11 @@ impl Level {
 pub fn shipped_levels() -> Vec<(&'static str, Level)> {
     vec![
         ("expanse", Level::parse(include_str!("../../levels/expanse.level"))),
+        ("expanse-sprint", Level::parse(include_str!("../../levels/expanse-sprint.level"))),
+        ("expanse-dash", Level::parse(include_str!("../../levels/expanse-dash.level"))),
         ("glide", Level::parse(include_str!("../../levels/glide.level"))),
+        ("glide-sprint", Level::parse(include_str!("../../levels/glide-sprint.level"))),
+        ("glide-dash", Level::parse(include_str!("../../levels/glide-dash.level"))),
         ("flux", Level::parse(include_str!("../../levels/flux.level"))),
         ("flux-sprint", Level::parse(include_str!("../../levels/flux-sprint.level"))),
         ("flux-dash", Level::parse(include_str!("../../levels/flux-dash.level"))),
