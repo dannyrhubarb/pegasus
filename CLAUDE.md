@@ -584,11 +584,18 @@ Flux Sprint** (2026-07: The Flux's endless random cave under a hard
 **one-minute clock** — `time_limit = 60`, see the `time_limit` row: as far
 as you can before the horn, still distance-scored/boarded in metres; full
 throttle burns the tank in ~28 s, so the minute is also a fuel problem) —
-all distance-scored — plus two time-scored levels: **The Flux Dash**
+all distance-scored — plus the time-scored levels: **The Flux Dash**
 (2026-07: the endless random cave as a **1,000 m time trial** —
 `goal_distance = 1000`, see that row: race to the gold FINISH pad at
 ±1000 m, landing on it ends the run, lowest time wins; the kilometre
-outlasts the tank, so refuel stops on the way are part of the trade) and
+outlasts the tank, so refuel stops on the way are part of the trade),
+the (2026-08) **Sprint/Dash variants of The Expanse and The Glide**
+(`expanse-sprint` / `expanse-dash` / `glide-sprint` / `glide-dash` —
+the base level's exact world params plus only the mode key, pinned by a
+unit test; **fixed seed 0**, so unlike the reshuffling Flux family the
+racing ghost works on them; the manifest groups each world with its
+variants, and `shipped_dash_finish_decks_are_landable` lints every
+shipped finish deck's headroom incl. 300 rolled flux-dash seeds) and
 **The
 Hollows** (2026-07: the first HAND-DRAWN level — five chambers joined by
 tunnels, five pads scattered through them (incl. a perch on the west
