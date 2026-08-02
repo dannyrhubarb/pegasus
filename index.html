@@ -2515,6 +2515,16 @@
       return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate())
         + " " + p(d.getHours()) + ":" + p(d.getMinutes());
     }
+    // Date-only twin of fmtDateTime — the board rows don't need the time.
+    function fmtDate(ts) {
+      const d = new Date(ts);
+      if (DATE_LOCALE) {
+        try { return d.toLocaleDateString(DATE_LOCALE, { dateStyle: "short" }); }
+        catch (e) { /* engine rejects the constructed tag — fall through */ }
+      }
+      const p = n => String(n).padStart(2, "0");
+      return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+    }
 
     fetch("config.json?nocache=" + Date.now(), { cache: "no-store" })
       .then(r => (r.ok ? r.json() : null))
@@ -2720,7 +2730,7 @@
 
     // Build the board rows for one score list (shared by cached + fresh
     // renders). Each entry is TWO LINES: rank / [name over localised
-    // date+time] / distance / ▶ watch. renderedBoardJson remembers what's
+    // date] / distance / ▶ watch. renderedBoardJson remembers what's
     // on screen so a background refetch that returns identical data doesn't
     // rebuild the DOM under an in-flight tap (same mis-tap hazard as the
     // level picker — see renderLevels).
@@ -2741,7 +2751,7 @@
         who.textContent = s.name;
         const when = document.createElement("span");
         when.className = "pdate";
-        when.textContent = s.ts ? fmtDateTime(s.ts) : "";
+        when.textContent = s.ts ? fmtDate(s.ts) : "";
         col.append(who, when);
         const dist = document.createElement("span");
         dist.className = "dist";
