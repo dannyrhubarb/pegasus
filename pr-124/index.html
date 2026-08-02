@@ -518,6 +518,25 @@
     .rowlist .row .lbest-by:empty { display: none; }
     /* Drill-down chevron (scores-mode picker: a row opens that level's board) */
     .rowlist .row .chev { color: var(--cyan); font-size: 1.25em; line-height: 1; opacity: 0.65; }
+    /* Level-mode icon (inline SVG — the repo stays self-contained, no icon
+       fonts): cyan by default, amber for the clock/finish modes. */
+    .rowlist .row .licon {
+      flex: 0 0 auto;
+      width: 30px; height: 30px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .rowlist .row .licon svg {
+      width: 26px; height: 26px;
+      color: var(--cyan);
+      stroke: currentColor; fill: none;
+      stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+      filter: drop-shadow(0 0 5px rgba(52, 231, 255, 0.45));
+    }
+    .rowlist .row .licon.amber svg {
+      color: var(--amber);
+      filter: drop-shadow(0 0 5px rgba(255, 194, 75, 0.45));
+    }
+    .rowlist .row .licon svg .pip { fill: currentColor; stroke: none; }
     /* What's New (About): read-only changelog rows — two lines, no tap
        affordance; the list scrolls internally like the score board. */
     #wn-list {
@@ -1035,11 +1054,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">d08c46e-pr-124</div>
+        <div class="info-value" id="git-rev">c805153-pr-124</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-07-22T21:56:46Z</div>
+        <div class="info-value" id="build-time">2026-08-02T23:32:19Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -2009,7 +2028,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "d08c46e-pr-124";
+    const wasmRev = "c805153-pr-124";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -2163,6 +2182,44 @@
       const t = file && levelTexts[file];
       return !!t && /^\s*time_limit\s*=/mi.test(t);
     }
+
+    // Per-level MODE icons for the picker rows: small inline SVGs (no icon
+    // fonts/CDNs — the repo stays self-contained), tinted by the .licon CSS.
+    // A level file picks one with `icon = <name>` (cosmetic, JS-only — the
+    // wasm parser ignores unknown keys, like `description`); without it the
+    // icon derives from the level's mode keys. Only names in this map ever
+    // reach innerHTML, so level-file text can't inject markup.
+    const LEVEL_ICONS = {
+      // score = completion time: race the clock
+      stopwatch: '<svg viewBox="0 0 24 24"><circle cx="12" cy="14" r="7"/>' +
+        '<path d="M12 14l3-3.4M10 2.5h4M12 2.5V5"/></svg>',
+      // a fixed time budget running out
+      hourglass: '<svg viewBox="0 0 24 24">' +
+        '<path d="M6 3h12M6 21h12M8 3v3l4 5.5L16 6V3M8 21v-3l4-5.5 4 5.5v3"/></svg>',
+      // the finish pad of a goal time trial
+      flag: '<svg viewBox="0 0 24 24"><path d="M6 21V3.5M6 4h11.5l-3 4 3 4H6"/></svg>',
+      // plain distance: as far as you can, either direction
+      arrow: '<svg viewBox="0 0 24 24">' +
+        '<path d="M3.5 12h17M7.5 7.5L3 12l4.5 4.5M16.5 7.5L21 12l-4.5 4.5"/></svg>',
+      // seed = random: every attempt rolls new rock
+      dice: '<svg viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="3.5"/>' +
+        '<circle class="pip" cx="8" cy="8" r="1.4"/><circle class="pip" cx="16" cy="8" r="1.4"/>' +
+        '<circle class="pip" cx="12" cy="12" r="1.4"/><circle class="pip" cx="8" cy="16" r="1.4"/>' +
+        '<circle class="pip" cx="16" cy="16" r="1.4"/></svg>',
+      // boulder-free gliding
+      plane: '<svg viewBox="0 0 24 24"><path d="M21 4L3.5 11l7 2.5L13 21l8-17zM21 4l-10.5 9.5"/></svg>',
+    };
+    const AMBER_ICONS = new Set(["stopwatch", "hourglass", "flag"]);
+    function levelIconName(file) {
+      const t = (file && levelTexts[file]) || "";
+      const m = /^\s*icon\s*=\s*(\w+)\s*$/mi.exec(t);
+      if (m && LEVEL_ICONS[m[1].toLowerCase()]) return m[1].toLowerCase();
+      // No (known) icon key: derive from the mode keys.
+      if (/^\s*goal_distance\s*=/mi.test(t)) return "flag";
+      if (levelIsTime(file)) return "stopwatch";
+      if (levelHasTimeLimit(file)) return "hourglass";
+      return "arrow";
+    }
     function fmtClock(secs) {
       const m = Math.floor(secs / 60), r = secs - m * 60;
       return m + ":" + (r < 10 ? "0" : "") + r.toFixed(1);
@@ -2196,6 +2253,12 @@
       for (const file of levelFiles) {
         const row = document.createElement("div");
         row.className = "row";
+        // Mode icon (stopwatch / hourglass / flag / arrow / dice / plane).
+        const ic = document.createElement("span");
+        const icName = levelIconName(file);
+        ic.className = "licon" + (AMBER_ICONS.has(icName) ? " amber" : "");
+        ic.innerHTML = LEVEL_ICONS[icName]; // fixed built-in strings only
+        row.appendChild(ic);
         // Title + (optional) one-line description, stacked in the left column.
         const col = document.createElement("span");
         col.className = "lcol";
@@ -2525,6 +2588,16 @@
       return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate())
         + " " + p(d.getHours()) + ":" + p(d.getMinutes());
     }
+    // Date-only twin of fmtDateTime — the board rows don't need the time.
+    function fmtDate(ts) {
+      const d = new Date(ts);
+      if (DATE_LOCALE) {
+        try { return d.toLocaleDateString(DATE_LOCALE, { dateStyle: "short" }); }
+        catch (e) { /* engine rejects the constructed tag — fall through */ }
+      }
+      const p = n => String(n).padStart(2, "0");
+      return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+    }
 
     fetch("config.json?nocache=" + Date.now(), { cache: "no-store" })
       .then(r => (r.ok ? r.json() : null))
@@ -2730,7 +2803,7 @@
 
     // Build the board rows for one score list (shared by cached + fresh
     // renders). Each entry is TWO LINES: rank / [name over localised
-    // date+time] / distance / ▶ watch. renderedBoardJson remembers what's
+    // date] / distance / ▶ watch. renderedBoardJson remembers what's
     // on screen so a background refetch that returns identical data doesn't
     // rebuild the DOM under an in-flight tap (same mis-tap hazard as the
     // level picker — see renderLevels).
@@ -2751,7 +2824,7 @@
         who.textContent = s.name;
         const when = document.createElement("span");
         when.className = "pdate";
-        when.textContent = s.ts ? fmtDateTime(s.ts) : "";
+        when.textContent = s.ts ? fmtDate(s.ts) : "";
         col.append(who, when);
         const dist = document.createElement("span");
         dist.className = "dist";
@@ -3314,6 +3387,54 @@
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") checkVersion();
     });
+  </script>
+
+  <!-- Touch tracer (debug aid): visible only while the Settings "Debug
+       HUD" toggle is on. Counts raw touch events at the window capture
+       phase — built to diagnose the Android-app "touches sometimes
+       ignored" field report: if CANCEL jumps when input dies, something
+       (system gesture nav, the WebView) is claiming the gesture; if
+       nothing increments at all, events were never delivered. Standalone
+       like the boot guard: no dependencies, unique globals, try/caught. -->
+  <script>
+    (function () {
+      try {
+        if (localStorage.getItem("pegasus_debug_hud") !== "1") return;
+        var tt = document.createElement("div");
+        tt.id = "touch-trace";
+        tt.style.cssText = "position:fixed;left:8px;bottom:8px;z-index:99;" +
+          "color:#7fffd4;font:11px/1.4 ui-monospace,monospace;" +
+          "background:rgba(0,0,0,.55);padding:4px 6px;border-radius:4px;" +
+          "pointer-events:none;white-space:pre";
+        document.body.appendChild(tt);
+        var tc = { start: 0, move: 0, end: 0, cancel: 0, pcancel: 0 };
+        var ttLast = "";
+        function ttUpd() {
+          tt.textContent = "ts " + tc.start + "  tm " + tc.move + "  te " + tc.end +
+            "\nCANCEL " + tc.cancel + "  pcancel " + tc.pcancel +
+            (ttLast ? "\n" + ttLast : "");
+        }
+        function ttHook(key, name) {
+          window.addEventListener(name, function (e) {
+            tc[key]++;
+            var t = (e.touches && e.touches[0]) ||
+                    (e.changedTouches && e.changedTouches[0]);
+            ttLast = name + (t ? " @" + Math.round(t.clientX) + "," +
+                     Math.round(t.clientY) : "") +
+                     " n=" + (e.touches ? e.touches.length : 0);
+            ttUpd();
+          }, { capture: true, passive: true });
+        }
+        ttHook("start", "touchstart");
+        ttHook("move", "touchmove");
+        ttHook("end", "touchend");
+        ttHook("cancel", "touchcancel");
+        window.addEventListener("pointercancel", function () {
+          tc.pcancel++; ttUpd();
+        }, { capture: true, passive: true });
+        ttUpd();
+      } catch (e) {}
+    })();
   </script>
 </body>
 </html>

@@ -1,5 +1,20 @@
 [
  {
+  "rev": "c805153",
+  "date": "2026-08-02T23:31:20Z",
+  "note": "The level picker now shows an icon for each level's game mode — stopwatch, hourglass, finish flag, and friends"
+ },
+ {
+  "rev": "e58537a",
+  "date": "2026-08-02T23:26:10Z",
+  "note": "High score boards now show just the date, not the time"
+ },
+ {
+  "rev": "3b3dee7",
+  "date": "2026-07-25T14:11:18+02:00",
+  "note": "Fixed touches being ignored on Android until you lifted your finger and tapped again"
+ },
+ {
   "rev": "d08c46e",
   "date": "2026-07-22T21:55:33Z",
   "note": "New level: The Flux Dash — race 1,000 m to the gold finish pad through an ever-changing cave; fastest time wins"
