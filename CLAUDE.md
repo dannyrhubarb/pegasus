@@ -1712,7 +1712,11 @@ re-acquired on the `visibilitychange` back while still wanted).
   build processing, submits the build to Beta App Review and attaches it
   to the beta group named by the `TESTFLIGHT_GROUP_NAME` repo variable
   (default "Public beta") — external testers get every build hands-free;
-  a group that doesn't exist yet is a soft no-op.
+  a group that doesn't exist yet is a soft no-op, and the group ATTACH
+  retries through ASC's propagation lag (a just-processed build can 404
+  on the betaGroups relationship endpoint while /v1/builds already calls
+  it VALID — seen live 2026-08; exhausted retries degrade to a soft
+  notice like the 422 path, the next build supersedes).
   **Cert-cap gotcha (hit live 2026-08, run 14)**: cloud signing mints a
   NEW Apple Development certificate on every run — the previous one's
   private key dies with its ephemeral runner, so the cert can never be

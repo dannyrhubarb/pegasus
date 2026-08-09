@@ -28,6 +28,10 @@ import jwt  # PyJWT
 API = "https://api.appstoreconnect.apple.com"
 PROCESSING_TIMEOUT_SECS = 30 * 60
 POLL_SECS = 60
+# The beta-group attach retries through ASC's post-processing propagation
+# lag (see the comment at the attach loop): up to 6 tries, 30 s apart.
+ATTACH_TRIES = 6
+ATTACH_RETRY_SECS = 30
 
 
 def token():
@@ -133,19 +137,35 @@ def main():
         return
     group_id = groups[0]["id"]
 
-    status, detail = req(
-        "POST", f"/v1/betaGroups/{group_id}/relationships/builds",
-        {"data": [{"type": "builds", "id": build_id}]},
-        quiet_statuses=(409, 422))
-    if status == 204:
-        print(f"Build {version} assigned to beta group '{group_name}'.")
-    elif status == 409:
-        print(f"Build {version} was already in beta group '{group_name}'.")
-    else:
-        # 422: the build isn't attachable yet (e.g. its review submission
-        # was skipped above). Soft outcome — a later build supersedes it.
+    # ASC's backend can lag a just-processed build: /v1/builds reports it
+    # VALID and the review submission succeeds, yet the betaGroups
+    # relationship endpoint 404s the same build id for a while ("There is
+    # no resource of type 'builds'" — seen live 2026-08 on build 16, which
+    # processed unusually fast). Retry the attach through the lag, then
+    # degrade to the same soft outcome as the 422 path — the build is
+    # uploaded and review-submitted either way, and a later build (or a
+    # manual re-run) supersedes.
+    for attempt in range(ATTACH_TRIES):
+        status, detail = req(
+            "POST", f"/v1/betaGroups/{group_id}/relationships/builds",
+            {"data": [{"type": "builds", "id": build_id}]},
+            quiet_statuses=(404, 409, 422))
+        if status == 204:
+            print(f"Build {version} assigned to beta group '{group_name}'.")
+            return
+        if status == 409:
+            print(f"Build {version} was already in beta group '{group_name}'.")
+            return
+        if status == 404 and attempt < ATTACH_TRIES - 1:
+            print(f"  build not attachable yet (404), retrying in {ATTACH_RETRY_SECS}s…")
+            time.sleep(ATTACH_RETRY_SECS)
+            continue
+        # 422: the build isn't attachable (e.g. its review submission was
+        # skipped above) — retrying won't change that. Exhausted 404s land
+        # here too. Soft outcome — a later build supersedes it.
         print(f"::notice::could not attach build {version} to "
               f"'{group_name}' yet: {(detail or '')[:300]}")
+        return
 
 
 if __name__ == "__main__":
