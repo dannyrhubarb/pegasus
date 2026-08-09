@@ -518,6 +518,25 @@
     .rowlist .row .lbest-by:empty { display: none; }
     /* Drill-down chevron (scores-mode picker: a row opens that level's board) */
     .rowlist .row .chev { color: var(--cyan); font-size: 1.25em; line-height: 1; opacity: 0.65; }
+    /* Level-mode icon (inline SVG — the repo stays self-contained, no icon
+       fonts): cyan by default, amber for the clock/finish modes. */
+    .rowlist .row .licon {
+      flex: 0 0 auto;
+      width: 30px; height: 30px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .rowlist .row .licon svg {
+      width: 26px; height: 26px;
+      color: var(--cyan);
+      stroke: currentColor; fill: none;
+      stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+      filter: drop-shadow(0 0 5px rgba(52, 231, 255, 0.45));
+    }
+    .rowlist .row .licon.amber svg {
+      color: var(--amber);
+      filter: drop-shadow(0 0 5px rgba(255, 194, 75, 0.45));
+    }
+    .rowlist .row .licon svg .pip { fill: currentColor; stroke: none; }
     /* What's New (About): read-only changelog rows — two lines, no tap
        affordance; the list scrolls internally like the score board. */
     #wn-list {
@@ -1035,11 +1054,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">b8b0925</div>
+        <div class="info-value" id="git-rev">fbc1e1f</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-08-02T23:31:22Z</div>
+        <div class="info-value" id="build-time">2026-08-09T18:57:45Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -1723,7 +1742,10 @@
         // unfinished attempt is a DNF. Other levels keep distance + best.
         const complete = wasm_exports.run_end_cause
           && wasm_exports.run_end_cause() === 3;
-        goTitle.textContent = complete ? "LEVEL COMPLETE" : "GAME OVER";
+        goTitle.textContent = complete
+          ? (levelHasTimeLimit(currentLevelFile) && !levelIsTime(currentLevelFile)
+              ? "TIME'S UP" : "LEVEL COMPLETE")
+          : "GAME OVER";
         goTitle.classList.toggle("win", complete);
         if (levelIsTime(currentLevelFile)) {
           goDist.textContent = complete
@@ -2006,7 +2028,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "b8b0925";
+    const wasmRev = "fbc1e1f";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -2153,6 +2175,49 @@
       const t = file && levelTexts[file];
       return !!t && /^\s*scoring\s*=\s*time\s*$/mi.test(t);
     }
+    // Time-LIMITED levels (a `time_limit =` key — The Flux Sprint's hard
+    // one-minute clock) end in TIME'S UP rather than LEVEL COMPLETE; their
+    // scores stay plain distance.
+    function levelHasTimeLimit(file) {
+      const t = file && levelTexts[file];
+      return !!t && /^\s*time_limit\s*=/mi.test(t);
+    }
+
+    // Level-TYPE icons for the picker rows: the glyph classifies the game
+    // mode, so levels of the same type share an icon (owner direction —
+    // "show what type of level it is", not per-level mascots). Derived
+    // from the level file's mode keys, so any future level gets the right
+    // type icon automatically:
+    //   scoring = time  → stopwatch (race the clock: The Hollows, The
+    //                     Flux Dash — a goal trial is clock-scored too)
+    //   time_limit      → hourglass (a fixed time budget: The Flux Sprint)
+    //   otherwise       → double arrow (distance: Expanse, Glide, Flux)
+    // Small inline SVGs (no icon fonts/CDNs — the repo stays
+    // self-contained), tinted by the .licon CSS: cyan for distance, amber
+    // for the clock modes. A level file may still override with
+    // `icon = <name>` (cosmetic, JS-only — the wasm parser ignores unknown
+    // keys); only names in this map ever reach innerHTML, so level-file
+    // text can't inject markup.
+    const LEVEL_ICONS = {
+      // score = completion time: race the clock
+      stopwatch: '<svg viewBox="0 0 24 24"><circle cx="12" cy="14" r="7"/>' +
+        '<path d="M12 14l3-3.4M10 2.5h4M12 2.5V5"/></svg>',
+      // a fixed time budget running out
+      hourglass: '<svg viewBox="0 0 24 24">' +
+        '<path d="M6 3h12M6 21h12M8 3v3l4 5.5L16 6V3M8 21v-3l4-5.5 4 5.5v3"/></svg>',
+      // distance: as far as you can, either direction
+      arrow: '<svg viewBox="0 0 24 24">' +
+        '<path d="M3.5 12h17M7.5 7.5L3 12l4.5 4.5M16.5 7.5L21 12l-4.5 4.5"/></svg>',
+    };
+    const AMBER_ICONS = new Set(["stopwatch", "hourglass"]);
+    function levelIconName(file) {
+      const t = (file && levelTexts[file]) || "";
+      const m = /^\s*icon\s*=\s*(\w+)\s*$/mi.exec(t);
+      if (m && LEVEL_ICONS[m[1].toLowerCase()]) return m[1].toLowerCase();
+      if (levelIsTime(file)) return "stopwatch";
+      if (levelHasTimeLimit(file)) return "hourglass";
+      return "arrow";
+    }
     function fmtClock(secs) {
       const m = Math.floor(secs / 60), r = secs - m * 60;
       return m + ":" + (r < 10 ? "0" : "") + r.toFixed(1);
@@ -2186,6 +2251,12 @@
       for (const file of levelFiles) {
         const row = document.createElement("div");
         row.className = "row";
+        // Type icon (stopwatch / hourglass / arrow — see LEVEL_ICONS).
+        const ic = document.createElement("span");
+        const icName = levelIconName(file);
+        ic.className = "licon" + (AMBER_ICONS.has(icName) ? " amber" : "");
+        ic.innerHTML = LEVEL_ICONS[icName]; // fixed built-in strings only
+        row.appendChild(ic);
         // Title + (optional) one-line description, stacked in the left column.
         const col = document.createElement("span");
         col.className = "lcol";

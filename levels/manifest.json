@@ -1,3 +1,8 @@
 {
-  "levels": ["hollows.level", "expanse.level", "glide.level", "flux.level"]
+  "levels": [
+    "hollows.level",
+    "expanse.level", "expanse-sprint.level", "expanse-dash.level",
+    "glide.level", "glide-sprint.level", "glide-dash.level",
+    "flux.level", "flux-sprint.level", "flux-dash.level"
+  ]
 }

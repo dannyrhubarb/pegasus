@@ -1,5 +1,30 @@
 [
  {
+  "rev": "fbc1e1f",
+  "date": "2026-08-09T20:56:47+02:00",
+  "note": "The Expanse and The Glide each get Sprint (60 seconds) and Dash (1,000 m race) variants — with the record ghost to race, since their worlds never change"
+ },
+ {
+  "rev": "13e95da",
+  "date": "2026-08-09T20:56:47+02:00",
+  "note": "Level picker icons now show each level's type — stopwatch for race-the-clock, hourglass for a time limit, arrows for distance"
+ },
+ {
+  "rev": "fb35196",
+  "date": "2026-08-09T20:56:47+02:00",
+  "note": "The level picker now shows an icon for each level's game mode — stopwatch, hourglass, finish flag, and friends"
+ },
+ {
+  "rev": "76440c6",
+  "date": "2026-08-09T20:56:47+02:00",
+  "note": "New level: The Flux Dash — race 1,000 m to the gold finish pad through an ever-changing cave; fastest time wins"
+ },
+ {
+  "rev": "32212e5",
+  "date": "2026-08-09T20:56:47+02:00",
+  "note": "New level: The Flux Sprint — get as far as you can in 60 seconds through an endless cave that reshuffles every attempt"
+ },
+ {
   "rev": "e58537a",
   "date": "2026-08-02T23:26:10Z",
   "note": "High score boards now show just the date, not the time"
