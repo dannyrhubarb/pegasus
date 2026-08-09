@@ -122,6 +122,19 @@ jobs:
         env:
           ASC_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
 
+      # Every archive on a fresh runner mints a NEW Apple Development
+      # certificate (the previous one's private key died with its ephemeral
+      # runner), so dead certs accumulate until Apple's account cap breaks
+      # every archive ("maximum number of certificates" — seen live 2026-08).
+      # Revoke them before archiving; best-effort, warnings never fail the
+      # build. See ios/asc-cleanup-certs.py for the full story.
+      - name: Revoke stale development certificates
+        run: |
+          python3 -m pip install --quiet --user PyJWT cryptography \
+            || python3 -m pip install --quiet --break-system-packages PyJWT cryptography
+          export ASC_KEY_PATH="$HOME/private_keys/AuthKey_$ASC_KEY_ID.p8"
+          python3 ios/asc-cleanup-certs.py
+
       - name: Archive
         run: |
           xcodebuild \
