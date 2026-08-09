@@ -1669,6 +1669,22 @@ re-acquired on the `visibilitychange` back while still wanted).
   to the beta group named by the `TESTFLIGHT_GROUP_NAME` repo variable
   (default "Public beta") — external testers get every build hands-free;
   a group that doesn't exist yet is a soft no-op.
+  **Cert-cap gotcha (hit live 2026-08, run 14)**: cloud signing mints a
+  NEW Apple Development certificate on every run — the previous one's
+  private key dies with its ephemeral runner, so the cert can never be
+  reused — and the dead certs pile up in the Apple account until its
+  certificate cap breaks every archive ("Your account has reached the
+  maximum number of certificates" + the knock-on "No profiles for
+  'se.danielfalk.pegasus' were found"). `ios/asc-cleanup-certs.py` (the
+  step before Archive, same ASC key) revokes DEVELOPMENT certificates
+  each run so the account stays far under the cap — best-effort, its
+  failures are workflow warnings and never fail the build; distribution
+  certificates are deliberately untouched. It also revokes a dev cert
+  minted by a human's local Xcode — automatic signing re-creates that on
+  their next build-and-run, the accepted cost. If the warnings ever say
+  403 on revoke, the ASC API key's role can't manage certificates (needs
+  Admin) and the pile must be cleared by hand at developer.apple.com →
+  Certificates.
 
 ## Android app (`android/`)
 
