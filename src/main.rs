@@ -454,6 +454,32 @@ fn raise_best_dist(level: &Level, dist: f32) {
     }
 }
 
+// World x where the record flag plants for direction `dir` (±1 — the
+// record is max |x|, so the line to beat runs in both directions). Normally
+// the record line itself; when that line falls inside a shaft opening
+// (where the floor is punched through — a flag there would float over the
+// hole) it is nudged inward, toward spawn, onto the nearest solid floor
+// segment.
+fn record_flag_x(level: &Level, best: f32, dir: f32) -> f32 {
+    let raw = best * dir;
+    let mut seg = (raw / SEG_LEN).floor() as i64;
+    if !level.seg_in_opening(seg) {
+        return raw;
+    }
+    let step = if dir > 0.0 { -1 } else { 1 };
+    let mut guard = 0;
+    while level.seg_in_opening(seg) && guard <= SHAFT_OPEN_SEGS {
+        seg += step;
+        guard += 1;
+    }
+    // Just inside the solid segment, next to the opening's edge.
+    if dir > 0.0 {
+        (seg + 1) as f32 * SEG_LEN - 0.4
+    } else {
+        seg as f32 * SEG_LEN + 0.4
+    }
+}
+
 // Best completion time on the current Time-scoring level, f32 seconds bits
 // (0 = no completion yet). Lower is better: JS seeds it with the level's
 // global all-time record (the fastest board entry) via set_best_time — the
@@ -2404,6 +2430,76 @@ async fn main() {
             }
         }
 
+        // Record flag: on Distance levels a gold pennant is planted where
+        // the current record ends, at ±BEST (the record is max |x|, so the
+        // line to beat runs in both directions), lettered with the record
+        // holder's initial. The ground height is recomputed from the LIVE
+        // level every frame (stand_y, so a pad/finish deck under the line
+        // holds the flag on its deck) — load-bearing on `seed = random`
+        // levels (the Flux family), where every load/restart rolls new
+        // rock: the flag must stand on THIS attempt's floor, not the floor
+        // of the world the record was flown in. Replicated per loaded
+        // layer like pads (the world repeats every V_PERIOD). Live world
+        // only (a watched replay can be a foreign level whose record this
+        // isn't) and procedural only (no shipped hand-drawn level is
+        // distance-scored, and a terrain level has no floor curve to
+        // plant on).
+        if replay_player.is_none()
+            && world_sim.level.scoring == Scoring::Distance
+            && world_sim.level.terrain.is_none()
+        {
+            let best = get_best_dist();
+            if best >= 1.0 {
+                // Names render uppercase everywhere; empty (offline, no
+                // session best yet) = a blank pennant.
+                let initial = BEST_NAME
+                    .lock()
+                    .unwrap()
+                    .trim()
+                    .chars()
+                    .next()
+                    .and_then(|c| c.to_uppercase().next());
+                for dir in [1.0f32, -1.0] {
+                    let fx = record_flag_x(&world_sim.level, best, dir);
+                    for layer in lay_lo..=lay_hi {
+                        // stand_y = ground + 0.78.
+                        let ground = layer as f32 * V_PERIOD
+                            + world_sim.level.stand_y(fx) - 0.78;
+                        let base = w2s(fx, ground, sh, cam_x, cam_y);
+                        if base.x < -margin || base.x > sw + margin
+                            || base.y < -150.0 || base.y > sh + 150.0 {
+                            continue;
+                        }
+                        let top = w2s(fx, ground + 2.6, sh, cam_x, cam_y);
+                        draw_line(base.x, base.y, top.x, top.y, 2.5 * dpi,
+                            Color::from_rgba(190, 200, 218, 235));
+                        // Cloth flies inward (toward spawn) with a light
+                        // flutter — render-side cosmetics only, nothing
+                        // here touches the sim.
+                        let fl = (get_time() * 3.0 + dir as f64).sin() as f32 * 0.08;
+                        let cw = -dir * 1.5;
+                        let c0 = top;
+                        let c1 = w2s(fx + cw, ground + 2.6 + fl, sh, cam_x, cam_y);
+                        let c2 = w2s(fx + cw, ground + 1.7 + fl, sh, cam_x, cam_y);
+                        let c3 = w2s(fx, ground + 1.7, sh, cam_x, cam_y);
+                        let cloth = Color::from_rgba(255, 200, 60, 235);
+                        draw_triangle(c0, c1, c2, cloth);
+                        draw_triangle(c0, c2, c3, cloth);
+                        if let Some(ch) = initial {
+                            let label = ch.to_string();
+                            let fs = 0.8 * view_scale;
+                            let dim = measure_text(&label, None, fs as u16, 1.0);
+                            let cx = (c0.x + c1.x) * 0.5;
+                            let cy = (c0.y + c2.y) * 0.5;
+                            draw_text(&label, cx - dim.width / 2.0,
+                                cy + dim.offset_y / 2.0, fs,
+                                Color::from_rgba(40, 34, 12, 255));
+                        }
+                    }
+                }
+            }
+        }
+
         // Particles
         for p in &particles {
             let s = w2s(p.x, p.y, sh, cam_x, cam_y);
@@ -3357,6 +3453,28 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn record_flag_stays_off_shaft_openings() {
+        let level = Level::demo(); // shafted world
+        // Solid floor under the record line: the flag plants exactly there.
+        assert_eq!(record_flag_x(&level, 10.0, 1.0), 10.0);
+        assert_eq!(record_flag_x(&level, 10.0, -1.0), -10.0);
+        // A record line in the middle of a +x shaft opening: nudged inward
+        // (toward spawn) onto solid floor, by less than the opening + a seg.
+        let o = level.shaft_open_seg(0);
+        let mid = (o as f32 + SHAFT_OPEN_SEGS as f32 * 0.5) * SEG_LEN;
+        let fx = record_flag_x(&level, mid, 1.0);
+        assert!(!level.seg_in_opening((fx / SEG_LEN).floor() as i64));
+        assert!(fx < mid && fx > mid - (SHAFT_OPEN_SEGS + 1) as f32 * SEG_LEN);
+        // Same on the −x side (slot −1 lands in negative x).
+        let o_neg = level.shaft_open_seg(-1);
+        let mid_neg = (o_neg as f32 + SHAFT_OPEN_SEGS as f32 * 0.5) * SEG_LEN;
+        assert!(mid_neg < 0.0);
+        let fx = record_flag_x(&level, mid_neg.abs(), -1.0);
+        assert!(!level.seg_in_opening((fx / SEG_LEN).floor() as i64));
+        assert!(fx > mid_neg && fx < 0.0);
+    }
 
     #[test]
     fn run_analytics_publishes_payload_and_skips_zero_tick_runs() {
