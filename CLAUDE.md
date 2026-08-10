@@ -798,7 +798,20 @@ via `set_best_dist()` (see "Online high scores"; `load_level` zeroes it so
 records never leak across levels). The HUD BEST is the world record — or
 the session's own best where that's higher / offline. There is **no local
 persistence** (the old `pegasus_best_<file>` mirror is gone; stale keys
-are cleared at boot).
+are cleared at boot). **Record flag** (2026-08): on Distance levels a gold
+pennant is planted in-world where the current record ends — at BOTH ±BEST,
+since the record is max |x| — lettered with the record holder's initial
+(first char of `BEST_NAME`; blank pennant when no holder is known, "Y"
+after the "by you" flip). Drawn in the pads/particles block of main's
+frame loop, replicated per loaded layer like pads; the ground height comes
+from `stand_y` on the LIVE level every frame (so a pad/finish deck under
+the line holds the flag on its deck) — load-bearing on `seed = random`
+levels, where each attempt's rock differs and the flag must stand on THIS
+world's floor. A record line inside a shaft opening (no floor) is nudged
+inward onto solid rock by `record_flag_x` (pure, unit-tested). Live world
+only (not drawn during replays — a watched replay can be a foreign level
+whose record this isn't) and procedural only (terrain levels have no floor
+curve; no shipped hand-drawn level is distance-scored).
 
 **Replays**: physics depends on the level, so the recording header carries
 `LevelParams` (scoring/shafts/obstacles/pad_spacing/seed — NOT the cosmetic
