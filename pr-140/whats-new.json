@@ -1,18 +1,18 @@
 [
  {
-  "rev": "89b7080",
-  "date": "2026-08-10T19:16:53Z",
-  "note": "Fixed the record ghost racing through walls on The Flux levels after you set the record"
+  "rev": "6c0f105",
+  "date": "2026-08-10T19:32:29Z",
+  "note": "Fixed the ghost ship racing through walls on the Flux levels after you take the record — hauntings reported by Marcus, ghost busted accordingly"
  },
  {
   "rev": "6ef106a",
   "date": "2026-08-10T20:40:06+02:00",
-  "note": "The minimap now shows a progress bar filling up as you close in on the record"
+  "note": "The minimap now shows a progress bar filling up as you close in on the record — another fine idea out of the Marcus suggestion box"
  },
  {
   "rev": "888decd",
   "date": "2026-08-10T17:50:58Z",
-  "note": "A flag now marks the spot where the record run ended on distance levels, flying the record holder's initial"
+  "note": "A flag now marks the spot where the record run ended on distance levels, flying the record holder's initial — planted at the suggestion of Marcus"
  },
  {
   "rev": "fbc1e1f",
