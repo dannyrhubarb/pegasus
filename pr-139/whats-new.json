@@ -1,20 +1,5 @@
 [
  {
-  "rev": "e3b2502",
-  "date": "2026-08-10T19:16:16Z",
-  "note": "Only the SELECT LEVEL title (not HIGH SCORES) gets the extra spacing"
- },
- {
-  "rev": "12f78ec",
-  "date": "2026-08-10T19:12:22Z",
-  "note": "More breathing room above the level picker's title"
- },
- {
-  "rev": "0b67014",
-  "date": "2026-08-10T19:04:02Z",
-  "note": "Level picker has more breathing room between rows and level families"
- },
- {
   "rev": "6ef106a",
   "date": "2026-08-10T20:40:06+02:00",
   "note": "The minimap now shows a progress bar filling up as you close in on the record"
