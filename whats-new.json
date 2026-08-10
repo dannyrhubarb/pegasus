@@ -1,5 +1,10 @@
 [
  {
+  "rev": "6ef106a",
+  "date": "2026-08-10T20:40:06+02:00",
+  "note": "The minimap now shows a progress bar filling up as you close in on the record"
+ },
+ {
   "rev": "888decd",
   "date": "2026-08-10T17:50:58Z",
   "note": "A flag now marks the spot where the record run ended on distance levels, flying the record holder's initial"
