@@ -2994,6 +2994,17 @@ async fn main() {
                 }
                 report_run_analytics(1, ended.ticks(), ended_dist, ended_fuel, ended_hull);
             }
+            // A `seed = random` level just re-rolled its world — drop an
+            // adopted ghost flown on the previous roll's rock. One slips in
+            // exactly when YOU set the record: the submitted run comes back
+            // as the record ghost while the wreck still holds the seed it
+            // was flown on, passes the adoption equality, and without this
+            // re-check it would race through walls that don't exist in this
+            // attempt's world (and keep doing so every restart). Fixed-seed
+            // levels keep their ghost — the params still match.
+            if ghost_rec.as_ref().is_some_and(|g| g.level != sim.level.to_params()) {
+                ghost_rec = None;
+            }
             // The ghost re-simulates the BEST run (the global record,
             // pushed from JS) from its first keyframe, in lockstep with
             // the new run.
@@ -3483,6 +3494,24 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rerolled_world_orphans_the_previous_rolls_ghost() {
+        // On a `seed = random` level every reset rolls a fresh world, so a
+        // ghost recording adopted under the previous roll (the you-just-set-
+        // the-record path) must fail the params equality the reset re-check
+        // gates on — while a fixed-seed level's ghost survives restarts.
+        let mut lv = Level::demo();
+        lv.random_seed = true;
+        let a = with_rolled_seed(lv.clone());
+        let b = with_rolled_seed(lv);
+        assert!(a.to_params() != b.to_params());
+        let fixed = Level::demo();
+        assert!(
+            with_rolled_seed(fixed.clone()).to_params()
+                == with_rolled_seed(fixed).to_params()
+        );
+    }
 
     #[test]
     fn record_flag_stays_off_shaft_openings() {
