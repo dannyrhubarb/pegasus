@@ -565,6 +565,13 @@
        scrolling) score board — ten-plus similar rows read cramped at the
        score list's tighter rhythm. Scoped to #level-list only; the score
        board stays as-is. */
+    /* More air around "SELECT LEVEL" itself — the tighter rows below now
+       read as clusters (see .group-start), and the title wants a clearer
+       separation from them to match. Scoped to the level picker only. */
+    #levels-title {
+      margin-top: 6px;
+      margin-bottom: 26px;
+    }
     #level-list { gap: 14px; }
     #level-list .row { padding: 16px 18px; }
     #level-list .row .lcol { gap: 5px; }
@@ -1090,11 +1097,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">0b67014-pr-139</div>
+        <div class="info-value" id="git-rev">12f78ec-pr-139</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-08-10T19:05:31Z</div>
+        <div class="info-value" id="build-time">2026-08-10T19:13:39Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -2108,7 +2115,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "0b67014-pr-139";
+    const wasmRev = "12f78ec-pr-139";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git

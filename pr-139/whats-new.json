@@ -1,5 +1,10 @@
 [
  {
+  "rev": "12f78ec",
+  "date": "2026-08-10T19:12:22Z",
+  "note": "More breathing room above the level picker's title"
+ },
+ {
   "rev": "0b67014",
   "date": "2026-08-10T19:04:02Z",
   "note": "Level picker has more breathing room between rows and level families"
