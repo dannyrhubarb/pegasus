@@ -565,11 +565,10 @@
        scrolling) score board — ten-plus similar rows read cramped at the
        score list's tighter rhythm. Scoped to #level-list only; the score
        board stays as-is. */
-    /* More air around "SELECT LEVEL" itself — the tighter rows below now
-       read as clusters (see .group-start), and the title wants a clearer
-       separation from them to match. Fly-mode only (see openLevelPicker) —
-       the "HIGH SCORES" title keeps its normal spacing. */
-    #levels-title.fly-mode {
+    /* More air around the picker's own title (SELECT LEVEL / HIGH SCORES)
+       — the tighter rows below now read as clusters (see .group-start),
+       and the title wants a clearer separation from them to match. */
+    #levels-title {
       margin-top: 22px;
       margin-bottom: 34px;
     }
@@ -1569,7 +1568,6 @@
         return;
       }
       levelsTitle.textContent = mode === "scores" ? "HIGH SCORES" : "SELECT LEVEL";
-      levelsTitle.classList.toggle("fly-mode", mode !== "scores");
       renderLevels();
       prefetchGlobalBests(); // warm each level's global record for the rows
       showScreen("scr-levels");
