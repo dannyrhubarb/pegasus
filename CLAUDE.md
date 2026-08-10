@@ -811,7 +811,10 @@ world's floor. A record line inside a shaft opening (no floor) is nudged
 inward onto solid rock by `record_flag_x` (pure, unit-tested). Live world
 only (not drawn during replays — a watched replay can be a foreign level
 whose record this isn't) and procedural only (terrain levels have no floor
-curve; no shipped hand-drawn level is distance-scored).
+curve; no shipped hand-drawn level is distance-scored). The **record
+progress bar** rides the same gates: a discreet slim bar along the
+minimap's inside bottom edge, filling continuously as the run's `max_dist`
+closes on the record, flag-gold, pulsing when matched.
 
 **Replays**: physics depends on the level, so the recording header carries
 `LevelParams` (scoring/shafts/obstacles/pad_spacing/seed — NOT the cosmetic
