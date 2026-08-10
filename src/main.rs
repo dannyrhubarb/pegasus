@@ -3210,6 +3210,36 @@ async fn main() {
                     Color::from_rgba(150, 190, 255, 180));
             }
 
+            // Record progress bar — a discreet slim bar along the minimap's
+            // inside bottom edge, filling continuously as this run's max |x|
+            // closes on the current record (the flag line), in the flag's
+            // gold. Pulses once the record is matched. Distance levels with
+            // a known record only, live world only — same gates as the
+            // record flag (a watched replay can be a foreign level whose
+            // record this isn't).
+            if replay_player.is_none() && world_sim.level.scoring == Scoring::Distance {
+                let best = get_best_dist();
+                if best >= 1.0 {
+                    let frac = (world_sim.max_dist / best).clamp(0.0, 1.0);
+                    let bar_h = 4.0 * ui;
+                    let y = mm_oy + mm_h - bar_h - 3.0 * ui;
+                    let x0 = mm_ox + 3.0 * ui;
+                    let track_w = mm_w - 6.0 * ui;
+                    draw_rectangle(x0, y, track_w, bar_h,
+                        Color::from_rgba(255, 200, 60, 45));
+                    let fill = if frac >= 1.0 {
+                        // Record matched — gentle gold pulse, the same
+                        // idiom as the finish-pad beacon.
+                        let p = ((get_time() * 6.0).sin() * 0.5 + 0.5) as f32;
+                        Color::from_rgba(255, (200.0 + 40.0 * p) as u8,
+                            (60.0 + 90.0 * p) as u8, 255)
+                    } else {
+                        Color::from_rgba(255, 200, 60, 220)
+                    };
+                    draw_rectangle(x0, y, track_w * frac, bar_h, fill);
+                }
+            }
+
             // Border
             draw_rectangle_lines(mm_ox, mm_oy, mm_w, mm_h, 1.0, Color::from_rgba(255, 255, 255, 120));
         }
