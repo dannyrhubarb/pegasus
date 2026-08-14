@@ -263,6 +263,70 @@
       background: rgba(255, 194, 75, 0.25);
       box-shadow: inset 0 0 6px rgba(255, 194, 75, 0.35);
     }
+    /* Compare picker: the speed panel's twin on the LEFT, in the compare
+       ghost's magenta — the same colour the second ship is drawn in, so the
+       button, the panel and the silhouette on screen read as one thing. */
+    #rp-ghost.on {
+      color: var(--magenta);
+      border-color: var(--magenta);
+      background: rgba(255, 84, 214, 0.2);
+      box-shadow: 0 0 10px rgba(255, 84, 214, 0.45);
+    }
+    #rp-ghost-menu {
+      position: absolute;
+      left: 10px;
+      bottom: calc(100% + 8px);
+      display: none;
+      flex-direction: column;
+      gap: 2px;
+      padding: 8px;
+      border-radius: 12px;
+      background: rgba(8, 16, 34, 0.94);
+      border: 2px solid var(--magenta);
+      box-shadow: 0 0 10px rgba(255, 84, 214, 0.4);
+      /* A long board must scroll inside the panel, never push it off-screen. */
+      max-height: 46vh;
+      max-width: min(78vw, 340px);
+      overflow-y: auto;
+    }
+    #rp-ghost-menu.open { display: flex; }
+    .rp-ghost-hd {
+      color: var(--magenta);
+      font: bold 11px var(--mono);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      padding: 2px 8px 6px;
+    }
+    .rp-ghost-opt {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      padding: 9px 12px;
+      border-radius: 8px;
+      color: var(--magenta);
+      font: bold 14px var(--mono);
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+      white-space: nowrap;
+    }
+    .rp-ghost-opt:hover { background: rgba(255, 84, 214, 0.15); }
+    .rp-ghost-opt.sel {
+      background: rgba(255, 84, 214, 0.25);
+      box-shadow: inset 0 0 6px rgba(255, 84, 214, 0.35);
+    }
+    .rp-ghost-opt .rk { opacity: 0.65; min-width: 1.8em; }
+    .rp-ghost-opt .nm { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
+    .rp-ghost-opt .sc { opacity: 0.8; font-size: 0.86em; }
+    #rp-ghost-note {
+      display: none;
+      color: var(--faint);
+      font: 11px var(--mono);
+      padding: 6px 12px 2px;
+      white-space: normal;
+    }
+    #rp-ghost-note.on { display: block; }
 
     /* --- Game menu --------------------------------------------------------
        One fullscreen overlay, one visible .screen at a time. Neon-arcade
@@ -846,7 +910,10 @@
        + seek slider (visible while a replay plays) -->
   <div id="replay-bar">
     <div class="rp-row">
-      <div class="rp-side"></div>
+      <div class="rp-side">
+        <div id="rp-ghost" class="cbtn rp-btn rp-step" role="button" aria-haspopup="true"
+             aria-label="Race another run" title="Race another run as a ghost" style="display:none">VS</div>
+      </div>
       <div class="rp-transport">
         <div id="rp-back" class="cbtn rp-btn rp-step" role="button" aria-label="Step 0.1 s back" title="Step 0.1 s back (hold to repeat)">
           <svg class="icn" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -886,6 +953,13 @@
       <div class="rp-speed-opt" role="menuitem" data-speed="1">1×</div>
       <div class="rp-speed-opt" role="menuitem" data-speed="2">2×</div>
       <div class="rp-speed-opt" role="menuitem" data-speed="4">4×</div>
+    </div>
+    <!-- Compare picker: the board runs that can be raced against the one
+         being watched (populated from the cached board on every watch) -->
+    <div id="rp-ghost-menu" role="menu" aria-label="Race another run">
+      <div class="rp-ghost-hd">Race another run</div>
+      <div id="rp-ghost-list"></div>
+      <div id="rp-ghost-note"></div>
     </div>
   </div>
 
@@ -1594,6 +1668,8 @@
     });
     document.getElementById("btn-replay").addEventListener("click", () => {
       pegAnalytics.replayWatch("gameover");
+      // Your own run can be raced against the board too — same picker.
+      armCompare(currentLevelFile, null);
       call("ui_command", 2);
       uiCmdPending = true;
       closeMenu(); // state flips to replay; the poll below brings us back
@@ -1936,11 +2012,133 @@
         call("set_replay_speed", parseFloat(opt.dataset.speed));
         rpSpeedMenu.classList.remove("open");
       }));
-    // A tap anywhere else on the bar dismisses the picker.
+    // --- Compare ghost (VS) ---
+    // A SECOND board run overlaid on the one being watched, so two runs can
+    // be raced against each other from the scores screen. The candidates are
+    // the board the replay was launched from — already cached, so opening
+    // the picker costs no fetch; the blob is pulled only when a run is
+    // picked, exactly like ▶ watch. The game does the rest: it re-simulates
+    // the second recording in lockstep with the replay's tick clock and
+    // draws it as a magenta silhouette (see load_compare_blob in main.rs).
+    const rpGhostBtn = document.getElementById("rp-ghost");
+    const rpGhostMenu = document.getElementById("rp-ghost-menu");
+    const rpGhostList = document.getElementById("rp-ghost-list");
+    const rpGhostNote = document.getElementById("rp-ghost-note");
+    let compareCandidates = [];   // board entries with a replay, minus the watched one
+    let compareActivePath = null; // the run currently racing (null = none)
+    let compareLevelFile = null;  // whose board the candidates came from
+
+    // Remember what could be raced against the replay that is about to
+    // start. Called at both replay entry points (a board's ▶ and the
+    // game-over "Watch replay"), so the picker is armed before the first
+    // frame plays — the game itself has already dropped any previous
+    // compare ghost by then.
+    function armCompare(file, watchedPath) {
+      compareLevelFile = file;
+      compareActivePath = null;
+      const board = (file && !isCustomLevel(file))
+        ? (getBoard(levelStem(file), scoresPeriod)
+           || getBoard(levelStem(file), "alltime") || [])
+        : [];
+      compareCandidates = board
+        .map((s, i) => ({ rank: i + 1, name: s.name, score: s.score, replayPath: s.replayPath }))
+        .filter(s => s.replayPath && s.replayPath !== watchedPath);
+      rpGhostBtn.classList.remove("on");
+    }
+
+    function renderGhostMenu() {
+      rpGhostList.textContent = "";
+      const row = (rank, name, score, path) => {
+        const el = document.createElement("div");
+        el.className = "rp-ghost-opt" + (compareActivePath === path ? " sel" : "");
+        el.setAttribute("role", "menuitem");
+        const rk = document.createElement("span");
+        rk.className = "rk";
+        rk.textContent = rank;
+        const nm = document.createElement("span");
+        nm.className = "nm";
+        nm.textContent = name; // pilot names are player text — never innerHTML
+        const sc = document.createElement("span");
+        sc.className = "sc";
+        sc.textContent = score;
+        el.append(rk, nm, sc);
+        onTap(el, () => pickCompare(path, name));
+        rpGhostList.appendChild(el);
+      };
+      row("", "No ghost", "", null);
+      compareCandidates.forEach(s =>
+        row(s.rank + ".", s.name, fmtScore(compareLevelFile, s.score), s.replayPath));
+    }
+
+    function pickCompare(path, name) {
+      rpHideAt = Date.now() + RP_HIDE_MS;
+      rpGhostNote.classList.remove("on");
+      if (!path) { // "No ghost" — take the second ship back off
+        call("clear_compare");
+        compareActivePath = null;
+        rpGhostBtn.classList.remove("on");
+        renderGhostMenu();
+        return;
+      }
+      if (!backendCfg) return;
+      rpGhostNote.textContent = "Loading…";
+      rpGhostNote.classList.add("on");
+      fetch(backendCfg.replayBaseUrl + "/" + path)
+        .then(r => {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.arrayBuffer();
+        })
+        .then(buf => {
+          if (!pushBytesToWasm(new Uint8Array(buf), "load_compare_blob")) {
+            throw new Error("replay rejected by the game (build mismatch?)");
+          }
+          pushTextToWasm(name, "set_compare_name");
+          compareActivePath = path;
+          rpGhostBtn.classList.add("on");
+          renderGhostMenu();
+          // The game adopts it at its next frame and reports back what it
+          // did — a run from a different world can't be raced against this
+          // one, and saying so beats a button that silently does nothing.
+          setTimeout(checkCompareState, 150);
+        })
+        .catch(e => {
+          console.warn("compare replay failed:", e);
+          rpGhostNote.textContent = "Couldn't load that run — " + e.message;
+          rpGhostNote.classList.add("on");
+        });
+    }
+
+    function checkCompareState() {
+      const st = (typeof wasm_exports !== "undefined" && wasm_exports.compare_state)
+        ? wasm_exports.compare_state() : 0;
+      if (st === 2) {
+        // Different level params: on a `seed = random` level (the Flux
+        // family) every attempt rolls its own rock, so no two runs there
+        // ever share a world.
+        compareActivePath = null;
+        rpGhostNote.textContent = "That run flew a different world — this level rolls fresh rock every attempt, so the two can't be raced.";
+        rpGhostNote.classList.add("on");
+        renderGhostMenu();
+      } else {
+        rpGhostNote.classList.remove("on");
+      }
+      rpGhostBtn.classList.toggle("on", !!compareActivePath);
+    }
+
+    onTap(rpGhostBtn, () => {
+      rpSpeedMenu.classList.remove("open");
+      if (!rpGhostMenu.classList.contains("open")) renderGhostMenu();
+      rpGhostMenu.classList.toggle("open");
+    });
+
+    // A tap anywhere else on the bar dismisses the pickers.
     ["mousedown", "touchstart"].forEach(ev =>
       rpBar.addEventListener(ev, e => {
         if (!rpSpeedMenu.contains(e.target) && !rpSpeedBtn.contains(e.target)) {
           rpSpeedMenu.classList.remove("open");
+        }
+        if (!rpGhostMenu.contains(e.target) && !rpGhostBtn.contains(e.target)) {
+          rpGhostMenu.classList.remove("open");
         }
       }));
 
@@ -1990,9 +2188,18 @@
       rpBar.classList.toggle("on", on);
       if (!on) {
         rpSpeedMenu.classList.remove("open");
+        rpGhostMenu.classList.remove("open");
+        // Only once the game has truly LEFT the replay (not merely while a
+        // screen covers it) does its compare ghost go away with it.
+        if (!inReplay && compareActivePath) {
+          compareActivePath = null;
+          rpGhostBtn.classList.remove("on");
+        }
         rpWasOn = false;
         return;
       }
+      // The VS button only appears when there is something to race against.
+      rpGhostBtn.style.display = compareCandidates.length ? "" : "none";
       // A fresh replay ALWAYS starts with the GUI shown and the fade timer
       // re-armed. (Resetting only on exit left rpHideAt from the previous
       // watch: idle in the menu > 2.5 s and the next replay's first poll
@@ -2011,7 +2218,8 @@
       const rpPaused = wasm_exports.replay_paused() !== 0;
       if (rpPaused && !rpWasPaused && !rpUiVisible) rpShowUi(true);
       rpWasPaused = rpPaused;
-      if (rpPaused || rpSpeedMenu.classList.contains("open")) {
+      if (rpPaused || rpSpeedMenu.classList.contains("open")
+          || rpGhostMenu.classList.contains("open")) {
         rpHideAt = Date.now() + RP_HIDE_MS;
       } else if (rpUiVisible && Date.now() > rpHideAt) {
         rpShowUi(false);
@@ -3042,6 +3250,9 @@
           }
           setLoading(false);
           pegAnalytics.replayWatch("scores");
+          // Arm the VS picker with the rest of this board (this run itself
+          // excluded — racing a run against itself shows one ship).
+          armCompare(scoresFile || currentLevelFile, path);
           watchFromMenu = true;
           closeMenu(); // the ui_state poll returns here when it ends
         })
