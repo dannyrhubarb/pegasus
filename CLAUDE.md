@@ -367,10 +367,12 @@ pause⇄resume, rapid churn).
   progress fraction + recording length in seconds). The `#replay-bar` HTML
   overlay is THREE ROWS (`.rp-row`): on top the amber ⏮ / play-pause / ⏭
   cluster dead-centre (the flanking `.rp-side` zones share `flex: 1 1 0`,
-  which is what centres it — the left one is an empty spacer; every
+  which is what centres it — so the VS button added to the left one keeps
+  the transport centred; every
   `.rp-btn` carries an invisible `::after` hit-area extension of +6px,
   exactly half the 12px button gap, so touch targets meet edge-to-edge
-  without moving or overlapping anything) and the
+  without moving or overlapping anything), the **VS** compare-ghost button
+  left (`#rp-ghost-menu` — see "Compare ghost") and the
   speed button right — it opens the `#rp-speed-menu` picker panel
   (absolute, anchored above the bar) rather than cycling; the `m:ss.t`
   time label on its own LEFT-ALIGNED middle row (tenths, so steps visibly
@@ -1479,6 +1481,65 @@ mismatched-level recording is ignored (the ghost must race THIS world).
 Cost: one extra `Sim::tick` per physics step during flight (~2× physics,
 still tiny next to rendering; the ghost sim maintains its own collider
 windows around the ghost's position).
+Both ghost silhouettes (racing + compare, below) draw through the shared
+`draw_ghost_ship` closure in the frame loop — hull, callsign, off-screen
+cull — differing only in tint.
+
+### Compare ghost (racing two stored replays, 2026-08)
+While WATCHING a replay, a **second** board run can be overlaid on it as a
+magenta ghost, so two runs can be compared directly (issue: "add the ghost
+of another high score replay"). It is the racing ghost's machinery clocked
+off the **replay's** tick instead of live play:
+- **Bridge**: `load_compare_blob` / `set_compare_name` / `clear_compare` /
+  `compare_state() -> i32` (0 none / 1 racing / **2 rejected**), all through
+  the same `blob_in_ptr` buffer as the racing ghost. The main loop adopts
+  `PENDING_COMPARE` at the next frame boundary into `cmp_rec` / `cmp_player`.
+- **Same world or nothing** (`compare_racable`, unit-tested): the peer is
+  whatever the replay is playing (`watch_rec`, else the live `recorder` — so
+  the board can also be raced against your own crash-dialog replay), and the
+  two `LevelParams` must be equal. The camera follows the WATCHED run and
+  the ghost is drawn in its rock, so a foreign recording would fly through
+  walls that aren't there. This is why the **Flux family can't be compared
+  at all**: `seed = random` rolls fresh rock per attempt, so no two of its
+  board runs ever share a world — `compare_state() == 2` is what lets the
+  picker say so instead of silently doing nothing.
+- **Lockstep**: after `p.advance(...)` each frame, `c.seek_to_tick(cr,
+  p.tick)`. That one call absorbs every transport the bar can produce —
+  playback steps forward tick by tick, a scrub back rebuilds from the
+  ghost's nearest keyframe — so both runs always show the same instant of
+  the same spawn clock (unit-tested bit-exact against continuous playback,
+  backward scrubs included). It lerps with the REPLAY's sub-tick alpha
+  (`replay_alpha`), like the racing ghost uses the live one.
+- **Deliberately NOT gated by the "Race best ghost" setting** — that toggle
+  is about live flight; this is an explicit per-replay action.
+- **Dropped on every exit** (`drop_compare`): ✕ / `ui_command(3)`, a new
+  watch, reset, level load. It belongs to ONE watched replay.
+- **HUD**: a `VS <PILOT>  ±N m` gap line under the readout column (green =
+  the watched run leads, red = it trails; pad counts instead on
+  pad-visiting Time levels; "run ended" once the ghost's own run is over).
+  This is load-bearing, not decoration — the camera follows the watched run,
+  so the moment the two separate the other ship is gone from the screen and
+  the line (plus the magenta minimap dot, which holds much longer) is the
+  only remaining comparison.
+- **UI**: a **VS button in the replay bar's left `.rp-side`** (until now an
+  empty spacer — both sides are `flex: 1 1 0`, so filling it keeps the
+  transport centred) opening `#rp-ghost-menu`. Candidates are the **cached
+  board the replay was launched from** (`armCompare`, called at both replay
+  entry points) minus the run being watched — so opening the picker costs
+  no fetch; the blob is pulled only on pick, like ▶ watch. The button hides
+  when there is nothing to race.
+  **The picker IS a score board**: `#rp-ghost-list` carries `.rowlist` and
+  shares the `.rank`/`.pcol`/`.pname`/`.pdate`/`.dist` selectors with
+  `#scores-list` (the selectors name both lists — extend them, don't fork a
+  second look for the same data), so a row reads exactly like the board row
+  it came from. Magenta is spent ONLY where it means "this ghost": the
+  panel border, the VS button's active state and the selected row — the
+  colour that run is flying in on the canvas. Pilot names go in via
+  `textContent`, never `innerHTML`.
+  **Picking closes the panel** (owner call — the point of picking is to see
+  the two ships), and it reopens *only* on failure via `showGhostNote`,
+  since a message about a rejected pick has nowhere else to live during a
+  replay.
 
 ### High scores & watching stored replays
 Scores, replays and the racing ghost are **global-only** — the local
