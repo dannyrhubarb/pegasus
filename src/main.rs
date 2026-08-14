@@ -406,6 +406,7 @@ pub extern "C" fn load_level(len: u32) {
         BEST_TIME.store(0, Ordering::Relaxed);
         BEST_NAME.lock().unwrap().clear();
         GHOST_NAME.lock().unwrap().clear();
+        COMPARE_NAME.lock().unwrap().clear();
     }
 }
 
@@ -692,6 +693,67 @@ pub extern "C" fn load_ghost_blob(len: u32) -> i32 {
         }
         None => 0,
     }
+}
+
+// --- Compare ghost (two board runs, one screen) ---
+// A SECOND stored replay overlaid on the one being watched, driven in
+// lockstep with the replay's tick clock so both runs show the same instant
+// of their shared spawn clock. Pushed from the replay bar's VS picker
+// through the same blob_in_ptr buffer as the racing ghost; the main loop
+// adopts it at the next frame boundary.
+static PENDING_COMPARE: std::sync::Mutex<Option<Recording>> = std::sync::Mutex::new(None);
+static COMPARE_NAME: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+static COMPARE_DROP: AtomicU32 = AtomicU32::new(0); // swap-to-consume "remove it"
+// What the compare ghost is doing, for the JS picker: 0 = none, 1 = racing,
+// 2 = rejected (see compare_racable).
+static COMPARE_STATE: AtomicU32 = AtomicU32::new(0);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn load_compare_blob(len: u32) -> i32 {
+    match decode_blob_in(len) {
+        Some(rec) => {
+            *PENDING_COMPARE.lock().unwrap() = Some(rec);
+            1
+        }
+        None => 0,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_compare_name(len: u32) {
+    let b = BLOB_IN.lock().unwrap();
+    let end = (len as usize).min(b.len());
+    *COMPARE_NAME.lock().unwrap() = String::from_utf8_lossy(&b[..end]).into_owned();
+}
+
+/// Drop the compare ghost (the picker's "None" row, and every replay exit).
+#[unsafe(no_mangle)]
+pub extern "C" fn clear_compare() {
+    COMPARE_DROP.store(1, Ordering::Relaxed);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn compare_state() -> i32 {
+    COMPARE_STATE.load(Ordering::Relaxed) as i32
+}
+
+/// Can `cmp` be raced against the run being watched? Only when both flew
+/// the SAME world: the camera follows the watched run and the ghost is
+/// drawn in that run's rock, so a recording made on other level params —
+/// including another rolled seed on a `seed = random` level, where every
+/// attempt is new rock — puts the ghost through walls that don't exist for
+/// the other pilot. Same rule as the racing ghost's adoption check.
+fn compare_racable(cmp: &Recording, peer: &Recording) -> bool {
+    cmp.level == peer.level
+}
+
+/// Forget the compare ghost. It belongs to ONE watched replay, so every
+/// exit from that replay (✕, R, a new watch, a level load, a reset) drops
+/// it — it must never bleed into the next thing on screen.
+fn drop_compare(rec: &mut Option<Recording>, player: &mut Option<ResimPlayer>) {
+    *rec = None;
+    *player = None;
+    COMPARE_STATE.store(0, Ordering::Relaxed);
 }
 
 // --- HTML game-menu bridge (index.html owns the menu/pause/game-over UI) ---
@@ -1186,6 +1248,13 @@ async fn main() {
     let mut watch_rec: Option<Recording> = None;
     let mut watch_return = Mode::Flying;
 
+    // The compare ghost: a second stored replay raced against the one being
+    // watched (the replay bar's VS picker). Same re-sim machinery as the
+    // racing ghost, but clocked off the REPLAY's tick instead of live play,
+    // so it follows every scrub, step and speed change of the transport.
+    let mut cmp_rec: Option<Recording> = None;
+    let mut cmp_player: Option<ResimPlayer> = None;
+
     // Debris burst at (x, y) — fired at the real crash and again when the
     // replay reaches its end.
     let boom_burst = |x: f32, y: f32, particles: &mut Vec<Particle>| {
@@ -1265,6 +1334,7 @@ async fn main() {
             ghost_player = None;
             replay_player = None;
             watch_rec = None;
+            drop_compare(&mut cmp_rec, &mut cmp_player);
             glow = 0.0;
         }
 
@@ -1299,11 +1369,35 @@ async fn main() {
             watch_rec = Some(rec);
             replay_player = Some(p);
             mode = Mode::Replay;
+            // A new run to watch: whatever was being compared against the
+            // PREVIOUS one is no longer the other half of the comparison.
+            drop_compare(&mut cmp_rec, &mut cmp_player);
             REPLAY_PAUSED.store(0, Ordering::Relaxed);
             REPLAY_STEP.store(0, Ordering::Relaxed);
             REPLAY_SEEK.store(SEEK_NONE, Ordering::Relaxed);
             REPLAY_SPEED.store(1.0f32.to_bits(), Ordering::Relaxed);
             REPLAY_UI_VISIBLE.store(1, Ordering::Relaxed);
+        }
+
+        // A COMPARE ghost pushed from the replay bar's VS picker: a second
+        // board run to race against the one on screen. Only meaningful
+        // during playback, and only when both runs flew the same world —
+        // COMPARE_STATE tells the picker which it was, so a rejection can
+        // say so instead of silently doing nothing.
+        if COMPARE_DROP.swap(0, Ordering::Relaxed) != 0 {
+            drop_compare(&mut cmp_rec, &mut cmp_player);
+        }
+        if let Some(c) = PENDING_COMPARE.lock().unwrap().take() {
+            // The peer is whatever the replay is playing: a fetched board
+            // replay, else the live recorder (the crash-dialog replay, so
+            // the record ghost can be overlaid on your own last run too).
+            let peer = watch_rec.as_ref().unwrap_or(&recorder);
+            let player = (mode == Mode::Replay && compare_racable(&c, peer))
+                .then(|| ResimPlayer::new(&c))
+                .flatten();
+            COMPARE_STATE.store(if player.is_some() { 1 } else { 2 }, Ordering::Relaxed);
+            cmp_rec = player.is_some().then_some(c);
+            cmp_player = player;
         }
 
         // One-shot HTML-UI commands (menu buttons). Reset flows through the
@@ -1330,6 +1424,7 @@ async fn main() {
                 replay_player = None;
                 particles.clear();
                 replay_boom_timer = 0.0;
+                drop_compare(&mut cmp_rec, &mut cmp_player);
                 mode = if watch_rec.take().is_some() { watch_return } else { Mode::CrashDialog };
             }
             _ => {}
@@ -1720,6 +1815,10 @@ async fn main() {
         // are genuinely recomputed, not played back. Ends by re-simulating
         // the destroying impact, then returns to the dialog.
         let mut replay_frame: Option<ReplayFrame> = None;
+        // Sub-tick interpolation alpha of the run being watched — the
+        // compare ghost lerps with the SAME alpha, so both ships move in
+        // sync exactly like the live racing ghost does.
+        let mut replay_alpha = 0.0f32;
         if mode == Mode::Replay {
             // Playback source: an externally-loaded highscore replay when
             // one is active, else the live recorder (crash-dialog replay).
@@ -1802,6 +1901,16 @@ async fn main() {
                 let speed = f32::from_bits(REPLAY_SPEED.load(Ordering::Relaxed));
                 let dt = if paused { 0.0 } else { get_frame_time().min(0.05) * speed };
                 let f = p.advance(play_rec, dt);
+                replay_alpha = (p.accum / PHYSICS_DT).clamp(0.0, 1.0);
+                // Lockstep the compare ghost onto the watched run's tick.
+                // seek_to_tick absorbs every transport the bar can produce:
+                // ordinary playback steps it forward tick by tick, a scrub
+                // back rebuilds it from its nearest keyframe — so the two
+                // runs always show the same instant of the same spawn
+                // clock, which is what makes the overlay a fair race.
+                if let (Some(c), Some(cr)) = (cmp_player.as_mut(), cmp_rec.as_ref()) {
+                    c.seek_to_tick(cr, p.tick);
+                }
                 REPLAY_POS.store(p.progress().to_bits(), Ordering::Relaxed);
                 REPLAY_LEN.store(
                     (((p.end_tick - p.first_tick) as f32) * PHYSICS_DT).to_bits(),
@@ -1856,6 +1965,22 @@ async fn main() {
                     && recorder.ticks() >= p.first_tick =>
             {
                 Some(p.lerped_pose((phys_accum / PHYSICS_DT).clamp(0.0, 1.0)))
+            }
+            _ => None,
+        };
+
+        // The compare ghost: the second watched run at the same tick of the
+        // shared spawn clock. Vanishes once its own run ended (it crashed
+        // earlier than the one being watched) and, like the racing ghost,
+        // before its first keyframe — a recording trimmed by the 60-min cap
+        // starts past tick 0, and the lockstep seek would otherwise park it
+        // on a state the other pilot hasn't flown to yet.
+        let cmp_pose: Option<(f32, f32, f32)> = match (&cmp_player, mode) {
+            (Some(c), Mode::Replay)
+                if !c.finished
+                    && replay_player.as_ref().is_some_and(|p| p.tick >= c.first_tick) =>
+            {
+                Some(c.lerped_pose(replay_alpha))
             }
             _ => None,
         };
@@ -2524,38 +2649,58 @@ async fn main() {
             )
         };
 
-        // Ghost of the last run — a translucent silhouette racing the same
-        // spawn clock, drawn behind the player ship. No flame/particles: a
-        // quiet presence, not a second ship fighting for attention.
-        if let Some((gx, gy, ga)) = ghost_pose {
+        // A ghost silhouette — a translucent hull with no flame, details or
+        // particles: a quiet presence, not a second ship fighting for
+        // attention — with the pilot's callsign floated underneath
+        // (unrotated; empty = no label, e.g. offline). Shared by the racing
+        // ghost of live flight and the compare ghost of a replay, which
+        // differ only in tint.
+        let draw_ghost_ship = |(gx, gy, ga): (f32, f32, f32),
+                               name: &str,
+                               fill: Color,
+                               label_col: Color| {
             let gs = w2s(gx, gy, sh, cam_x, cam_y);
-            if gs.x > -120.0 && gs.x < sw + 120.0 && gs.y > -120.0 && gs.y < sh + 120.0 {
-                let g_rot = |lx: f32, ly: f32| -> Vec2 {
-                    let sx = lx * SHIP_SCALE;
-                    let sy = ly * SHIP_SCALE;
-                    w2s(
-                        gx + sx * ga.cos() - sy * ga.sin(),
-                        gy + sx * ga.sin() + sy * ga.cos(),
-                        sh, cam_x, cam_y,
-                    )
-                };
-                let gc = Color::from_rgba(150, 190, 255, 70);
-                for t in SHIP_TRIS.iter() {
-                    draw_triangle(g_rot(t[0], t[1]), g_rot(t[2], t[3]), g_rot(t[4], t[5]), gc);
-                }
-                // The ghost pilot's callsign floats just under the
-                // silhouette (unrotated; empty = no label, e.g. offline).
-                let name = GHOST_NAME.lock().unwrap();
-                if !name.is_empty() {
-                    // Names render uppercase everywhere (boards, picker, HUD).
-                    let label = name.to_uppercase();
-                    let fs = 20.0 * ui;
-                    let dim = measure_text(&label, None, fs as u16, 1.0);
-                    draw_text(&label, gs.x - dim.width / 2.0,
-                        gs.y + 1.05 * view_scale + fs,
-                        fs, Color::from_rgba(150, 190, 255, 150));
-                }
+            if gs.x <= -120.0 || gs.x >= sw + 120.0 || gs.y <= -120.0 || gs.y >= sh + 120.0 {
+                return;
             }
+            let g_rot = |lx: f32, ly: f32| -> Vec2 {
+                let sx = lx * SHIP_SCALE;
+                let sy = ly * SHIP_SCALE;
+                w2s(
+                    gx + sx * ga.cos() - sy * ga.sin(),
+                    gy + sx * ga.sin() + sy * ga.cos(),
+                    sh, cam_x, cam_y,
+                )
+            };
+            for t in SHIP_TRIS.iter() {
+                draw_triangle(g_rot(t[0], t[1]), g_rot(t[2], t[3]), g_rot(t[4], t[5]), fill);
+            }
+            if !name.is_empty() {
+                // Names render uppercase everywhere (boards, picker, HUD).
+                let label = name.to_uppercase();
+                let fs = 20.0 * ui;
+                let dim = measure_text(&label, None, fs as u16, 1.0);
+                draw_text(&label, gs.x - dim.width / 2.0,
+                    gs.y + 1.05 * view_scale + fs, fs, label_col);
+            }
+        };
+        // Ghost of the best run, racing the same spawn clock behind the
+        // player ship (live flight only).
+        if let Some(pose) = ghost_pose {
+            let name = GHOST_NAME.lock().unwrap();
+            draw_ghost_ship(pose, &name,
+                Color::from_rgba(150, 190, 255, 70),
+                Color::from_rgba(150, 190, 255, 150));
+        }
+        // The compare ghost is MAGENTA: the racing ghost's pale blue is
+        // spoken for, and two translucent blue silhouettes on one screen
+        // would be impossible to tell apart at a glance — which is the
+        // whole point of putting them there.
+        if let Some(pose) = cmp_pose {
+            let name = COMPARE_NAME.lock().unwrap();
+            draw_ghost_ship(pose, &name,
+                Color::from_rgba(255, 130, 220, 85),
+                Color::from_rgba(255, 150, 225, 175));
         }
 
         // The ship renders while flying (unless it's a wreck) and during the
@@ -3015,6 +3160,7 @@ async fn main() {
             };
             replay_player = None;
             watch_rec = None;
+            drop_compare(&mut cmp_rec, &mut cmp_player);
             glow = 0.0;
             recorder.push_keyframe(sim.keyframe(0, 0.0));
         }
@@ -3219,6 +3365,17 @@ async fn main() {
             {
                 draw_circle(to_mm_x(gx), to_mm_y(gy), 2.5 * ui,
                     Color::from_rgba(150, 190, 255, 180));
+            }
+
+            // Compare-ghost dot, in the silhouette's magenta. The minimap
+            // window is far wider than the view, so the other run usually
+            // stays on the map well after it has left the screen.
+            if let Some((gx, gy, _)) = cmp_pose
+                && (gx - cam_x).abs() < MM_HALF_X
+                && (gy - cam_y).abs() < MM_HALF_Y
+            {
+                draw_circle(to_mm_x(gx), to_mm_y(gy), 2.5 * ui,
+                    Color::from_rgba(255, 140, 225, 190));
             }
 
             // Record progress bar — a discreet slim bar along the minimap's
@@ -3437,6 +3594,10 @@ async fn main() {
         };
         draw_text(&small, ro_x, ro_y + small_draw_fs + 4.0 * ui,
             small_draw_fs, small_col);
+        // Baseline of the lowest line drawn in this column so far — the
+        // compare-ghost gap line below hangs off it, whichever attribution
+        // lines the level's scoring produced.
+        let mut hud_bottom = ro_y + small_draw_fs + 4.0 * ui;
         // Record attribution under the BEST line ("by <pilot>" — or "by you"
         // once the record falls); empty name = no line (offline, pads).
         if world_sim.level.scoring == Scoring::Distance {
@@ -3449,6 +3610,7 @@ async fn main() {
                 let bt = format!("BEST {:.0} m", get_best_dist());
                 by_base += small_fs + 4.0 * ui;
                 draw_text(&bt, ro_x, by_base, small_fs, Color::from_rgba(130, 155, 190, 200));
+                hud_bottom = by_base;
             }
             let name = BEST_NAME.lock().unwrap();
             if !name.is_empty() {
@@ -3461,6 +3623,7 @@ async fn main() {
                 }
                 draw_text(&by, ro_x, by_base + by_fs + 4.0 * ui,
                     by_fs, Color::from_rgba(130, 155, 190, 200));
+                hud_bottom = by_base + by_fs + 4.0 * ui;
             }
         } else if world_sim.level.scoring == Scoring::Time {
             // Best completion time (the global record once seeded, else the
@@ -3472,6 +3635,7 @@ async fn main() {
                 let bt_fs = small_fs;
                 let bt_y = ro_y + small_draw_fs + 4.0 * ui + bt_fs + 4.0 * ui;
                 draw_text(&bt, ro_x, bt_y, bt_fs, Color::from_rgba(130, 155, 190, 200));
+                hud_bottom = bt_y;
                 let name = BEST_NAME.lock().unwrap();
                 if !name.is_empty() {
                     // Names render uppercase everywhere (boards, picker, ghost).
@@ -3483,8 +3647,55 @@ async fn main() {
                     }
                     draw_text(&by, ro_x, bt_y + by_fs + 4.0 * ui,
                         by_fs, Color::from_rgba(130, 155, 190, 200));
+                    hud_bottom = bt_y + by_fs + 4.0 * ui;
                 }
             }
+        }
+
+        // Compare ghost: who is ahead, right now. The camera follows the run
+        // being WATCHED, so the moment the two separate the other ship leaves
+        // the screen for good — this line (and the minimap dot) is what keeps
+        // the comparison readable from there on. Green = the watched run
+        // leads, red = it trails.
+        if mode == Mode::Replay
+            && let Some(c) = &cmp_player
+        {
+            let name = COMPARE_NAME.lock().unwrap();
+            let who = if name.is_empty() { "GHOST".to_string() } else { name.to_uppercase() };
+            let (tail, col) = if c.finished {
+                // Its run ended before this one — the gap stops meaning
+                // anything, so say that instead of freezing a number.
+                ("run ended".to_string(), Color::from_rgba(150, 170, 200, 200))
+            } else if world_sim.level.scoring == Scoring::Distance
+                || world_sim.level.goal_distance > 0.0
+            {
+                // Distance IS the score (and on a goal trial it is progress
+                // toward the finish pad), so the metre gap is the race.
+                let d = world_sim.max_dist - c.sim.max_dist;
+                (
+                    format!("{}{:.0} m", if d >= 0.0 { "+" } else { "-" }, d.abs()),
+                    if d >= 0.0 {
+                        Color::from_rgba(70, 255, 156, 230)
+                    } else {
+                        Color::from_rgba(255, 120, 110, 230)
+                    },
+                )
+            } else {
+                // Pad-visiting time level: metres along x say nothing about
+                // progress through the chambers — pads collected do.
+                (
+                    format!("{} v {} pads",
+                        world_sim.visited_pads.len(), c.sim.visited_pads.len()),
+                    Color::from_rgba(255, 150, 225, 230),
+                )
+            };
+            let line = format!("VS {who}  {tail}");
+            let mut fs = small_fs;
+            let dim = measure_text(&line, None, fs as u16, 1.0);
+            if dim.width > mm_w - ro_margin {
+                fs *= (mm_w - ro_margin) / dim.width;
+            }
+            draw_text(&line, ro_x, hud_bottom + fs + 12.0 * ui, fs, col);
         }
 
         next_frame().await;
@@ -4477,5 +4688,85 @@ mod tests {
         assert_eq!(sim.score, 0, "distance level must not pay pad points");
         let (x, _, _) = sim.ship_pose();
         assert!(sim.max_dist >= x.abs());
+    }
+
+    #[test]
+    fn the_compare_ghost_stays_locked_to_the_watched_replays_tick() {
+        // The VS overlay is a fair race only if the second run is shown at
+        // the SAME tick of the same spawn clock as the run being watched —
+        // through every transport the replay bar can produce, backward
+        // scrubs included. That is the whole contract of the lockstep
+        // seek_to_tick sync in the replay block.
+        let watched = contact_free_recording();
+        // A second, different flight in the same world: a fatter lift-off
+        // and a slower wobble, so the two trajectories genuinely diverge.
+        let other = {
+            let mut sim = Sim::new(lvl());
+            let mut rec = Recording::new(sim_params(), lvl().to_params(), u32::MAX);
+            rec.push_keyframe(sim.keyframe(0, 0.0));
+            for t in 0..3 * KEYFRAME_EVERY {
+                let input = if t < 60 {
+                    InputState::from_controls(0.7, 0, 0.0, 0.0, false)
+                } else {
+                    let throttle = if (t / 70).is_multiple_of(2) { 0.16 } else { 0.10 };
+                    let f = t as f32 * 0.013;
+                    InputState::from_controls(throttle, 0, f.cos() * 0.12, -0.9, true)
+                };
+                let rep = sim.tick(input);
+                assert!(rep.impact.is_none(), "compare flight hit rock at tick {t}");
+                if rec.record_tick(input) {
+                    rec.push_keyframe(sim.keyframe(rec.ticks(), input.throttle_f32()));
+                }
+            }
+            rec
+        };
+        assert!(compare_racable(&other, &watched), "same world must be racable");
+
+        // Ordinary playback, a scrub deep in, two scrubs BACK (which rebuild
+        // the ghost from its nearest keyframe), then forward again.
+        let targets = [90u32, KEYFRAME_EVERY + 45, 130, 30, 2 * KEYFRAME_EVERY + 8];
+        // What continuous playback of `other` reaches at each of those ticks
+        // — one forward pass, so the comparison below costs nothing.
+        let mut want = std::collections::BTreeMap::new();
+        let mut reference = ResimPlayer::new(&other).expect("reference player");
+        while reference.tick < *targets.iter().max().unwrap() {
+            reference.step_one(&other);
+            if targets.contains(&reference.tick) {
+                want.insert(reference.tick, reference.sim.keyframe(0, 0.0));
+            }
+        }
+
+        let mut p = ResimPlayer::new(&watched).expect("watched player");
+        let mut c = ResimPlayer::new(&other).expect("compare player");
+        for target in targets {
+            p.seek_to_tick(&watched, target);
+            c.seek_to_tick(&other, p.tick);
+            assert_eq!(c.tick, p.tick, "compare ghost fell off the replay clock");
+            // …and it shows exactly what continuous playback of its OWN
+            // recording reaches at that tick.
+            assert_state_bits_eq(
+                &c.sim.keyframe(0, 0.0),
+                &want[&c.tick],
+                &format!("a compare-ghost sync to tick {}", c.tick),
+            );
+        }
+    }
+
+    #[test]
+    fn a_compare_ghost_from_another_world_is_rejected() {
+        // Two runs can only be raced against each other if they flew the
+        // same rock: the camera follows the watched run and the ghost is
+        // drawn in ITS world, so a recording made anywhere else would fly
+        // through walls that aren't there.
+        let glide = Level::parse(include_str!("../levels/glide.level"));
+        let expanse = Level::parse(include_str!("../levels/expanse.level"));
+        let flux = Level::parse(include_str!("../levels/flux.level"));
+        let mk = |l: &Level| Recording::new(sim_params(), l.to_params(), u32::MAX);
+        assert!(compare_racable(&mk(&glide), &mk(&glide)));
+        assert!(!compare_racable(&mk(&expanse), &mk(&glide)), "different level");
+        // `seed = random`: every attempt rolls its own world, so two board
+        // runs from such a level can never be raced against each other.
+        let (a, b) = (with_rolled_seed(flux.clone()), with_rolled_seed(flux));
+        assert!(!compare_racable(&mk(&a), &mk(&b)), "different rolled seed");
     }
 }
