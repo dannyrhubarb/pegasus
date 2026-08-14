@@ -1899,6 +1899,17 @@ which populates the registry cache) whenever `Cargo.lock` changes, and
 commit the refreshed page.
 
 ## Git workflow
+- **Commit authorship**: every commit's author should be the real human
+  contributor driving the session — never `Claude <noreply@anthropic.com>`.
+  Use that person's GitHub-provided private noreply address
+  (`<id>+<username>@users.noreply.github.com`, found via their GitHub profile
+  or existing commits/PRs from them) so their real email stays out of
+  history while commits still attribute to their account. Claude is credited
+  via the `Co-Authored-By: Claude <noreply@anthropic.com>` trailer instead
+  (already appended per the standing commit instructions). Set it per-commit
+  (`git commit --author="Name <id+username@users.noreply.github.com>"` or the
+  `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` env vars) — never change global git
+  config.
 - **Always open a PR** after pushing a feature branch — standing instruction
   from the owner (no need to ask first). The PR also produces a phone-testable
   preview deployment at `pr-<n>/`.
