@@ -342,6 +342,12 @@ fn rebuild_replay_particles(rec: &Recording, target: u32, particles: &mut Vec<Pa
 static PAD_THRUST: AtomicU32 = AtomicU32::new(0);
 static PAD_TORQUE: AtomicU32 = AtomicU32::new(0);
 static PAD_RESET: AtomicU32 = AtomicU32::new(0);
+// Gamepad LEFT ANALOG STICK as a commanded-nose-direction vector (f32 bits,
+// screen convention like the touch stick: push up = -y = nose up). Feeds the
+// same heading PD as the touch stick — but never the engine (pad boost is
+// its own button).
+static PAD_STICK_X: AtomicU32 = AtomicU32::new(0);
+static PAD_STICK_Y: AtomicU32 = AtomicU32::new(0);
 static SAFE_AREA_TOP: AtomicU32 = AtomicU32::new(0);
 static SAFE_AREA_LEFT: AtomicU32 = AtomicU32::new(0);
 // Bottom/right insets (CSS px). Bottom folds in the floating browser
@@ -844,6 +850,17 @@ pub extern "C" fn set_pad_torque(value: f32) {
     PAD_TORQUE.store(value.to_bits(), Ordering::Relaxed);
 }
 
+// Left analog stick = commanded nose direction (heading control, like the
+// touch stick; dead-zoned game-side in pad_stick_steer). Raw −1..1 axes in
+// screen convention (up = −y): the Web Gamepad API's axes[0]/axes[1] pass
+// through unchanged; the iOS shell's native forwarder negates GCController's
+// up-positive y before calling.
+#[unsafe(no_mangle)]
+pub extern "C" fn set_pad_stick(x: f32, y: f32) {
+    PAD_STICK_X.store(x.to_bits(), Ordering::Relaxed);
+    PAD_STICK_Y.store(y.to_bits(), Ordering::Relaxed);
+}
+
 // Edge-triggered reset (Start / Y button). JS sets the flag on a fresh press;
 // the loop consumes it with a swap so it fires exactly once.
 #[unsafe(no_mangle)]
@@ -1028,6 +1045,26 @@ impl TouchStick {
             Vec2::ZERO
         };
     }
+}
+
+// The gamepad analog stick's steer vector: same radial dead-zone + rescale
+// as TouchStick::apply (m is already 0..1 — the axes are normalized where a
+// touch measures px / STICK_TRAVEL), same invert semantics. Pure so it's
+// unit-testable.
+fn pad_stick_steer(x: f32, y: f32, invert: bool) -> (f32, f32) {
+    let x = x.clamp(-1.0, 1.0);
+    let y = y.clamp(-1.0, 1.0);
+    // True magnitude for the direction, clamped magnitude for the rescale —
+    // a pinned diagonal (both axes at 1.0) must still command magnitude 1,
+    // like the touch knob's radial clamp to STICK_TRAVEL.
+    let len = (x * x + y * y).sqrt();
+    let m = len.min(1.0);
+    if m < STICK_DZ {
+        return (0.0, 0.0);
+    }
+    let eff = (m - STICK_DZ) / (1.0 - STICK_DZ);
+    let s = eff / len * if invert { -1.0 } else { 1.0 };
+    (x * s, y * s)
 }
 
 // Draw the floating stick (logical px), matching the original HTML element:
@@ -1390,7 +1427,22 @@ async fn main() {
         );
 
         let stick_held = stick.held;
-        let (steer_x, steer_y) = (stick.steer.x, stick.steer.y);
+        // Gamepad analog stick: commanded nose direction — the same heading
+        // control as the touch stick (the sim's PD reads the steer vector;
+        // dead-zone applied in pad_stick_steer) — but NEVER the engine:
+        // `held` keeps driving the stick-hold thrust ramp below and stays
+        // touch-only, so pad boost remains its own button. An active touch
+        // outranks the pad; D-pad/keyboard rate rotation still outranks the
+        // heading PD sim-side (rot != 0 gates it off).
+        let (steer_x, steer_y) = if stick_held {
+            (stick.steer.x, stick.steer.y)
+        } else {
+            pad_stick_steer(
+                f32::from_bits(PAD_STICK_X.load(Ordering::Relaxed)),
+                f32::from_bits(PAD_STICK_Y.load(Ordering::Relaxed)),
+                invert,
+            )
+        };
         let steer_mag = (steer_x * steer_x + steer_y * steer_y).sqrt().min(1.0);
         // Heading error to the commanded nose direction (0 when centred),
         // for the flip gate. Uses the true body angle.
@@ -3494,6 +3546,29 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pad_stick_steer_matches_touch_stick_deadzone_semantics() {
+        // Inside the radial dead-zone: no heading command at all.
+        assert_eq!(pad_stick_steer(STICK_DZ * 0.7, 0.0, false), (0.0, 0.0));
+        assert_eq!(pad_stick_steer(0.0, 0.0, false), (0.0, 0.0));
+        // Just past the edge: rescaled to start from ~0 (no command jump).
+        let (x, _) = pad_stick_steer(STICK_DZ + 0.01, 0.0, false);
+        assert!(x > 0.0 && x < 0.05, "rescale must be continuous, got {x}");
+        // Full deflection reaches magnitude 1, direction preserved.
+        let (x, y) = pad_stick_steer(0.0, -1.0, false);
+        assert!((x, y) == (0.0, -1.0));
+        // Diagonal overdrive (both axes pinned) clamps to unit magnitude.
+        let (x, y) = pad_stick_steer(1.0, 1.0, false);
+        let m = (x * x + y * y).sqrt();
+        assert!((m - 1.0).abs() < 1e-5, "magnitude {m}");
+        assert!((x - y).abs() < 1e-6, "direction preserved");
+        // Invert negates the commanded direction (both axes), like the
+        // touch stick's Invert setting.
+        let (nx, ny) = pad_stick_steer(0.4, -0.8, true);
+        let (px, py) = pad_stick_steer(0.4, -0.8, false);
+        assert!((nx + px).abs() < 1e-6 && (ny + py).abs() < 1e-6);
+    }
 
     #[test]
     fn a_rerolled_world_orphans_the_previous_rolls_ghost() {

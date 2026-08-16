@@ -13,6 +13,7 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
     private var shellBridgeScript: WKUserScript!
     private var didStartLoad = false
     private var controllerView: PhoneControllerView?
+    private var padForwarder: PadForwarder?
 
     // The status bar stays visible, drawn over the game's starfield (the
     // page lays its HUD out below env(safe-area-inset-top), so nothing
@@ -65,6 +66,7 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
         // must never break the game.
         shellBridgeScript = WKUserScript(
             source: """
+            window.__pegNativePad = true; // shell reads the controller natively (PadForwarder.swift); the page's Web Gamepad poll stands down
             window.__pegExtTouch = function (ph, id, x, y, w, h) {
               try {
                 var c = document.getElementById("glcanvas");
@@ -111,6 +113,10 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
         // supports the iOS edge-swipe as "back one screen" — keep that.
         webView.allowsBackForwardNavigationGestures = true
         view.addSubview(webView)
+        // Native BT/USB controller bridge — WebKit's own Gamepad API dies
+        // when the webview is on the AirPlay TV window (focus gating), so
+        // the shell forwards pad input itself. See PadForwarder.swift.
+        padForwarder = PadForwarder(webView: webView)
         // load() happens in viewDidLayoutSubviews, once the safe-area
         // insets are known — see pushSafeAreaInsets.
     }

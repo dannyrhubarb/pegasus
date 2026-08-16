@@ -76,6 +76,13 @@ the page back to the phone — every HTML screen stays fully usable — and
 the TV shows an idle card until you fly again. Stopping mirroring at any
 point returns everything to the phone seamlessly.
 
+A Bluetooth/USB game controller works on the TV too — the shell reads it
+natively (`Pegasus/PadForwarder.swift`; the page's own Web Gamepad poll
+only works while the page is focused, which it isn't on the TV window).
+The left analog stick commands the nose direction like the touch stick,
+thrust is A / R2 / D-pad up, D-pad left/right is manual rotation, and
+Menu or Y restarts.
+
 Implementation: `Pegasus/AirPlay.swift` (external-display scene +
 coordinator + controller surface), the shell-injected `__pegExtTouch` /
 `__pegCorner` JS bridge in `GameViewController.swift`, and the page's

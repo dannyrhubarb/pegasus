@@ -1340,11 +1340,20 @@
     // A controller paired with the device shows up in navigator.getGamepads().
     // We poll it each animation frame and forward to dedicated WASM exports
     // (set_pad_*), which are combined with touch/keyboard inside the game.
-    //   Thrust   : A / Cross (0), R2 trigger (7), or D-pad up (12)
-    //   Steer    : left stick X (axes[0], dead-zoned) or D-pad left/right (14/15)
-    //   Reset    : Start (9) or Y / Triangle (3)
+    //   Thrust  : A / Cross (0), R2 trigger (7), or D-pad up (12)
+    //   Heading : left stick both axes (set_pad_stick — commanded nose
+    //             direction through the same PD as the touch stick;
+    //             dead-zone applied game-side)
+    //   Rate    : D-pad left/right (14/15) — manual rotation, overrides the
+    //             heading PD while held
+    //   Reset   : Start (9) or Y / Triangle (3)
     // Standard mapping is assumed (the common layout for BT pads in browsers).
-    const STICK_DEADZONE = 0.18;
+    // In the iOS app the SHELL reads the controller natively (GCController,
+    // ios/Pegasus/PadForwarder.swift) and injects __pegNativePad so this
+    // poll stands down: WebKit only exposes gamepads to a focused page, and
+    // during AirPlay second-screen play the webview lives in the
+    // non-interactive TV window — getGamepads() goes quiet exactly when
+    // you want to play on the TV. The native path feeds the same exports.
     let padPolling = false;
     let prevResetPressed = false;
 
@@ -1360,6 +1369,7 @@
         // Controller dropped out — release any held inputs and stop polling.
         call("set_pad_thrust", 0);
         call("set_pad_torque", 0);
+        call("set_pad_stick", 0, 0);
         prevResetPressed = false;
         padPolling = false;
         return;
@@ -1372,17 +1382,23 @@
       const thrust = (btn(0) || val(7) > 0.3 || btn(12)) ? 1 : 0;
       call("set_pad_thrust", thrust);
 
-      // Steering: analog left stick with a dead-zone, rescaled so it still
-      // reaches ±1 past the dead-zone. D-pad overrides to full deflection.
-      let x = pad.axes[0] || 0;
-      if (Math.abs(x) < STICK_DEADZONE) {
-        x = 0;
-      } else {
-        x = (x - Math.sign(x) * STICK_DEADZONE) / (1 - STICK_DEADZONE);
+      // Left stick: commanded nose direction, both axes raw (screen
+      // convention — the Gamepad API's up = -1 already matches; the game
+      // applies the radial dead-zone + Invert-stick setting itself).
+      // Fallback for a stale-cached wasm without the export: old behavior,
+      // stick X as rate.
+      const sx = pad.axes[0] || 0, sy = pad.axes[1] || 0;
+      let rate = 0;
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_pad_stick) {
+        call("set_pad_stick", sx, sy);
+      } else if (Math.abs(sx) > 0.18) {
+        rate = (sx - Math.sign(sx) * 0.18) / (1 - 0.18);
       }
-      if (btn(14)) x = -1;
-      else if (btn(15)) x = 1;
-      call("set_pad_torque", Math.max(-1, Math.min(1, x)));
+      // D-pad left/right: manual rate rotation (overrides the heading PD
+      // while held, like the keyboard keys).
+      if (btn(14)) rate = -1;
+      else if (btn(15)) rate = 1;
+      call("set_pad_torque", Math.max(-1, Math.min(1, rate)));
 
       // Reset: edge-triggered so a held button fires once.
       const resetPressed = btn(9) || btn(3);
@@ -1393,7 +1409,9 @@
     }
 
     function startPadPolling() {
-      if (padPolling) return;
+      // The iOS shell forwards the controller natively (see the note above)
+      // — the web poll must not double-drive the same exports.
+      if (window.__pegNativePad || padPolling) return;
       padPolling = true;
       requestAnimationFrame(pollGamepad);
     }
