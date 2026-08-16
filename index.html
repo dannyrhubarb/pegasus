@@ -1529,6 +1529,11 @@
         if (window.PegasusApp && PegasusApp.setKeepAwake) PegasusApp.setKeepAwake(on);
       } catch (e) { /* a wake-lock holder must never break the game */ }
       try {
+        // NOTE: the iOS shell also keys its AirPlay second-screen handoff
+        // off this message — "canvas live" decides whether the webview sits
+        // on the TV or on the phone (ios/Pegasus/AirPlay.swift). If the
+        // wake-lock condition ever diverges from "no menu screen up", give
+        // the shell its own message instead of reshaping this one.
         const wk = window.webkit;
         if (wk && wk.messageHandlers && wk.messageHandlers.pegasusKeepAwake)
           wk.messageHandlers.pegasusKeepAwake.postMessage(on);

@@ -1716,6 +1716,43 @@ re-acquired on the `visibilitychange` back while still wanted).
   `env()`, behavior unchanged (verified headless: unset vars reproduce
   the old computed styles exactly). The Android shell doesn't inject
   (no jank reported there); it can adopt the same vars if ever needed.
+- **AirPlay second screen** (`ios/Pegasus/AirPlay.swift`, 2026-08): during
+  AirPlay **screen mirroring** (user-started from Control Center — there is
+  NO API to start it programmatically, so no in-app button can) the app
+  replaces the letterboxed mirror with its own **full-screen 16:9 TV
+  window**: the system offers the mirrored display as a NON-INTERACTIVE
+  external-display scene (the `configurationForConnecting` callback fires
+  for it even with `UIApplicationSupportsMultipleScenes = false` — verified
+  against Apple's guidance; the role is matched as `!= .windowApplication`
+  so the iOS 16 role rename needs no availability dance), AppDelegate
+  answers with `ExternalSceneDelegate`, and `AirPlayCoordinator` reparents
+  the app's ONE WKWebView between screens (web process/wasm/localStorage
+  survive reparenting). The handoff signal is the existing
+  **`pegasusKeepAwake` message** — the wake-lock boundary IS "canvas live"
+  (flight / wreck / replay vs. any menu screen): live → webview on the TV,
+  phone shows `PhoneControllerView` (dark touch surface + native ⟳/✕
+  corner buttons + amber touch-echo ring); menu up → webview returns to
+  the phone so EVERY HTML screen (picker, settings, game-over, submit)
+  stays fully usable while the TV shows an idle card (index.html carries a
+  guard comment at the postMessage site). Phone touches reach the game via
+  the shell-injected **`__pegExtTouch` shim**: phone-surface points map
+  into canvas pixels (uniform scale, letterbox-fit, centered — circles
+  stay circles) and feed `wasm_exports.touch(phase, id, x, y)`, the SAME
+  entry real canvas touches use (see docs/touch-input.md "the chain has a
+  second head") — TouchStick, thrust gating and the recorder are untouched
+  and the stick draws ON THE TV under the mapped finger; ids start at 1001
+  (never collide with WebKit's 0-based ones), and removing the surface
+  mid-press forwards `touchesCancelled` so the stick releases. The ✕/⟳
+  buttons go through **`__pegCorner`**, which `.click()`s whichever HTML
+  corner button is currently visible (pause in flight, exit-replay in a
+  replay — the page keeps owning context sensitivity; during a replay on
+  the TV the HTML transport bar is out of reach, so phone-✕ = exit is the
+  escape hatch). Safe-area insets are pushed from the webview's CURRENT
+  host (`webView.superview` — zero on the TV, so the HUD hugs the TV
+  edges; the shim + build scripts are re-registered together in
+  `pushSafeAreaInsets`). AirPlay adds ~100–200 ms display latency the app
+  cannot remove; input is local, so the game responds instantly but is
+  WATCHED slightly delayed.
 - App icon: `icon.svg` rendered to an opaque 1024×1024 PNG in
   `Assets.xcassets` (no alpha — App Store validation rejects it);
   re-render if the SVG changes.
