@@ -173,7 +173,9 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
     /// moves — web process, wasm state and localStorage all survive; only
     /// the hosting window changes.
     func hostWebView(in container: UIView?) {
-        let target = container ?? view
+        // Explicit type: `view` is UIView! and `container ?? view` would
+        // otherwise infer UIView?.
+        let target: UIView = container ?? view
         if webView.superview !== target {
             webView.frame = target.bounds
             if target === view {
