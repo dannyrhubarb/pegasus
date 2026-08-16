@@ -177,13 +177,37 @@ Four input paths feed the same physics, combined in the main loop:
     test (`tests/touch-e2e/`, in CI) rather than an emulator one — the bug
     is a race, so an emulator can only pass by luck, while dispatching both
     events in one JS task makes the collapse certain.
-- **Game controller** (BT/USB, web): `index.html` polls the **Web Gamepad API**
+- **Game controller** (BT/USB): `index.html` polls the **Web Gamepad API**
   each `requestAnimationFrame` and forwards to exported `set_pad_thrust(i32)` /
-  `set_pad_torque(f32)` / `set_pad_reset()`. Mapping (standard layout): thrust =
-  A/Cross (0), R2 (7, analog>0.3), or D-pad up (12); steer = left stick X
-  (axes[0], dead-zoned/rescaled) or D-pad L/R (14/15); reset = Start (9) or
-  Y/Triangle (3, edge-triggered). Polling starts on `gamepadconnected` and stops
-  (releasing held inputs) if the pad drops out.
+  `set_pad_stick(f32, f32)` / `set_pad_torque(f32)` / `set_pad_reset()`.
+  Mapping (standard layout, mirroring the SPLIT on-screen scheme — left
+  hand burns, right thumb steers; owner request 2026-08): throttle: the L2
+  trigger (6) is ANALOG — trigger travel = partial burn, racing style
+  (`set_pad_throttle` → `pad_throttle_cmd`, noise below 0.05 floors to
+  released, travel shaped by `PAD_THROTTLE_EXPO` — see
+  docs/control-tuning.md; every throttle consumer already scales), max'd
+  with the otherwise-unused **left stick pushed up** (HOTAS-style second
+  analog source — some pads' triggers are digital click switches, a
+  stick axis is analog everywhere) — with L1 (4) and
+  D-pad up (12) as digital full burn; left side only, A/R2 do nothing;
+  **right analog stick (both axes) = commanded nose direction** —
+  `set_pad_stick` feeds the SAME heading PD as
+  the touch stick (raw axes in screen convention; `pad_stick_steer` in
+  main.rs applies the `STICK_DZ` radial dead-zone/rescale + the Invert
+  setting, unit-tested; an active touch outranks the pad, and it NEVER
+  fires the engine — boost stays on its buttons, so `stick_held` remains
+  touch-only and the pad rides InputState's existing steer fields with no
+  replay-format change); reset = Start (9) or Y/Triangle (3,
+  edge-triggered) — no pad rate-rotation: the D-pad L/R override was
+  dropped 2026-08 as redundant next to the heading stick (rate control
+  remains keyboard-only). Polling starts on `gamepadconnected` and stops
+  (releasing held inputs) if the pad drops out. **In the iOS shell the
+  controller is read NATIVELY instead** (`ios/Pegasus/PadForwarder.swift`,
+  GCController → the same exports, change-deduped at 60 Hz; GCController's
+  up-positive y is negated to screen convention): WebKit gates gamepad
+  access on page focus/visibility — brittle inside an app shell, and
+  moot for GCController. The shell injects `__pegNativePad`, which makes
+  the page's web poll stand down so the two paths never double-drive.
 
 Touch is read directly via macroquad each frame; the gamepad uses `PAD_*`
 atomics (JS-forwarded) so a connected-but-idle controller never stomps an
@@ -191,8 +215,9 @@ active touch. The main engine is a
 **throttle (0..1)**: every current source is binary (1.0), but the plumbing
 stays analog — engine force, glow, fuel burn, and exhaust particle
 count/speed all scale with it. Rotation has two modes: **rate control**
-(keyboard keys / pad stick → nozzle force via `fire_rcs`) and the touch
-stick's **heading control** (PD to a commanded angle, pure `add_torque`);
+(keyboard keys → nozzle force via `fire_rcs`) and **heading
+control** (PD to a commanded angle, pure `add_torque`) commanded by the
+touch stick or the gamepad's right analog stick (touch outranks pad);
 rate control wins while actively held. `PAD_RESET` is a swap-to-consume flag
 so a held reset button fires exactly once.
 

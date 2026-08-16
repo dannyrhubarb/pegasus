@@ -29,8 +29,7 @@ short way to that angle. Two gates keep steering cheap: a *flick grace*
 (short touches never thrust) and a *flip settle* (commanding a >92° turn
 keeps the engine cold until the nose is nearly there). Holding the stick is
 the only touch thrust control in the one-handed scheme (the old JET button
-is gone). Keyboard/gamepad use direct rate rotation and override the PD
-controller while held.
+is gone).
 
 **Split controls** (Settings toggle, on by default) is the two-handed
 scheme: the screen halves at the midline, a fresh left-half touch
@@ -39,6 +38,38 @@ the finger) and the right-half stick steers only. The § 3 gates exist to
 disambiguate steering from burning on the one-handed stick, so **none of
 them apply under split controls** — throttle there is an explicit command,
 like the keyboard.
+
+The gamepad's **right analog stick commands the nose direction too**
+(2026-08): it feeds the same PD controller through `set_pad_stick` —
+`pad_stick_steer` in main.rs applies the identical `STICK_DZ` radial
+dead-zone/rescale and the Invert setting — but never the engine: pad boost
+stays on the left hand — the layout mirrors split controls: left burns,
+right steers. The **L2 trigger is analog**: its travel is partial
+throttle (`pad_throttle_cmd`, resting noise below 0.05 floored), shaped
+by `PAD_THROTTLE_EXPO` (2.0 — travel²): the ship's hot TWR puts hover at
+only ~13% throttle, so a linear trigger feels near-binary; squaring
+spends the trigger's range on the low band where the resolution matters
+(hover ≈ 37% travel), full squeeze still = 1.0. The pad is the one input
+with a true partial burn today; L1 and D-pad up are digital full burn.
+The **left stick pushed up is a second analog throttle** (HOTAS-style,
+max'd with the trigger; dead-zone 0.15 rescaled, same expo on top),
+because a pad's trigger often reports DIGITALLY even when the API shape
+is analog: either the trigger is a click switch (Switch Pro ZL), or the
+CONNECTION protocol has no analog-trigger channel — confirmed in the
+field on an 8BitDo Ultimate 2 Bluetooth (Hall-effect analog triggers,
+"analog mode" on): it pairs with iOS via the Switch protocol, whose
+wire format carries ZL/ZR as single bits, so `padraw` jumps 0 → 100
+regardless of the hardware. A stick axis is genuinely analog on every
+controller and every protocol.
+The Debug HUD's `thr=` (resolved, post-curve) and `padraw=` (as it
+arrived from the controller, pre-curve) readouts show the throttle
+live — the quick test for whether a controller's throttle source is
+really analog (a digital click trigger jumps `padraw` 0 → 100). Like split controls the pad skips
+the flick grace and flip settle (those gates are one-handed-stick-only).
+Keyboard keys use direct rate rotation and override the PD controller
+while held; an active touch outranks the pad stick. (The pad's D-pad
+left/right rate override was dropped 2026-08 as redundant next to the
+heading stick.)
 
 ## 2. Heading controller (how the nose chases the stick)
 
@@ -94,7 +125,8 @@ every other pixel constant.)
 | Main engine force | `8.0` | inline in the Controls section (`let f = 8.0 * throttle`) | TWR dial. Ship mass ≈ 0.65, lunar gravity 1.62 → weight ≈ 1.05 → **TWR ≈ 7.5** (very hot; Apollo was ~3). Lower toward 5–6 for a calmer game |
 | `linear_damping` | 0.2 | body builder | Invisible speed ceiling; higher = momentum bleeds off faster (arcade), 0 = pure Newton |
 | Gravity | −1.62 | `main()` | The Moon. Turn up for punishing, down for floaty |
-| `RCS_FORCE` | 3.3 | Controls section | Keyboard/pad rate-rotation strength only (touch uses the PD controller) |
+| `RCS_FORCE` | 3.3 | Controls section | Keyboard rate-rotation strength only (touch and the pad's analog stick use the PD controller) |
+| `PAD_THROTTLE_EXPO` | 2.0 | `pad_throttle_cmd`, main.rs | Trigger→throttle response: 1.0 = linear (near-binary feel at this TWR), 2.0 = squared (fine low band, hover at ~37% travel), higher = even softer low end |
 | Glow smoothing | 0.12/frame | main loop | Cosmetic: how fast flame/light/sound follow the throttle |
 
 ## 6. Consequences (difficulty rather than feel, but they interact)

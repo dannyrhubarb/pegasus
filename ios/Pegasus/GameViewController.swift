@@ -11,6 +11,8 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
     private var webView: WKWebView!
     private var appBuildScript: WKUserScript!
     private var didStartLoad = false
+    private var nativePadScript: WKUserScript!
+    private var padForwarder: PadForwarder?
 
     // The status bar stays visible, drawn over the game's starfield (the
     // page lays its HUD out below env(safe-area-inset-top), so nothing
@@ -49,6 +51,16 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
             forMainFrameOnly: true
         )
         config.userContentController.addUserScript(appBuildScript)
+        // The shell reads BT/USB game controllers natively (see
+        // PadForwarder.swift for why); this flag makes the page's own Web
+        // Gamepad poll stand down so the two paths never double-drive the
+        // same exports.
+        nativePadScript = WKUserScript(
+            source: "window.__pegNativePad = true",
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        )
+        config.userContentController.addUserScript(nativePadScript)
 
         webView = WKWebView(frame: view.bounds, configuration: config)
         // Fill the WHOLE screen, not the safe area: the page uses
@@ -72,6 +84,8 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
         // supports the iOS edge-swipe as "back one screen" — keep that.
         webView.allowsBackForwardNavigationGestures = true
         view.addSubview(webView)
+        // Native BT/USB controller bridge (see PadForwarder.swift).
+        padForwarder = PadForwarder(webView: webView)
         // load() happens in viewDidLayoutSubviews, once the safe-area
         // insets are known — see pushSafeAreaInsets.
     }
@@ -102,6 +116,7 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
         let ucc = webView.configuration.userContentController
         ucc.removeAllUserScripts()
         ucc.addUserScript(appBuildScript)
+        ucc.addUserScript(nativePadScript)
         ucc.addUserScript(WKUserScript(
             source: js, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         // …and update the live page directly (rotation happens mid-session).
