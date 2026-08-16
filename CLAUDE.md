@@ -153,13 +153,29 @@ Four input paths feed the same physics, combined in the main loop:
     test (`tests/touch-e2e/`, in CI) rather than an emulator one — the bug
     is a race, so an emulator can only pass by luck, while dispatching both
     events in one JS task makes the collapse certain.
-- **Game controller** (BT/USB, web): `index.html` polls the **Web Gamepad API**
+- **Game controller** (BT/USB): `index.html` polls the **Web Gamepad API**
   each `requestAnimationFrame` and forwards to exported `set_pad_thrust(i32)` /
-  `set_pad_torque(f32)` / `set_pad_reset()`. Mapping (standard layout): thrust =
-  A/Cross (0), R2 (7, analog>0.3), or D-pad up (12); steer = left stick X
-  (axes[0], dead-zoned/rescaled) or D-pad L/R (14/15); reset = Start (9) or
-  Y/Triangle (3, edge-triggered). Polling starts on `gamepadconnected` and stops
-  (releasing held inputs) if the pad drops out.
+  `set_pad_stick(f32, f32)` / `set_pad_torque(f32)` / `set_pad_reset()`.
+  Mapping (standard layout): thrust = A/Cross (0), R2 (7, analog>0.3), or
+  D-pad up (12); **left analog stick (both axes) = commanded nose direction**
+  (2026-08, owner request) — `set_pad_stick` feeds the SAME heading PD as
+  the touch stick (raw axes in screen convention; `pad_stick_steer` in
+  main.rs applies the `STICK_DZ` radial dead-zone/rescale + the Invert
+  setting, unit-tested; an active touch outranks the pad, and it NEVER
+  fires the engine — boost stays on its buttons, so `stick_held` remains
+  touch-only and the pad rides InputState's existing steer fields with no
+  replay-format change); rate steer = D-pad L/R (14/15, overrides the PD
+  while held like the keyboard); reset = Start (9) or Y/Triangle (3,
+  edge-triggered). Polling starts on `gamepadconnected` and stops
+  (releasing held inputs) if the pad drops out. **In the iOS shell the
+  controller is read NATIVELY instead** (`ios/Pegasus/PadForwarder.swift`,
+  GCController → the same exports, change-deduped at 60 Hz; GCController's
+  up-positive y is negated to screen convention): WebKit exposes gamepads
+  only to a visible-AND-FOCUSED page, and during AirPlay second-screen
+  play the webview lives in the non-interactive TV window — the web poll
+  goes quiet exactly when playing on the TV. The shell bridge script sets
+  `__pegNativePad`, which makes the page's web poll stand down so the two
+  paths never double-drive.
 
 Touch is read directly via macroquad each frame; the gamepad uses `PAD_*`
 atomics (JS-forwarded) so a connected-but-idle controller never stomps an
@@ -167,8 +183,9 @@ active touch. The main engine is a
 **throttle (0..1)**: every current source is binary (1.0), but the plumbing
 stays analog — engine force, glow, fuel burn, and exhaust particle
 count/speed all scale with it. Rotation has two modes: **rate control**
-(keyboard keys / pad stick → nozzle force via `fire_rcs`) and the touch
-stick's **heading control** (PD to a commanded angle, pure `add_torque`);
+(keyboard keys / D-pad → nozzle force via `fire_rcs`) and **heading
+control** (PD to a commanded angle, pure `add_torque`) commanded by the
+touch stick or the gamepad's left analog stick (touch outranks pad);
 rate control wins while actively held. `PAD_RESET` is a swap-to-consume flag
 so a held reset button fires exactly once.
 
@@ -1716,11 +1733,57 @@ re-acquired on the `visibilitychange` back while still wanted).
   `env()`, behavior unchanged (verified headless: unset vars reproduce
   the old computed styles exactly). The Android shell doesn't inject
   (no jank reported there); it can adopt the same vars if ever needed.
+- **AirPlay second screen** (`ios/Pegasus/AirPlay.swift`, 2026-08): during
+  AirPlay **screen mirroring** (user-started from Control Center — there is
+  NO API to start it programmatically, so no in-app button can) the app
+  replaces the letterboxed mirror with its own **full-screen 16:9 TV
+  window**: the system offers the mirrored display as a NON-INTERACTIVE
+  external-display scene (the `configurationForConnecting` callback fires
+  for it even with `UIApplicationSupportsMultipleScenes = false` — verified
+  against Apple's guidance; the role is matched as `!= .windowApplication`
+  so the iOS 16 role rename needs no availability dance), AppDelegate
+  answers with `ExternalSceneDelegate`, and `AirPlayCoordinator` reparents
+  the app's ONE WKWebView between screens (web process/wasm/localStorage
+  survive reparenting). The handoff signal is the existing
+  **`pegasusKeepAwake` message** — the wake-lock boundary IS "canvas live"
+  (flight / wreck / replay vs. any menu screen): live → webview on the TV,
+  phone shows `PhoneControllerView` (dark touch surface + native ⟳/✕
+  corner buttons + amber touch-echo ring); menu up → webview returns to
+  the phone so EVERY HTML screen (picker, settings, game-over, submit)
+  stays fully usable while the TV shows an idle card (index.html carries a
+  guard comment at the postMessage site). Phone touches reach the game via
+  the shell-injected **`__pegExtTouch` shim**: phone-surface points map
+  into canvas pixels (uniform scale, letterbox-fit, centered — circles
+  stay circles) and feed `wasm_exports.touch(phase, id, x, y)`, the SAME
+  entry real canvas touches use (see docs/touch-input.md "the chain has a
+  second head") — TouchStick, thrust gating and the recorder are untouched
+  and the stick draws ON THE TV under the mapped finger; ids start at 1001
+  (never collide with WebKit's 0-based ones), and removing the surface
+  mid-press forwards `touchesCancelled` so the stick releases. The ✕/⟳
+  buttons go through **`__pegCorner`**, which `.click()`s whichever HTML
+  corner button is currently visible (pause in flight, exit-replay in a
+  replay — the page keeps owning context sensitivity; during a replay on
+  the TV the HTML transport bar is out of reach, so phone-✕ = exit is the
+  escape hatch). Safe-area insets are pushed from the webview's CURRENT
+  host (`webView.superview` — zero on the TV, so the HUD hugs the TV
+  edges; the shim + build scripts are re-registered together in
+  `pushSafeAreaInsets`). **BT/USB controllers keep working on the TV**
+  because the shell reads them natively (`PadForwarder.swift` — see "Game
+  controller" under Input sources; the web poll would die with the webview
+  unfocused in the TV window). AirPlay adds ~100–200 ms display latency
+  the app cannot remove; input is local, so the game responds instantly
+  but is WATCHED slightly delayed.
 - App icon: `icon.svg` rendered to an opaque 1024×1024 PNG in
   `Assets.xcassets` (no alpha — App Store validation rejects it);
   re-render if the SVG changes.
 - **CI**: `ios-build.yml` (PRs touching `ios/` — sync + UNSIGNED
-  xcodebuild, no secrets) and `ios-testflight.yml` (manual dispatch +
+  xcodebuild, no secrets; **this IS the Swift compile gate — check it's
+  green on the PR before manually dispatching `ios-testflight.yml` on a
+  branch**. Lesson from 2026-08: a TestFlight dispatch raced ahead of the
+  red build check and died on the same compile error the check had
+  already caught an hour earlier; the archive is the same compile, so a
+  pre-archive compile step inside the TestFlight workflow would add
+  nothing — the gate exists, honor it) and `ios-testflight.yml` (manual dispatch +
   **every `main` push that could reach a device** — cloud-signed archive
   → TestFlight;
   needs the four `APP_STORE_CONNECT_API_*`/`APPLE_TEAM_ID` repo secrets

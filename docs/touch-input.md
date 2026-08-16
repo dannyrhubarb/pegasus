@@ -20,6 +20,18 @@ finger
   → InputState                     quantized, fed to Sim::tick and the recorder
 ```
 
+The chain has a second head: during **AirPlay second-screen play** the iOS
+shell's phone-side control surface (`ios/Pegasus/AirPlay.swift`) forwards
+its native touches by calling `wasm_exports.touch(phase, id, x, y)` directly
+(via the `__pegExtTouch` shim the shell injects — it maps phone-surface
+points into canvas pixels with a uniform letterbox-fit so circular stick
+motion stays circular). Everything below the bundle line is shared, so the
+TouchStick, the thrust gating and the recorder see no difference between a
+real canvas touch and a forwarded one. The shim's ids start at 1001 so they
+can never collide with the browser's own (WebKit counts from 0), and the
+shell forwards `touchesCancelled` when the surface disappears mid-press so
+the stick releases instead of wedging.
+
 Two properties of that chain matter more than anything else in it.
 
 **Positions arrive in raw physical pixels.** `touches()` does *not* divide by

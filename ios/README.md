@@ -59,6 +59,37 @@ deliberate differences:
 - **The injected revision carries an `-ios` suffix** so app builds are
   distinguishable in the About screen, analytics and replay build ids.
 
+## AirPlay: game on the TV, controls on the phone
+
+Start **Screen Mirroring from Control Center** (there is no API for an
+in-app button to start AirPlay — Apple keeps that gesture in Control
+Center). The moment mirroring is active, the app takes over the TV:
+instead of the letterboxed mirror image, the game renders **full-screen
+16:9 on the TV** while the phone becomes the controller — a dark touch
+surface with the usual floating stick behavior (touch anywhere = burn +
+steer; the stick itself is drawn on the TV under your mapped finger,
+like the replay's ghost stick) plus the ⟳ restart and ✕ menu corner
+buttons.
+
+Opening any menu (pause, crash/game-over, level picker, settings) hands
+the page back to the phone — every HTML screen stays fully usable — and
+the TV shows an idle card until you fly again. Stopping mirroring at any
+point returns everything to the phone seamlessly.
+
+A Bluetooth/USB game controller works on the TV too — the shell reads it
+natively (`Pegasus/PadForwarder.swift`; the page's own Web Gamepad poll
+only works while the page is focused, which it isn't on the TV window).
+The left analog stick commands the nose direction like the touch stick,
+thrust is A / R2 / D-pad up, D-pad left/right is manual rotation, and
+Menu or Y restarts.
+
+Implementation: `Pegasus/AirPlay.swift` (external-display scene +
+coordinator + controller surface), the shell-injected `__pegExtTouch` /
+`__pegCorner` JS bridge in `GameViewController.swift`, and the page's
+`pegasusKeepAwake` message as the handoff signal. Expect AirPlay's usual
+~100–200 ms of display latency on the TV; input is processed locally so
+the game *responds* instantly — you just watch it slightly delayed.
+
 ## Gotchas
 
 - **WebRoot/ is gitignored** (like `pegasus.wasm`) — it's a build product.

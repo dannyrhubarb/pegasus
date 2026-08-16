@@ -28,8 +28,16 @@ the nose direction; a PD controller (spring + damper) torques the ship the
 short way to that angle. Two gates keep steering cheap: a *flick grace*
 (short touches never thrust) and a *flip settle* (commanding a >92° turn
 keeps the engine cold until the nose is nearly there). Holding the stick is
-the only touch thrust control (the old JET button is gone). Keyboard/gamepad
-use direct rate rotation and override the PD controller while held.
+the only touch thrust control (the old JET button is gone).
+
+The gamepad's **left analog stick commands the nose direction too**
+(2026-08): it feeds the same PD controller through `set_pad_stick` —
+`pad_stick_steer` in main.rs applies the identical `STICK_DZ` radial
+dead-zone/rescale and the Invert setting — but never the engine: pad boost
+stays on its buttons (A / R2 / D-pad up), so there is no flick grace or
+flip settle on the pad, and the two thrust gates below are touch-only.
+Keyboard keys and the D-pad use direct rate rotation and override the PD
+controller while held; an active touch outranks the pad stick.
 
 ## 2. Heading controller (how the nose chases the stick)
 
@@ -81,7 +89,7 @@ every other pixel constant.)
 | Main engine force | `8.0` | inline in the Controls section (`let f = 8.0 * throttle`) | TWR dial. Ship mass ≈ 0.65, lunar gravity 1.62 → weight ≈ 1.05 → **TWR ≈ 7.5** (very hot; Apollo was ~3). Lower toward 5–6 for a calmer game |
 | `linear_damping` | 0.2 | body builder | Invisible speed ceiling; higher = momentum bleeds off faster (arcade), 0 = pure Newton |
 | Gravity | −1.62 | `main()` | The Moon. Turn up for punishing, down for floaty |
-| `RCS_FORCE` | 3.3 | Controls section | Keyboard/pad rate-rotation strength only (touch uses the PD controller) |
+| `RCS_FORCE` | 3.3 | Controls section | Keyboard/D-pad rate-rotation strength only (touch and the pad's analog stick use the PD controller) |
 | Glow smoothing | 0.12/frame | main loop | Cosmetic: how fast flame/light/sound follow the throttle |
 
 ## 6. Consequences (difficulty rather than feel, but they interact)
