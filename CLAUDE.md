@@ -1901,7 +1901,13 @@ re-acquired on the `visibilitychange` back while still wanted).
   `Assets.xcassets` (no alpha — App Store validation rejects it);
   re-render if the SVG changes.
 - **CI**: `ios-build.yml` (PRs touching `ios/` — sync + UNSIGNED
-  xcodebuild, no secrets) and `ios-testflight.yml` (**manual dispatch
+  xcodebuild, no secrets; **this IS the Swift compile gate — check it's
+  green on the PR before manually dispatching `ios-testflight.yml` on a
+  branch**. Lesson from 2026-08: a TestFlight dispatch raced ahead of the
+  red build check and died on the same compile error the check had
+  already caught an hour earlier; the archive is the same compile, so a
+  pre-archive compile step inside the TestFlight workflow would add
+  nothing — the gate exists, honor it) and `ios-testflight.yml` (**manual dispatch
   ONLY** — automatic publish on `main` pushes is PAUSED since 2026-08,
   owner request; see the paused-trigger note under Android CI —
   cloud-signed archive → TestFlight;
