@@ -223,6 +223,24 @@ This split keeps the powerful account-level Cloudflare token in GitHub
 secrets, used once, while the runtime only ever holds the narrow TURN-key
 token whose only capability is minting short-lived client credentials.
 
+**Missing-bootstrap degradation (required)**: the signaling Lambda must
+treat absent SSM parameters as "TURN not configured" — log a warning and
+return STUN-only `iceServers` (`stun.cloudflare.com`) instead of failing.
+Most peer pairs connect without a relay, so a forgotten bootstrap weakens
+the fallback rather than breaking multiplayer.
+
+**Alternative considered and rejected** (owner decision, 2026-08): a
+Lambda-backed CloudFormation custom resource in the backend stack that
+creates/revokes the TURN key. It would solve deploy ordering and teardown
+declaratively, but couples every stack operation (including rollbacks and
+deletes) to the Cloudflare API, requires the account-level token to stay
+in the deploy pipeline permanently, and custom resources wedge the stack
+when a handler path fails to respond. The bootstrap workflow keeps
+deploys pure-AWS; its one-time manual nature is acceptable. Do not
+re-open this. (CDKTF was also considered — the Cloudflare provider's
+`cloudflare_calls_turn_app` resource covers it — and rejected as a second
+IaC toolchain whose state file would hold the secret.)
+
 ## Cost expectations (verified 2026-08)
 
 - TURN: $0 (1,000 GB/month free tier; a fully-relayed hour of racing is
