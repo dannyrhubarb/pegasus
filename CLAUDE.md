@@ -1719,6 +1719,103 @@ the real backend. All JS-side in `index.html`:
   `maybeSubmitOnline`; keep them in sync with the backend's validation
   (`score > 0`, name ≤ 24 chars — the input carries `maxlength=24`).
 
+## Multiplayer (P2P shadow race)
+
+2-player race (2026-08, per `docs/multiplayer-p2p.md` — the design brief
+with the owner's locked decisions; read it before touching this): both
+players fly the SAME level (same world, same **concrete** seed) side by
+side, each in their own physics world — **no ship–ship collision**. The
+opponent renders like the racing ghost (translucent silhouette, magenta
+vs the ghost's pale blue — both can be on screen at once — with callsign +
+minimap dot), driven live by their input stream over a **WebRTC
+RTCDataChannel** (true P2P; STUN → Cloudflare TURN fallback). Latency only
+moves where you SEE the opponent, never your own physics. Scoring is
+unchanged: each run still goes through the normal publish → submit-dialog →
+backend-verification flow.
+
+- **Feature gate**: `config.json`'s `wsUrl` (the pegasus-backend signaling
+  WebSocket — see that repo's CLAUDE.md; `build-site` validates it as
+  optional `wss://`). Absent ⇒ the home-screen Multiplayer button never
+  shows. NOTE: after the backend deploy the `BACKEND_CONFIG_JSON` repo
+  variable must be re-pasted from the new `FrontendConfigJson` output;
+  the app shells fetch config.json from the live deployment and follow
+  automatically.
+- **wasm bridge (`src/main.rs`)**: the opponent is "a ghost whose
+  recording is still being written": `RemoteFeed` accumulates received
+  input change-events + 1 Hz keyframes into a growing `Recording` (via
+  `record_tick`, so event dedup matches the sender exactly) and drives a
+  `ResimPlayer` through it — cross-device drift is absorbed by the same
+  keyframe check + `SNAP_DRIFT_M` snap as watched replays. **Built
+  entirely frontend-side from sim-core's existing public API — NO sim-core
+  changes, no `REPLAY_FORMAT_VERSION` bump, no backend repin needed.**
+  Exports: `set_mp_active`, `mp_arm`, `set_mp_name`, `set_mp_remote_over`,
+  `mp_push_remote` (BLOB_IN batches), `mp_out_take`/`mp_out_ptr` (drain
+  the outgoing mirror), `mp_remote_dist`. Wire batches are
+  `total_ticks(u32) + events(9 B) + keyframes(60 B)` — tick-stamped and
+  self-delimiting; keyframe 0 never ships (both sides derive the spawn
+  state from the shared level+seed). The remote resim is paced by the
+  render clock (smooth 120 Hz motion ~1 network batch behind); big
+  backlogs (tab-hide) close via a keyframe-restore seek. Unit tests:
+  `remote_feed_reproduces_an_incrementally_streamed_run_bit_exactly`,
+  `remote_feed_snaps_onto_a_diverged_stream`, the batch-codec round-trip.
+- **`mp_arm` replaces the armed-but-idle gate for races**: the countdown's
+  zero arms the run with the ship still idle, so both recorders' tick
+  clocks share the start line (recording semantics otherwise identical —
+  keyframe 0 = spawn, tick 1 = first tick after the gun; a race recording
+  may simply lead with neutral ticks, which the verifier is fine with).
+  JS resets the run (`ui_command 1`) and holds `set_ui_pause(1)` through
+  the 3-2-1, so the sim is guaranteed fresh and frozen when the gun fires.
+  **A mid-race respawn/level-switch drops the remote feed** (the shared
+  clock is broken); rematches re-arm a fresh one.
+- **JS (`pegMP` in index.html, after the analytics module)**: same
+  never-break-the-game rules as analytics (every entry point try/caught) —
+  but deliberately NOT analytics' `navigator.webdriver` gate, so e2e
+  automation can drive it. Signaling client (`create_room`/`join_room`/
+  opaque `signal` relay/`leave`), RTCPeerConnection with host-as-offerer,
+  candidate queueing until the SDP lands, host-driven ICE restart on
+  `failed` while the socket is up. DataChannel: JSON control messages
+  (`hello` incl. build id — mismatch shows a "may drift" banner, the
+  keyframe snap covers it — `level`, `ready`, `start`, `run_end`) +
+  binary input batches relayed verbatim to/from the wasm. Menu:
+  `scr-mp` / `scr-mp-host` (room code) / `scr-mp-join` / `scr-mp-lobby` /
+  `scr-mp-results`, all with `.mbtn.back` (hardware back for free) +
+  `histPath` entries; the level picker gains an `"mp"` mode (host pick →
+  `pegMP.hostPickedLevel`). The countdown overlay + the magenta
+  `#mp-banner` notice live outside `#menu` (over the frozen game).
+- **Seed pinning**: the host rewrites `seed = random` to a concrete roll
+  before transmitting AND loads that same text itself (`pushLevel(file,
+  textOverride)`), so both fly identical rock and the backend's
+  any-seed-passes rule for random-seed stems verifies both runs. Exiting
+  the race re-pushes the level's original text so solo play gets its
+  re-rolling world back. Guests load the transmitted text even for files
+  missing from their manifest (the text travels wholesale); custom drafts
+  MAY be raced and keep all their local-only guards.
+- **Link-failure diagnosis (`scr-mp-fail`, field lesson 2026-08)**: room
+  pairing can succeed while the P2P link silently never opens — seen live
+  with **Apple iCloud Private Relay** on (it hides the device's address,
+  so a STUN-only attempt just hangs at "connecting…"; turning it off
+  fixed it). A 25 s setup watchdog (`CONNECT_FAIL_MS`, armed in
+  `makePeer`, cleared on DataChannel open) plus a pre-open
+  `connectionState == "failed"` both land on the diagnosis screen: the
+  facts gathered during the attempt (reason, pc states, TURN available
+  or STUN-only, local candidate counts by type lan/public/relay, how
+  many candidates arrived from the peer) plus targeted hints — no-TURN →
+  run the bootstrap, no srflx/relay → UDP blocked, zero remote → the
+  other side is stuck too, and always the VPN/Private-Relay warning. A
+  post-open failure keeps the existing degrade-to-solo banner instead
+  (never a dialog over a live flight).
+- **Run end**: the module watches the analytics run channel
+  (`run_end_seq` + cause/dist/ticks mirrors — no new channel) for its own
+  end, sends `run_end {cause, score}` (time levels: completion seconds,
+  DNF = null), and flags the peer's via `set_mp_remote_over`. The
+  ui-state poll's wrap-up target becomes `scr-mp-results` while
+  `pegMP.inRace()` (submit dialog first as usual; consent detour skipped
+  during races). Results: win/lose/dead-heat (lower wins on time levels,
+  DNF loses to any finish), Rematch (host re-picks the same file — a
+  random-seed level re-rolls) and Exit. **Disconnect mid-race degrades to
+  a normal solo run** (banner, feed torn down) — the local flight is
+  never blocked by network state.
+
 ## Physics notes
 
 The body has `angular_damping(3.0)` and `linear_damping(0.2)` (see Thrust /
