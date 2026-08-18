@@ -818,6 +818,34 @@
       color: var(--cyan);
       text-shadow: 0 0 20px var(--cyan), 0 0 60px rgba(52, 231, 255, 0.6);
     }
+    /* Connection-failure diagnosis (scr-mp-fail): the facts we gathered
+       about the failed WebRTC attempt, left-aligned monospace so the lines
+       read as a report, plus amber hint lines for the likely causes. */
+    .mp-diag {
+      width: min(440px, 88vw);
+      background: var(--panel);
+      border: 1.5px solid rgba(255, 90, 60, 0.45);
+      border-radius: 8px;
+      padding: 12px 16px;
+      font: 13px/1.7 var(--mono);
+      color: var(--text);
+      text-align: left;
+      letter-spacing: 0.03em;
+      white-space: pre-wrap; /* the report is newline-separated key/value lines */
+    }
+    #mp-fail-hints {
+      width: min(440px, 88vw);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      text-align: left;
+      font-size: 13px;
+      color: var(--amber);
+      letter-spacing: 0.04em;
+      line-height: 1.5;
+    }
+    #mp-fail-hints div::before { content: "▸ "; }
+
     /* Mid-race notice (opponent disconnected — race void): same fixed-toast
        idiom as #update-toast, magenta, non-interactive, auto-hides. */
     #mp-banner {
@@ -1165,11 +1193,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">f859081-pr-148</div>
+        <div class="info-value" id="git-rev">69e07d4-pr-148</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-08-18T09:05:31Z</div>
+        <div class="info-value" id="build-time">2026-08-18T11:00:01Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -1282,6 +1310,20 @@
       <div class="h2">LOBBY</div>
       <div class="hint" id="mp-lobby-status">Connecting&hellip;</div>
       <div class="mbtn back" id="btn-mp-lobby-back">&#8249; Leave</div>
+    </div>
+
+    <!-- WebRTC connection failure: the diagnosis screen. Filled by
+         pegMP.showConnectFail with the facts gathered during the attempt
+         (relay availability, candidate types, what arrived from the peer)
+         and hints for the usual culprits — no TURN, UDP-blocking networks,
+         VPNs / iCloud Private Relay (the 2026-08 field case). -->
+    <div class="screen" id="scr-mp-fail">
+      <div class="title crash">LINK FAILED</div>
+      <div class="hint">The room worked, but a direct game link between the two
+        devices couldn't be established</div>
+      <div class="mp-diag" id="mp-fail-info"></div>
+      <div id="mp-fail-hints"></div>
+      <div class="mbtn back" id="btn-mp-fail-back">&#8249; Back</div>
     </div>
 
     <div class="screen" id="scr-mp-results">
@@ -1834,6 +1876,7 @@
         case "scr-mp-host":    return ["scr-home", "scr-mp", "scr-mp-host"];
         case "scr-mp-join":    return ["scr-home", "scr-mp", "scr-mp-join"];
         case "scr-mp-lobby":   return ["scr-home", "scr-mp", "scr-mp-lobby"];
+        case "scr-mp-fail":    return ["scr-home", "scr-mp", "scr-mp-fail"];
         case "scr-mp-results": return ["scr-home", "game", "scr-mp-results"];
         default:             return ["scr-home", s]; // future screens: child of home
       }
@@ -2249,7 +2292,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "f859081-pr-148";
+    const wasmRev = "69e07d4-pr-148";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -3651,6 +3694,17 @@
       let sendTimer = null, countTimer = null;
       let lastEndSeq = null;     // run_end_seq at the gun (own-run watcher)
       let bannerTimer = null;
+      // Link-attempt diagnostics for the failure dialog: was a TURN relay
+      // in the mix, which local candidate types were gathered (host = LAN,
+      // srflx = STUN-discovered public address, relay = TURN), and how many
+      // candidates the peer's side sent us. Cheap to collect, and exactly
+      // the facts that separate "no relay configured" from "network blocks
+      // UDP" from "the other side never reached us".
+      let connectTimer = null;   // setup watchdog: dialog if the link never opens
+      let dcOpened = false;
+      let hadTurn = false;
+      let cand = { host: 0, srflx: 0, relay: 0, remote: 0 };
+      const CONNECT_FAIL_MS = 25000; // past ICE's own give-up horizon
 
       function banner(msg) {
         try {
@@ -3687,7 +3741,9 @@
       function teardownNet() {
         try { clearInterval(sendTimer); } catch (_) {}
         try { clearInterval(countTimer); } catch (_) {}
-        sendTimer = countTimer = null;
+        try { clearTimeout(connectTimer); } catch (_) {}
+        sendTimer = countTimer = connectTimer = null;
+        dcOpened = false;
         try { countEl.classList.remove("on"); } catch (_) {}
         try { if (dc) { dc.onmessage = dc.onclose = null; dc.close(); } } catch (_) {}
         try { if (pc) { pc.onicecandidate = null; pc.close(); } } catch (_) {}
@@ -3737,10 +3793,71 @@
         };
       }
 
+      // The connection failed before the game link ever opened: collect
+      // what we know into the diagnosis screen (scr-mp-fail), then tear
+      // down. The facts + hints are what made the 2026-08 field case
+      // (iCloud Private Relay silently eating a STUN-only attempt, "it just
+      // sat there") diagnosable from the phone itself.
+      function showConnectFail(reason) {
+        try {
+          let states = "";
+          try {
+            states = (pc ? pc.connectionState : "-") + " / ice " +
+              (pc ? pc.iceConnectionState : "-");
+          } catch (_) { states = "-"; }
+          const line = (k, v) =>
+            k.padEnd(16, " ") + " " + v;
+          document.getElementById("mp-fail-info").textContent = [
+            line("why", reason),
+            line("state", states),
+            line("relay (TURN)", hadTurn ? "available" : "NOT configured — STUN only"),
+            line("my candidates", "lan " + cand.host + " · public " + cand.srflx + " · relay " + cand.relay),
+            line("from opponent", cand.remote + " candidate" + (cand.remote === 1 ? "" : "s")),
+          ].join("\n");
+          const hints = [];
+          if (!hadTurn) {
+            hints.push("No relay server is configured, so only a DIRECT connection can work — strict/mobile networks need the TURN relay (run the backend's TURN bootstrap).");
+          }
+          if (cand.srflx === 0 && cand.relay === 0) {
+            hints.push("Your device never found its public address — this network may block UDP, or a proxy is in the way.");
+          }
+          if (cand.remote === 0) {
+            hints.push("Nothing arrived from the other player — they may have the same problem on their side, or they left.");
+          }
+          hints.push("VPNs and Apple iCloud Private Relay often block peer-to-peer games — try switching them off, or put both devices on the same Wi-Fi.");
+          const hEl = document.getElementById("mp-fail-hints");
+          hEl.textContent = "";
+          for (const h of hints) {
+            const d = document.createElement("div");
+            d.textContent = h;
+            hEl.appendChild(d);
+          }
+        } catch (_) {}
+        teardownNet();
+        showScreen("scr-mp-fail");
+      }
+
       function makePeer() {
         pc = new RTCPeerConnection({ iceServers: iceServers || [] });
+        dcOpened = false;
+        cand = { host: 0, srflx: 0, relay: 0, remote: 0 };
+        try { hadTurn = /"turns?:/.test(JSON.stringify(iceServers || [])); } catch (_) { hadTurn = false; }
+        // Setup watchdog: if the DataChannel hasn't opened by now, the
+        // attempt has genuinely failed (ICE gives up sooner) — diagnose
+        // instead of leaving both players staring at "connecting…".
+        clearTimeout(connectTimer);
+        connectTimer = setTimeout(() => {
+          if (!dcOpened) showConnectFail("timed out after " + (CONNECT_FAIL_MS / 1000) + " s");
+        }, CONNECT_FAIL_MS);
         pc.onicecandidate = e => {
-          if (e.candidate) wsSend({ action: "signal", payload: { candidate: e.candidate } });
+          if (!e.candidate) return;
+          try {
+            const c = String(e.candidate.candidate || "");
+            if (/ typ host/.test(c)) cand.host++;
+            else if (/ typ srflx/.test(c)) cand.srflx++;
+            else if (/ typ relay/.test(c)) cand.relay++;
+          } catch (_) {}
+          wsSend({ action: "signal", payload: { candidate: e.candidate } });
         };
         pc.oniceconnectionstatechange = () => {
           try {
@@ -3754,10 +3871,14 @@
         };
         pc.onconnectionstatechange = () => {
           try {
-            // Beyond ICE restart's reach: the peer is gone for real. (The
-            // signaling relay's peer_left usually lands first — the lambda
-            // fires it on $disconnect — this covers a dead relay.)
-            if (pc.connectionState === "failed") onPeerGone();
+            if (pc.connectionState !== "failed") return;
+            // Failed before the game link ever opened = a connectivity
+            // problem worth diagnosing (scr-mp-fail); failed after = the
+            // peer is gone for real (the relay's peer_left usually lands
+            // first — the lambda fires it on $disconnect — this covers a
+            // dead relay).
+            if (!dcOpened) showConnectFail("connection failed");
+            else onPeerGone();
           } catch (_) {}
         };
         if (role === "host") {
@@ -3788,6 +3909,7 @@
               wsSend({ action: "signal", payload: { sdp: pc.localDescription } });
             }
           } else if (payload.candidate) {
+            cand.remote++;
             if (!pc.remoteDescription) pendingCands.push(payload.candidate);
             else await pc.addIceCandidate(payload.candidate).catch(() => {});
           }
@@ -3835,6 +3957,9 @@
         dc = channel;
         dc.binaryType = "arraybuffer";
         dc.onopen = () => {
+          dcOpened = true;
+          clearTimeout(connectTimer);
+          connectTimer = null;
           dcSend({ t: "hello", name: playerName() || "PILOT", build: wasmRev.startsWith("__") ? "dev" : wasmRev.slice(0, 8) });
         };
         dc.onclose = () => onPeerGone();
@@ -4160,6 +4285,9 @@
       document.getElementById("btn-mp-lobby-back").addEventListener("click", () => {
         teardownNet();
         showScreen("scr-mp");
+      });
+      document.getElementById("btn-mp-fail-back").addEventListener("click", () => {
+        showScreen("scr-mp"); // the failed attempt was already torn down
       });
       document.getElementById("btn-mp-exit").addEventListener("click", () => {
         exitToMenu("scr-home");
