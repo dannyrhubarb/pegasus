@@ -1193,11 +1193,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">69e07d4-pr-148</div>
+        <div class="info-value" id="git-rev">46b9214-pr-148</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-08-18T11:00:01Z</div>
+        <div class="info-value" id="build-time">2026-08-18T19:45:30Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -1289,7 +1289,12 @@
     <div class="screen" id="scr-mp-host">
       <div class="h2">ROOM CODE</div>
       <div id="mp-code">&middot;&middot;&middot;&middot;&middot;</div>
-      <div class="hint">Your friend picks Multiplayer &rarr; Join game and types this code</div>
+      <div class="hint">Your friend picks Multiplayer &rarr; Join game and types this code
+        &mdash; or send them the invite link</div>
+      <!-- Share sheet where the browser has one (navigator.share), else
+           copies the ?join= link to the clipboard. Hidden until the room
+           code exists. -->
+      <div class="mbtn" id="btn-mp-share" style="display:none">Share invite link</div>
       <div class="hint" id="mp-host-status">Contacting mission control&hellip;</div>
       <div class="mbtn primary" id="btn-mp-pick" style="display:none">Choose level</div>
       <div class="mbtn back" id="btn-mp-host-back">&#8249; Cancel</div>
@@ -2292,7 +2297,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "69e07d4-pr-148";
+    const wasmRev = "46b9214-pr-148";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -3673,6 +3678,7 @@
       const lobbyStatus = document.getElementById("mp-lobby-status");
       const codeInput = document.getElementById("mp-code-input");
       const pickBtn = document.getElementById("btn-mp-pick");
+      const shareBtn = document.getElementById("btn-mp-share");
       const resTitle = document.getElementById("mp-res-title");
       const resYou = document.getElementById("mp-res-you");
       const resPeer = document.getElementById("mp-res-peer");
@@ -3715,6 +3721,24 @@
         } catch (_) {}
       }
 
+      // Invite links: the host shares ./?join=<CODE>; a guest landing with
+      // that param goes straight into the join flow once the config lands.
+      // The param is consumed and stripped from the URL immediately, so a
+      // later reload doesn't retry a long-dead room (codes die with the
+      // 2 h room TTL anyway).
+      let pendingJoin = null;
+      try {
+        const q = new URLSearchParams(location.search);
+        const j = (q.get("join") || "").trim().toUpperCase();
+        if (/^[A-Z0-9]{5}$/.test(j)) {
+          pendingJoin = j;
+          q.delete("join");
+          const qs = q.toString();
+          const clean = location.pathname + (qs ? "?" + qs : "") + location.hash;
+          history.replaceState(history.state, "", clean);
+        }
+      } catch (_) {}
+
       // Fed by the ONE config.json fetch (like pegAnalytics.configure).
       function configure(cfg) {
         try {
@@ -3722,6 +3746,13 @@
           if (!window.RTCPeerConnection || !window.WebSocket) return;
           wsUrl = String(cfg.wsUrl);
           document.getElementById("btn-mp").style.display = "";
+          if (pendingJoin) {
+            const code = pendingJoin;
+            pendingJoin = null;
+            codeInput.value = code;
+            showScreen("scr-mp-join"); // errors (expired link…) land here
+            document.getElementById("btn-mp-join").click();
+          }
         } catch (_) {}
       }
 
@@ -3922,6 +3953,8 @@
             iceServers = msg.iceServers;
             codeEl.textContent = msg.code;
             hostStatus.textContent = "Waiting for a challenger…";
+            shareBtn.textContent = "Share invite link";
+            shareBtn.style.display = "";
             break;
           case "room_joined":
             iceServers = msg.iceServers;
@@ -4241,9 +4274,31 @@
           codeEl.textContent = "·····";
           hostStatus.textContent = "Contacting mission control…";
           pickBtn.style.display = "none";
+          shareBtn.style.display = "none";
           showScreen("scr-mp-host");
           connectWs(() => wsSend({ action: "create_room" }));
         } catch (_) { hostStatus.textContent = "Couldn't reach mission control"; }
+      });
+      // Invite link: the game URL with ?join=<code> — native share sheet
+      // where the browser has one, clipboard-copy fallback elsewhere.
+      shareBtn.addEventListener("click", () => {
+        try {
+          const code = codeEl.textContent;
+          if (!/^[A-Z0-9]{5}$/.test(code)) return;
+          const u = new URL(location.href);
+          u.search = "?join=" + code;
+          u.hash = "";
+          const url = u.toString();
+          if (navigator.share) {
+            navigator.share({ title: "Pegasus", text: "Race me through the cave!", url })
+              .catch(() => {}); // share sheet dismissed — not an error
+          } else if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(url).then(() => {
+              shareBtn.textContent = "Link copied!";
+              setTimeout(() => { shareBtn.textContent = "Share invite link"; }, 2000);
+            }).catch(() => {});
+          }
+        } catch (_) {}
       });
       document.getElementById("btn-mp-joinscr").addEventListener("click", () => {
         joinStatus.textContent = "";
