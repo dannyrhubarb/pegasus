@@ -100,7 +100,7 @@ python3 tools/gen-whats-new.py > site/play/whats-new.json
 # malformed variable fails the build here rather than silently shipping a
 # broken config.json. Absent = no config.json = the game runs offline-only.
 if [ -n "${BACKEND_CONFIG:-}" ]; then
-  printf '%s' "${BACKEND_CONFIG}" | python3 -c 'import json,sys; c = json.load(sys.stdin); assert c["apiBaseUrl"].startswith("https://") and c["replayBaseUrl"].startswith("https://")'
+  printf '%s' "${BACKEND_CONFIG}" | python3 -c 'import json,sys; c = json.load(sys.stdin); assert c["apiBaseUrl"].startswith("https://") and c["replayBaseUrl"].startswith("https://"); assert "wsUrl" not in c or c["wsUrl"].startswith("wss://")'
   printf '%s\n' "${BACKEND_CONFIG}" > site/play/config.json
 fi
 # App update policy (forced-update wall + runtime config override, #190):
