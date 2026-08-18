@@ -2067,6 +2067,18 @@ backend-verification flow.
   re-rolling world back. Guests load the transmitted text even for files
   missing from their manifest (the text travels wholesale); custom drafts
   MAY be raced and keep all their local-only guards.
+- **Invite links**: the host screen's Share button sends the game URL with
+  `?join=<CODE>` (native share sheet via `navigator.share`, clipboard-copy
+  fallback with a "Link copied!" flash). A guest landing with the param
+  auto-runs the join flow once config.json's `wsUrl` arrives — prefilled
+  join screen, so an expired link surfaces the normal room_not_found error
+  there. The param is consumed + stripped from the URL immediately
+  (`history.replaceState`, preserving the back-stack state object) so a
+  reload never rejoins a dead room. Plain https on purpose: works in every
+  browser and both app shells' guests-in-browser; Universal/App Links into
+  the native shells were considered and deferred (needs a
+  `dannyrhubarb.github.io` user-site repo for `/.well-known/` at the
+  domain root, plus AASA content-type caveats on Pages).
 - **Link-failure diagnosis (`scr-mp-fail`, field lesson 2026-08)**: room
   pairing can succeed while the P2P link silently never opens — seen live
   with **Apple iCloud Private Relay** on (it hides the device's address,
