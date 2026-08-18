@@ -8,10 +8,12 @@ inputs:
     required: true
   backend-config:
     description: >
-      JSON for site/config.json ({"apiBaseUrl": …, "replayBaseUrl": …} — the
+      JSON for site/config.json ({"apiBaseUrl": …, "replayBaseUrl": …, and
+      optionally "wsUrl" for the multiplayer signaling WebSocket} — the
       pegasus-backend stack's FrontendConfigJson output, stored in the
       BACKEND_CONFIG_JSON repo variable). Empty = no config.json is written
-      and the game runs with online scores disabled.
+      and the game runs with online scores disabled; no wsUrl = multiplayer
+      hidden.
     required: false
     default: ""
   apple-team-id:
@@ -113,7 +115,7 @@ runs:
         # rather than silently shipping a broken config.json. Absent
         # variable = no config.json = the game runs offline-only.
         if [ -n "${BACKEND_CONFIG}" ]; then
-          echo "${BACKEND_CONFIG}" | python3 -c 'import json,sys; c = json.load(sys.stdin); assert c["apiBaseUrl"].startswith("https://") and c["replayBaseUrl"].startswith("https://")'
+          echo "${BACKEND_CONFIG}" | python3 -c 'import json,sys; c = json.load(sys.stdin); assert c["apiBaseUrl"].startswith("https://") and c["replayBaseUrl"].startswith("https://"); assert "wsUrl" not in c or c["wsUrl"].startswith("wss://")'
           printf '%s\n' "${BACKEND_CONFIG}" > site/config.json
         fi
         # App update policy (forced-update wall + runtime config override,
