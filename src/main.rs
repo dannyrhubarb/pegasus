@@ -707,6 +707,13 @@ static COMPARE_DROP: AtomicU32 = AtomicU32::new(0); // swap-to-consume "remove i
 // What the compare ghost is doing, for the JS picker: 0 = none, 1 = racing,
 // 2 = rejected (see compare_racable).
 static COMPARE_STATE: AtomicU32 = AtomicU32::new(0);
+// Bumped every time a frame RESOLVES a pending compare (adopted or
+// rejected). COMPARE_STATE alone can't be watched for a verdict: replacing
+// one racing ghost with another leaves it at 1, and a frame may not run for
+// a while (rAF throttled, webview backgrounded), so "unchanged" is
+// ambiguous between "not adopted yet" and "same answer as last time". The
+// seq is unambiguous — JS samples it before a pick and waits for it to move.
+static COMPARE_SEQ: AtomicU32 = AtomicU32::new(0);
 
 #[unsafe(no_mangle)]
 pub extern "C" fn load_compare_blob(len: u32) -> i32 {
@@ -735,6 +742,12 @@ pub extern "C" fn clear_compare() {
 #[unsafe(no_mangle)]
 pub extern "C" fn compare_state() -> i32 {
     COMPARE_STATE.load(Ordering::Relaxed) as i32
+}
+
+/// Generation of the last resolved compare pick (see COMPARE_SEQ).
+#[unsafe(no_mangle)]
+pub extern "C" fn compare_seq() -> u32 {
+    COMPARE_SEQ.load(Ordering::Relaxed)
 }
 
 /// Can `cmp` be raced against the run being watched? Only when both flew
@@ -1396,6 +1409,9 @@ async fn main() {
                 .then(|| ResimPlayer::new(&c))
                 .flatten();
             COMPARE_STATE.store(if player.is_some() { 1 } else { 2 }, Ordering::Relaxed);
+            // State first, then the seq — JS reads the verdict only after
+            // seeing the seq move, so it can never sample a stale state.
+            COMPARE_SEQ.fetch_add(1, Ordering::Relaxed);
             cmp_rec = player.is_some().then_some(c);
             cmp_player = player;
         }
@@ -3671,7 +3687,20 @@ async fn main() {
             {
                 // Distance IS the score (and on a goal trial it is progress
                 // toward the finish pad), so the metre gap is the race.
-                let d = world_sim.max_dist - c.sim.max_dist;
+                //
+                // CURRENT |x|, deliberately not max_dist: `Sim::restore`
+                // reseeds max_dist from the keyframe's |x|, and every
+                // backward seek rebuilds a sim from a keyframe — so a run
+                // that peaked at 600 m and flew back to a 300 m pad has its
+                // max_dist collapse to ~300 the moment you scrub back, which
+                // could flip this line's sign and colour. Both sides lose it,
+                // independently, so the gap was wrong in a way neither
+                // player's own HUD reveals. Current |x| is exact at every
+                // tick, needs no sim-core change (max_dist feeds scoring and
+                // the backend's verification — not a field to quietly
+                // re-mean), and "who is further along right now" is what a
+                // head-to-head at one instant actually asks.
+                let d = world_sim.ship_pose().0.abs() - c.sim.ship_pose().0.abs();
                 (
                     format!("{}{:.0} m", if d >= 0.0 { "+" } else { "-" }, d.abs()),
                     if d >= 0.0 {

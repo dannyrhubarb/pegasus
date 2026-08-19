@@ -1491,9 +1491,18 @@ magenta ghost, so two runs can be compared directly (issue: "add the ghost
 of another high score replay"). It is the racing ghost's machinery clocked
 off the **replay's** tick instead of live play:
 - **Bridge**: `load_compare_blob` / `set_compare_name` / `clear_compare` /
-  `compare_state() -> i32` (0 none / 1 racing / **2 rejected**), all through
-  the same `blob_in_ptr` buffer as the racing ghost. The main loop adopts
-  `PENDING_COMPARE` at the next frame boundary into `cmp_rec` / `cmp_player`.
+  `compare_state() -> i32` (0 none / 1 racing / **2 rejected**) /
+  `compare_seq() -> u32`, all through the same `blob_in_ptr` buffer as the
+  racing ghost. The main loop adopts `PENDING_COMPARE` at the next frame
+  boundary into `cmp_rec` / `cmp_player`.
+  **`compare_seq` is what JS waits on, never a timer**: the verdict only
+  exists once a FRAME adopts the recording, and no frame is guaranteed
+  inside any given window (rAF throttled, webview backgrounded) — while
+  `compare_state` alone is ambiguous anyway, since replacing one racing
+  ghost with another leaves it at 1. The seq is bumped after the state on
+  every resolution, so a JS reader that samples it before the pick and waits
+  for it to move can never read a stale verdict. (A one-shot 150 ms sample
+  here left the VS button lit for a ghost the game had rejected.)
 - **Same world or nothing** (`compare_racable`, unit-tested): the peer is
   whatever the replay is playing (`watch_rec`, else the live `recorder` — so
   the board can also be raced against your own crash-dialog replay), and the
@@ -1517,6 +1526,14 @@ off the **replay's** tick instead of live play:
 - **HUD**: a `VS <PILOT>  ±N m` gap line under the readout column (green =
   the watched run leads, red = it trails; pad counts instead on
   pad-visiting Time levels; "run ended" once the ghost's own run is over).
+  The gap is **current |x|, deliberately NOT `max_dist`**: `Sim::restore`
+  reseeds `max_dist` from the keyframe's |x| and every backward seek rebuilds
+  a sim from a keyframe, so a run that peaked at 600 m and flew back to a
+  300 m pad has its `max_dist` collapse to ~300 on a scrub back — enough to
+  flip this line's sign and colour. Both sides lose it independently, so the
+  error is invisible in either run's own HUD. Current |x| is exact at every
+  tick and needs no sim-core change (`max_dist` feeds scoring AND the
+  backend's score verification — not a field to quietly re-mean).
   This is load-bearing, not decoration — the camera follows the watched run,
   so the moment the two separate the other ship is gone from the screen and
   the line (plus the magenta minimap dot, which holds much longer) is the
@@ -1526,8 +1543,18 @@ off the **replay's** tick instead of live play:
   transport centred) opening `#rp-ghost-menu`. Candidates are the **cached
   board the replay was launched from** (`armCompare`, called at both replay
   entry points) minus the run being watched — so opening the picker costs
-  no fetch; the blob is pulled only on pick, like ▶ watch. The button hides
-  when there is nothing to race.
+  no fetch; the blob is pulled only on pick, like ▶ watch (both go through
+  the shared `fetchReplayBlob` / `pushReplayBlob` pair, so a change to blob
+  fetching lands once). A pick captures a `comparePickSeq` and drops its own
+  response if superseded — otherwise a slow fetch for run A lands after you
+  picked B (or "No ghost") and resurrects A. The button hides when there is
+  nothing to race.
+  **`armCompare` also runs from the replay-bar poll** on the transition into
+  state 3 when nothing armed it (`compareArmed`): the in-canvas **Enter**
+  crash-dialog replay enters `Mode::Replay` with no JS involved, and without
+  this the picker still held the previous board — offering another level's
+  runs, every pick bouncing off the level check, and the note blaming "fresh
+  rock every attempt" on a fixed-seed level.
   **The picker IS a score board**: `#rp-ghost-list` carries `.rowlist` and
   shares the `.rank`/`.pcol`/`.pname`/`.pdate`/`.dist` selectors with
   `#scores-list` (the selectors name both lists — extend them, don't fork a
@@ -1536,6 +1563,15 @@ off the **replay's** tick instead of live play:
   panel border, the VS button's active state and the selected row — the
   colour that run is flying in on the canvas. Pilot names go in via
   `textContent`, never `innerHTML`.
+  **Rows bind `click`, NOT `onTap`** — `onTap` fires on `touchstart` and
+  `preventDefault`s it, which suits the corner buttons and the five fixed
+  speed options but silently breaks a SCROLLING list: the preventDefault
+  kills the scroll gesture outright (the panel could not be scrolled at all
+  on a phone) and the drag picks whatever row sits under the finger, so
+  every entry below the fold is unreachable. Covered by
+  `tests/touch-e2e/picker.mjs` (in CI alongside `run.mjs`), which drives a
+  real synthesized touch drag — same "drive touch, don't reason about it"
+  rule as `docs/touch-input.md`.
   **Picking closes the panel** (owner call — the point of picking is to see
   the two ships), and it reopens *only* on failure via `showGhostNote`,
   since a message about a rejected pick has nowhere else to live during a

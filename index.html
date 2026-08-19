@@ -2030,6 +2030,29 @@
     let compareCandidates = [];   // board entries with a replay, minus the watched one
     let compareActivePath = null; // the run currently racing (null = none)
     let compareLevelFile = null;  // whose board the candidates came from
+    let comparePickSeq = 0;       // drops responses from superseded picks
+    let comparePendingSeq = 0;    // compare_seq() sampled before the pending pick
+    let comparePendingHave = false; // a pick is awaiting the game's verdict
+    let compareArmed = false;     // armCompare ran for the replay now playing
+
+    // Fetch a stored replay blob from the CDN. Shared by ▶ watch and the VS
+    // picker so a future change to blob fetching (auth header, retry,
+    // caching) lands in one place instead of two.
+    function fetchReplayBlob(path) {
+      return fetch(backendCfg.replayBaseUrl + "/" + path)
+        .then(r => {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.arrayBuffer();
+        })
+        .then(buf => new Uint8Array(buf));
+    }
+    // Hand a fetched blob to the game. Separate from the fetch so a caller
+    // can drop a stale response BEFORE it reaches the wasm.
+    function pushReplayBlob(bytes, exportName) {
+      if (!pushBytesToWasm(bytes, exportName)) {
+        throw new Error("replay rejected by the game (build mismatch?)");
+      }
+    }
 
     // Remember what could be raced against the replay that is about to
     // start. Called at both replay entry points (a board's ▶ and the
@@ -2047,6 +2070,7 @@
         .map((s, i) => ({ rank: i + 1, name: s.name, score: s.score,
                           ts: s.ts, replayPath: s.replayPath }))
         .filter(s => s.replayPath && s.replayPath !== watchedPath);
+      compareArmed = true;
       rpGhostBtn.classList.remove("on");
     }
 
@@ -2080,7 +2104,14 @@
         sc.className = "dist";
         sc.textContent = score;
         el.append(rk, col, sc);
-        onTap(el, () => pickCompare(path, name));
+        // CLICK, not onTap: onTap fires on touchstart and preventDefault()s
+        // it, which is fine for the five fixed speed options but wrong for a
+        // scrollable board — the first drag to scroll would instantly pick
+        // whatever row sat under the finger (firing a CDN fetch and loading
+        // that ghost), and rows below the fold would be unreachable. A click
+        // doesn't fire after a scroll gesture, which is exactly the
+        // semantics the score board's own rows use.
+        el.addEventListener("click", () => pickCompare(path, name));
         rpGhostList.appendChild(el);
       };
       row("", "No ghost", "", "", null, "none");
@@ -2097,6 +2128,10 @@
       // pick FAILS, since the explanation has nowhere else to live.
       rpGhostMenu.classList.remove("open");
       if (!path) { // "No ghost" — take the second ship back off
+        // Bumping the seq here is what stops an in-flight pick from
+        // resurrecting a ghost after it was explicitly removed.
+        comparePickSeq++;
+        comparePendingHave = false;
         call("clear_compare");
         compareActivePath = null;
         rpGhostBtn.classList.remove("on");
@@ -2104,25 +2139,29 @@
         return;
       }
       if (!backendCfg) return;
-      fetch(backendCfg.replayBaseUrl + "/" + path)
-        .then(r => {
-          if (!r.ok) throw new Error("HTTP " + r.status);
-          return r.arrayBuffer();
-        })
-        .then(buf => {
-          if (!pushBytesToWasm(new Uint8Array(buf), "load_compare_blob")) {
-            throw new Error("replay rejected by the game (build mismatch?)");
-          }
+      // Stale-pick guard: tap A (slow fetch), then "No ghost" or B — A's
+      // response must not push its blob and relight the button over the
+      // choice made after it. Same sequence-counter pattern the board
+      // fetches use (globalFetchSeq).
+      const seq = ++comparePickSeq;
+      fetchReplayBlob(path)
+        .then(bytes => {
+          if (seq !== comparePickSeq) return; // superseded while in flight
+          pushReplayBlob(bytes, "load_compare_blob");
           pushTextToWasm(name, "set_compare_name");
           compareActivePath = path;
           rpGhostBtn.classList.add("on");
           renderGhostMenu();
-          // The game adopts it at its next frame and reports back what it
+          // The game adopts it on its next FRAME and reports back what it
           // did — a run from a different world can't be raced against this
           // one, and saying so beats a button that silently does nothing.
-          setTimeout(checkCompareState, 150);
+          // Watched via the replay-bar poll, not a one-shot timer (see
+          // comparePendingSeq).
+          comparePendingSeq = compareSeqNow();
+          comparePendingHave = true;
         })
         .catch(e => {
+          if (seq !== comparePickSeq) return;
           console.warn("compare replay failed:", e);
           showGhostNote("Couldn't load that run — " + e.message);
         });
@@ -2139,7 +2178,19 @@
       rpHideAt = Date.now() + RP_HIDE_MS;
     }
 
-    function checkCompareState() {
+    function compareSeqNow() {
+      return (typeof wasm_exports !== "undefined" && wasm_exports.compare_seq)
+        ? wasm_exports.compare_seq() : 0;
+    }
+
+    // The game's verdict on the pending pick. Called from the replay-bar
+    // poll once compare_seq() moves — waiting on the SEQ rather than sampling
+    // compare_state() once after 150 ms, because the verdict only exists
+    // after a game frame adopts the recording, and no frame is guaranteed to
+    // run in any given window (rAF throttling, a backgrounded webview). A
+    // one-shot sample there left the button lit for a ghost the game had
+    // rejected.
+    function applyCompareVerdict() {
       const st = (typeof wasm_exports !== "undefined" && wasm_exports.compare_state)
         ? wasm_exports.compare_state() : 0;
       if (st === 2) {
@@ -2209,6 +2260,14 @@
     setInterval(() => {
       if (typeof wasm_exports === "undefined" || !wasm_exports.replay_pos) return;
       const inReplay = wasm_exports.ui_state() === 3;
+      // The game's verdict on a pending compare pick lands whenever a frame
+      // next runs, which may be several polls away — watch the seq here
+      // rather than sampling the state once after a fixed delay. Checked
+      // ahead of the `on` gate so a menu covering the replay can't stall it.
+      if (comparePendingHave && compareSeqNow() !== comparePendingSeq) {
+        comparePendingHave = false;
+        applyCompareVerdict();
+      }
       // During a replay the pause/restart corner buttons swap for ✕.
       pauseBtn.style.display = inReplay ? "none" : "";
       restartBtn.style.display = inReplay ? "none" : "";
@@ -2220,9 +2279,14 @@
         rpGhostMenu.classList.remove("open");
         // Only once the game has truly LEFT the replay (not merely while a
         // screen covers it) does its compare ghost go away with it.
-        if (!inReplay && compareActivePath) {
-          compareActivePath = null;
-          rpGhostBtn.classList.remove("on");
+        if (!inReplay) {
+          if (compareActivePath) {
+            compareActivePath = null;
+            rpGhostBtn.classList.remove("on");
+          }
+          // The candidates belong to the replay that just ended.
+          compareArmed = false;
+          comparePendingHave = false;
         }
         rpWasOn = false;
         return;
@@ -2237,6 +2301,14 @@
         rpWasOn = true;
         rpWasPaused = false;
         rpShowUi(true);
+        // A replay can start WITHOUT any JS entry point: the in-canvas
+        // keyboard fallback (Enter at the crash dialog, src/main.rs) enters
+        // Mode::Replay directly. Without this the picker would still hold
+        // the last board it was armed with — offering another level's runs,
+        // every pick bouncing off the game's level check, and the note
+        // blaming "fresh rock every attempt" on a fixed-seed level. Arm from
+        // the level actually loaded whenever nothing armed us.
+        if (!compareArmed) armCompare(currentLevelFile, null);
       }
       // Auto-hide clock. Pausing SURFACES the GUI on the transition only
       // (so the freeze-frame ending and a space-bar pause bring it up),
@@ -3268,15 +3340,9 @@
     function watchGlobalReplay(path) {
       setLoading(true);
       scoresStatus.style.display = "none";
-      fetch(backendCfg.replayBaseUrl + "/" + path)
-        .then(r => {
-          if (!r.ok) throw new Error("HTTP " + r.status);
-          return r.arrayBuffer();
-        })
-        .then(buf => {
-          if (!pushBytesToWasm(new Uint8Array(buf), "watch_replay_blob")) {
-            throw new Error("replay rejected by the game (build mismatch?)");
-          }
+      fetchReplayBlob(path)
+        .then(bytes => {
+          pushReplayBlob(bytes, "watch_replay_blob");
           setLoading(false);
           pegAnalytics.replayWatch("scores");
           // Arm the VS picker with the rest of this board (this run itself
