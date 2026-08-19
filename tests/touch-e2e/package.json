@@ -4,7 +4,7 @@
   "type": "module",
   "description": "Headless regression test for the in-canvas touch stick (see docs/touch-input.md)",
   "scripts": {
-    "test": "node run.mjs"
+    "test": "node run.mjs && node picker.mjs"
   },
   "devDependencies": {
     "playwright": "^1.56.0"
