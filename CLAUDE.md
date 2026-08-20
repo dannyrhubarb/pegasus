@@ -469,9 +469,13 @@ Two inputs, merged:
 - **`Whats-new:` commit trailers — THE RULE: every commit that changes
   something a player can see or feel MUST carry a `Whats-new: <short
   player-language summary>` trailer in its commit-message trailer block.**
-  One line, written for players ("Replay controls auto-hide like a video
-  player"), not commit-ese; skip it for internal refactors, CI, docs,
-  test-only changes. When curating a branch before merge, keep the
+  One line, written for players, not commit-ese; skip it for internal
+  refactors, CI, docs, test-only changes. **The note starts with a type
+  prefix — `New:` (features, content, changes), `Fixed:` (bugs), or
+  `Dropped:` (removals)** — e.g. "New: Replay controls auto-hide like a
+  video player" (owner convention 2026-08; every pre-existing entry was
+  reworded to it via the backfill + overrides files, so the whole page
+  reads uniformly). When curating a branch before merge, keep the
   trailers on the commits that survive. **Gotcha (hit on the very first
   trailer)**: git parses only the LAST paragraph of a message as the
   trailer block — `Whats-new:` must sit in the same block as the
@@ -485,11 +489,15 @@ Two inputs, merged:
   get a trailer.
 
 Plus one editing hook: `tools/whats-new-overrides.json` (2026-08) maps
-**full merged-commit sha → replacement note** — the only way to reword an
-entry after its commit landed on `main` (a rebase-merged trailer is frozen
-history; first used to retroactively credit a player's suggestions). Only
+**full merged-commit sha → replacement note, or `null` to DROP the entry**
+— the only way to reword or remove an entry after its commit landed on
+`main` (a rebase-merged trailer is frozen history; first used to
+retroactively credit a player's suggestions, then to fold superseded
+entries into their successors — e.g. the two picker-icon entries, the two
+launch-shift fixes). Only
 the note is replaced — rev/date still come from git — an unknown sha is
-silently ignored (it can't invent entries), and entries match by prefix so
+silently ignored (it can't invent or delete entries), and entries match by
+prefix so
 git's growing abbreviation length can't unhook one. Reword future entries
 here rather than rewriting history; entries not yet merged just get their
 trailer amended.

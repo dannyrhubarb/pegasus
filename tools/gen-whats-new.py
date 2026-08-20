@@ -20,7 +20,10 @@ full-sha -> replacement note. A rebase-merged commit's trailer is frozen
 history, so this is the only way to reword an entry after the fact
 (e.g. crediting a bug reporter later). Only the note is replaced — rev
 and date still come from git — and an override whose sha isn't in
-history is silently ignored, so a stale entry can't invent one.
+history is silently ignored, so a stale entry can't invent one. A null
+value DROPS the entry entirely — for a merged trailer that turned out
+redundant (e.g. a follow-up commit's entry superseding it); the same
+unknown-sha safety applies, so a stale null can't delete anything.
 
 Runs at deploy time in the build-site action, which is why the deploy
 workflows check out with fetch-depth: 0 — a shallow clone silently loses
@@ -79,14 +82,15 @@ def sort_key(entry):
 
 def main():
     entries = trailer_entries()
-    # Retroactive note edits (full sha -> replacement text). Entries carry
-    # git's abbreviated rev, so match by prefix — immune to the abbreviation
-    # length growing with the repo.
+    # Retroactive note edits (full sha -> replacement text, or null to drop
+    # the entry). Entries carry git's abbreviated rev, so match by prefix —
+    # immune to the abbreviation length growing with the repo.
     overrides = json.loads(OVERRIDES.read_text(encoding="utf-8"))
     for e in entries:
         for sha, note in overrides.items():
             if sha.startswith(e["rev"]):
                 e["note"] = note
+    entries = [e for e in entries if e["note"]]
     seen = {e["rev"] for e in entries}
     for e in json.loads(BACKFILL.read_text(encoding="utf-8")):
         if e["rev"] not in seen:
