@@ -66,6 +66,7 @@ push-retry loop for concurrent deploys):
 - `src/ship_mesh.rs` — `SHIP_TRIS` / `SHIP_DETAILS` data tables extracted from the Flash SWF
 - `src/audio.rs` — in-memory WAV synthesis (`wav_from_samples`, `thruster_wav`, `boom_wav`)
 - `levels/` — **runtime level data**: `*.level` files (`key = value`) + `manifest.json` (menu order), fetched by `index.html` and pushed into the wasm — new levels deploy with no recompile (see "Levels")
+- `fonts/` — the **vendored menu webfont**: `jetbrains-mono.woff2` (latin variable, wght 400–800) + its `OFL.txt`, loaded via `@font-face` by `index.html`/`editor.html` so every platform renders the same face (see the menu-font note under "Game menu"); in all three bundle copy lists
 - `editor.html` — the **standalone level editor** (issue #89 v1, 2026-07): draws hand-drawn `.level` worlds — the same `poly`/`pad`/`start` representation The Hollows uses — on a pan/zoom canvas. Self-contained like `index.html` (no CDNs), copied by `build-site`. **Deliberately UNLINKED from the game UI** (owner decision pre-merge): it lives at its own path with no menu button and no picker row; the game only meets it through the `?custom=1` test-fly handoff. **While it stays unlinked, editor commits carry NO `Whats-new:` trailers** (the changelog must not advertise an unannounced feature — the PR #110 branch had its trailers stripped before merge; give the editor one proper entry when it's linked up for real). See "Level editor & custom drafts" under "Levels"
 - `tools/gen-third-party-licenses.py` + `third-party-licenses.html` — the generated third-party attribution page served with the site and linked from the About screen; regenerate when `Cargo.lock` changes (see "License")
 - `privacy.html` — standalone privacy policy served with the site (and bundled into both apps), written for the Play Store listing's required privacy-policy URL; same substance as the About screen's `#privacy-note` — keep the two in agreement when the analytics story changes
@@ -179,8 +180,9 @@ styled as a **neon vector arcade**: dark CRT base, a drifting perspective
 grid (the `.grid` div, first child of `#menu`), a scanline+vignette+sweep
 overlay (`.crt`, always the
 last child of `#menu`, `pointer-events:none` so it never eats a tap), chunky
-monospace lettering with layered `text-shadow` glow (no webfonts/CDNs — the
-repo stays self-contained), and **custom neon toggle switches — no native
+monospace lettering with layered `text-shadow` glow (the one webfont is
+**vendored in `fonts/`** — no CDNs at runtime, the repo stays
+self-contained), and **custom neon toggle switches — no native
 form elements**. Palette in `:root` (`--cyan`/`--magenta`/`--amber`/
 `--green`). Respects `prefers-reduced-motion`.
 **Menu animations must be compositor-only — animate `transform`/`opacity`,
@@ -202,12 +204,23 @@ match the blurred look, and the drop-shadow moved onto the static hull
 group (`.ship-hero .hull`, a CSS `filter: url(#sh-glow) drop-shadow(…)`
 chain — the CSS property overrides the group's SVG `filter` attribute, so
 the chain must repeat the url).
-**Font stack gotcha (the "wrong fonts on Android" report, 2026-08)**:
-`--mono` must not contain `"Courier New"` — Android aliases it to its
-slab-serif typewriter face (Cutive Mono), which is what every menu label
-rendered in on Android (iOS resolves `ui-monospace` → SF Mono and never
-reaches it). The stack now falls through to `"Roboto Mono", "Droid Sans
-Mono", monospace` on Android; `editor.html`'s stack matches. One `.screen` is visible at a
+**Menu font — bundled JetBrains Mono (2026-08)**: `fonts/jetbrains-mono.woff2`
+(latin-subset VARIABLE font, wght 400–800, ~31 KB — one file covers every
+weight the menu uses) leads `--mono` via `@font-face` (+ a `<head>` preload
+with `crossorigin`, required on font preloads even same-origin), so every
+platform renders the same face; `editor.html` declares the same face and
+leads its stacks (incl. the canvas `ctx.font` strings) with it. Grew out of
+the "wrong fonts on Android" report (2026-08): the stack used to end in
+`"Courier New"`, which Android aliases to its slab-serif typewriter face
+(Cutive Mono) — that stays OUT of the fallbacks for that reason. SIL OFL 1.1:
+license text in `fonts/OFL.txt` (shipped with the site), attribution entry
++ full text on the generated third-party licenses page (the generator reads
+`fonts/OFL.txt`) — fine to sell/bundle commercially, only selling the font
+file BY ITSELF is disallowed. The `fonts/` dir is in all three copy lists
+(build-site + both sync-web.sh, pinned by check-bundle-sync.py) and both
+app shells map `.woff2` → `font/woff2` (Android's handler otherwise answers
+`text/plain` for unknown extensions). Non-latin glyphs (foreign pilot
+names) fall through to the platform monos per character — by design. One `.screen` is visible at a
 time; the page **boots with the main menu open** (markup, not JS, so it shows
 while the wasm loads):
 - **scr-announce** (DORMANT — kept for future messages): a load-time
@@ -1933,9 +1946,11 @@ that includes it, since they hold copyright on that asset too.
 **Third-party attribution**: `third-party-licenses.html` (repo root, linked
 from the menu's About screen, copied into the site by `build-site` along
 with `LICENSE`) lists every crate compiled into the wasm plus the vendored
-miniquad JS loader, with real copyright notices extracted from the cargo
+miniquad JS loader and the vendored JetBrains Mono webfont (OFL-1.1, its
+text read from `fonts/OFL.txt` — see the menu-font note under "Game menu"),
+with real copyright notices extracted from the cargo
 registry sources and one copy of each elected license text (MIT / Apache-2.0
-/ Zlib / Unicode-3.0 as of 2026-07). It is **generated, not hand-edited**:
+/ Zlib / Unicode-3.0 as of 2026-07, + OFL-1.1 since 2026-08). It is **generated, not hand-edited**:
 re-run `python3 tools/gen-third-party-licenses.py` (after a `cargo build`,
 which populates the registry cache) whenever `Cargo.lock` changes, and
 commit the refreshed page.

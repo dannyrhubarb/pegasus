@@ -230,6 +230,7 @@ class MainActivity : Activity() {
             "svg" -> "image/svg+xml"
             "ico" -> "image/x-icon"
             "css" -> "text/css"
+            "woff2" -> "font/woff2"
             // .level files, LICENSE (no extension) and anything else texty.
             else -> "text/plain"
         }

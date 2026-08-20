@@ -58,6 +58,7 @@ final class WebRootSchemeHandler: NSObject, WKURLSchemeHandler {
         case "svg": return "image/svg+xml"
         case "ico": return "image/x-icon"
         case "css": return "text/css; charset=utf-8"
+        case "woff2": return "font/woff2"
         // .level files, LICENSE (no extension) and anything else texty.
         case "level", "txt", "": return "text/plain; charset=utf-8"
         default: return "application/octet-stream"
