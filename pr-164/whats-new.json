@@ -1,5 +1,10 @@
 [
  {
+  "rev": "20a8325",
+  "date": "2026-08-20T21:28:58Z",
+  "note": "The menu now shows the same crisp font on every platform"
+ },
+ {
   "rev": "eb87664",
   "date": "2026-08-20T14:18:15Z",
   "note": "The menu no longer lags on slower Android phones"
