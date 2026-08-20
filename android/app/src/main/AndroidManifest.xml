@@ -5,11 +5,17 @@
          fully bundled and runs offline. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- enableOnBackInvokedCallback=false: targeting API 36 turns predictive
+         back ON by default, which stops delivering onBackPressed() — and
+         MainActivity's onBackPressed IS the back button here (system back =
+         one screen back in the game's history stack). Opting out keeps the
+         legacy callback until we migrate to OnBackInvokedDispatcher. -->
     <application
         android:label="${appLabel}"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="true"
         android:hardwareAccelerated="true"
+        android:enableOnBackInvokedCallback="false"
         android:theme="@style/AppTheme">
         <!-- configChanges keeps the activity (and the WebView with the live
              game state) alive across rotation — a recreate would reload the
