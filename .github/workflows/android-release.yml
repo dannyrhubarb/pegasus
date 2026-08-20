@@ -157,5 +157,9 @@ jobs:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: se.danielfalk.pegasus
           releaseFiles: android/app/build/outputs/bundle/release/app-release.aab
-          track: internal
+          # TEMPORARY while the closed test runs (2026-08): feed the alpha
+          # track directly so every merge reaches the 12 testers during the
+          # 14-day window. Switch back to `internal` once production access
+          # is granted.
+          track: alpha
           status: completed
