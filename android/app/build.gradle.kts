@@ -5,12 +5,14 @@ plugins {
 
 android {
     namespace = "se.danielfalk.pegasus"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "se.danielfalk.pegasus"
         minSdk = 26
-        targetSdk = 35
+        // Google Play requires targeting within 1 year of the latest Android
+        // release (Android 16 / API 36 from 2026-08-31) or updates are blocked.
+        targetSdk = 36
         // CI passes the workflow run number so every Play upload is a new,
         // monotonically increasing versionCode; local builds default to 1.
         versionCode = (System.getenv("PEGASUS_VERSION_CODE") ?: "1").toInt()

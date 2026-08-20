@@ -1797,7 +1797,16 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   edge-to-edge call must come after. The `PegasusApp` JS interface is the
   Android half of the keep-awake bridge (see "iOS app") and also answers
   `appBuild()` (versionName + versionCode) for the About screen's App
-  build row.
+  build row. **targetSdk/compileSdk = 36** (2026-08, Play requires
+  targeting within 1 year of the latest Android release or updates are
+  blocked — expect this bump roughly yearly; compileSdk 36 also forced
+  AGP ≥ 8.9.1, now 8.13.2). **Gotcha**: targeting 36 enables predictive
+  back by default, which stops delivering `onBackPressed()` — the whole
+  back-button story here — so the manifest opts out via
+  `android:enableOnBackInvokedCallback="false"`; a future Android release
+  will drop that opt-out, at which point MainActivity must migrate to
+  `OnBackInvokedDispatcher` (registered only while the WebView can go
+  back, so the leave-the-app gesture keeps its predictive animation).
 - **CI**: `android-build.yml` (PRs touching `android/` — debug APK built
   on ubuntu + attached as an installable artifact, no secrets) and
   `android-release.yml` (manual dispatch + **every `main` push that could
