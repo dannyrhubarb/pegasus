@@ -65,6 +65,9 @@ runs:
         # Levels are runtime data (fetched by index.html) — new levels ship
         # by editing levels/ + manifest.json, no wasm rebuild needed.
         cp -r levels site/
+        # Vendored menu font (JetBrains Mono woff2 + its OFL license text),
+        # referenced by index.html/editor.html @font-face.
+        cp -r fonts site/
         # Shrink the wasm (~30% on top of the size-tuned release profile).
         wasm-opt -Oz -o site/pegasus.wasm target/wasm32-unknown-unknown/release/pegasus.wasm
         # Inject the build's git revision and timestamp into the info overlay.

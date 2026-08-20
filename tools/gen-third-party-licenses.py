@@ -7,9 +7,11 @@ registry sources are on disk):
     python3 tools/gen-third-party-licenses.py
 
 The page lists every crate resolved for the wasm32-unknown-unknown target
-(the shipped binary) plus the vendored miniquad JS loader, groups them by
-elected license, extracts each crate's real copyright notices from its
-packaged license files, and appends one copy of each license's full text.
+(the shipped binary) plus the vendored miniquad JS loader and the vendored
+JetBrains Mono webfont, groups them by elected license, extracts each
+crate's real copyright notices from its packaged license files, and appends
+one copy of each license's full text (the font's OFL text is read from
+fonts/OFL.txt, the license file shipped alongside the font).
 """
 
 import html
@@ -223,6 +225,12 @@ def build_page(entries, texts):
              "<a href='https://github.com/not-fl3/miniquad'>not-fl3/miniquad</a>) "
              "<span class='lic'>MIT</span>"
              "<div class='cc'>© 2019-2020 Fedor Logachev &lt;not.fl3@gmail.com&gt;</div></div>",
+             "<h2>FONT</h2>",
+             "<div class='crate'><b>JetBrains Mono</b> (fonts/jetbrains-mono.woff2, vendored from "
+             "<a href='https://github.com/JetBrains/JetBrainsMono'>JetBrains/JetBrainsMono</a>) "
+             "<span class='lic'>OFL-1.1</span>"
+             "<div class='cc'>Copyright 2020 The JetBrains Mono Project Authors "
+             "(https://github.com/JetBrains/JetBrainsMono)</div></div>",
              "<h2>RUST CRATES (compiled into pegasus.wasm)</h2>"]
     for name, ver, spdx, elected, ccs in entries:
         parts.append(f"<div class='crate'><b>{e(name)}</b> {e(ver)} "
@@ -255,8 +263,12 @@ def main():
         needed.update(elected)
         ccs = copyright_lines(Path(pkg["manifest_path"]).parent, elected)
         entries.append((name, ver, spdx, elected, ccs))
-    texts = {}
+    # The vendored font's license text ships with the font itself.
+    needed.add("OFL-1.1")
+    texts = {"OFL-1.1": (ROOT / "fonts/OFL.txt").read_text().strip()}
     for lic in needed:
+        if lic in texts:
+            continue
         if lic == "Apache-2.0":
             texts[lic] = apache_text(index, deps)
         elif lic in FULL_TEXTS and FULL_TEXTS[lic]:

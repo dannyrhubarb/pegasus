@@ -11,6 +11,10 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Pegasus">
   <link rel="apple-touch-icon" href="./icon-180.png">
+  <!-- Bundled menu font (see the @font-face below). Preloaded because the
+       menu is the first paint; crossorigin is required on font preloads
+       even same-origin or the browser fetches it twice. -->
+  <link rel="preload" href="./fonts/jetbrains-mono.woff2" as="font" type="font/woff2" crossorigin>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { overflow: hidden; background: #05060f; }
@@ -23,9 +27,24 @@
 
     /* ---------------------------------------------------------------------
        Retro vector-arcade look: neon glow on a dark CRT, chunky monospace
-       lettering, scanlines. All self-contained (no external fonts/CDNs —
-       glow comes from layered text-shadow, not a webfont).
+       lettering, scanlines. Self-contained: the one webfont is VENDORED in
+       the repo (fonts/, served same-origin and bundled into both app
+       shells) — still no CDNs at runtime.
        --------------------------------------------------------------------- */
+    /* JetBrains Mono (SIL OFL 1.1 — attribution on the third-party licenses
+       page, license text in fonts/OFL.txt): one latin-subset VARIABLE file
+       covers every weight the menu uses (400/700/800), ~31 KB. Bundled so
+       all platforms render the same face — before this, each platform
+       resolved the stack differently (iOS SF Mono, Android Droid Sans Mono,
+       and before PR #164 Android's slab-serif Courier New alias). The stack
+       below stays as fallback for load failure / non-latin glyphs. */
+    @font-face {
+      font-family: "JetBrains Mono";
+      font-style: normal;
+      font-weight: 400 800;
+      font-display: swap;
+      src: url("./fonts/jetbrains-mono.woff2") format("woff2");
+    }
     :root {
       --text: #cfe7ff;
       --dim: #7fb4dd;
@@ -36,10 +55,11 @@
       --green: #46ff9c;
       --red: #ff5a3c;
       --panel: rgba(12, 22, 44, 0.55);
-      /* No "Courier New": Android aliases it to its slab-serif typewriter
-         face (Cutive Mono), which broke the arcade look in the app shell —
-         fall through to the platform's real sans monospace instead. */
-      --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Roboto Mono", "Droid Sans Mono", monospace;
+      /* Bundled JetBrains Mono first (identical on every device), then the
+         platform monos as fallback. No "Courier New" in the fallbacks:
+         Android aliases it to its slab-serif typewriter face (Cutive Mono),
+         which broke the arcade look in the app shell. */
+      --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, "Roboto Mono", "Droid Sans Mono", monospace;
       --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       /* Safe-area insets, ONE source of truth: every consumer below reads
          --inset-*, never env() directly. env() alone is 0 at the iOS app

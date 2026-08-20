@@ -19,6 +19,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <title>Pegasus — Level editor</title>
 <style>
+  /* The game's bundled menu font (fonts/, variable 400-800) — same face as
+     index.html so the editor matches; the stack below is the fallback. */
+  @font-face {
+    font-family: "JetBrains Mono";
+    font-style: normal;
+    font-weight: 400 800;
+    font-display: swap;
+    src: url("./fonts/jetbrains-mono.woff2") format("woff2");
+  }
   :root {
     --bg: #06080d;
     --panel: #0b0f17;
@@ -36,7 +45,7 @@
   body {
     background: var(--bg);
     color: var(--fg);
-    font: 13px/1.4 ui-monospace, Menlo, Consolas, "Roboto Mono", "Droid Sans Mono", monospace;
+    font: 13px/1.4 "JetBrains Mono", ui-monospace, Menlo, Consolas, "Roboto Mono", "Droid Sans Mono", monospace;
     display: flex; flex-direction: column;
     padding-top: env(safe-area-inset-top);
   }
@@ -120,7 +129,7 @@
   #mtext {
     flex: 1 1 auto; min-height: 200px; resize: none;
     background: #060a11; color: var(--fg); border: 1px solid var(--line);
-    border-radius: 4px; padding: 8px; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace;
+    border-radius: 4px; padding: 8px; font: 12px/1.5 "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
     white-space: pre; overflow: auto;
   }
   #mlist { flex: 1 1 auto; overflow: auto; min-height: 60px; max-height: 50vh; }
@@ -1638,7 +1647,7 @@ function draw() {
   const x0 = Math.floor(s2wx(0) / step) * step, x1 = s2wx(W);
   const y0 = Math.floor(s2wy(H) / step) * step, y1 = s2wy(0);
   ctx.lineWidth = 1;
-  ctx.font = "10px ui-monospace, monospace";
+  ctx.font = '10px "JetBrains Mono", ui-monospace, monospace';
   for (let x = x0; x <= x1; x += step) {
     const sx = Math.round(w2sx(x)) + 0.5;
     ctx.strokeStyle = Math.abs(x) < 1e-9 ? "rgba(70,240,255,0.35)" : "rgba(60,80,110,0.18)";
@@ -1805,7 +1814,7 @@ function draw() {
       ctx.setLineDash([]);
       const lk = groupLocked(sel.gid) || lockAllOn;
       ctx.fillStyle = lk ? "#ffb545" : "rgba(70,240,255,0.8)";
-      ctx.font = "11px ui-monospace, monospace";
+      ctx.font = '11px "JetBrains Mono", ui-monospace, monospace';
       ctx.fillText(lk ? "\u{1F512} LOCKED GROUP" : "GROUP", x0 + 2, y0 - 6);
     }
   }
@@ -1911,7 +1920,7 @@ function draw() {
       ctx.stroke();
     });
     ctx.fillStyle = color;
-    ctx.font = "11px ui-monospace, monospace";
+    ctx.font = '11px "JetBrains Mono", ui-monospace, monospace';
     ctx.textAlign = "center";
     ctx.fillText(label, x, y + leg + 12);
     ctx.textAlign = "left";
@@ -1967,7 +1976,7 @@ function draw() {
   ctx.moveTo(W - 14 - bw, H - 16); ctx.lineTo(W - 14, H - 16);
   ctx.stroke();
   ctx.fillStyle = "rgba(122,134,153,0.9)";
-  ctx.font = "11px ui-monospace, monospace";
+  ctx.font = '11px "JetBrains Mono", ui-monospace, monospace';
   ctx.textAlign = "right";
   ctx.fillText(bar + " m", W - 14, H - 22);
   ctx.textAlign = "left";
