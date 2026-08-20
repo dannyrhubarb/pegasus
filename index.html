@@ -36,7 +36,10 @@
       --green: #46ff9c;
       --red: #ff5a3c;
       --panel: rgba(12, 22, 44, 0.55);
-      --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Courier New", monospace;
+      /* No "Courier New": Android aliases it to its slab-serif typewriter
+         face (Cutive Mono), which broke the arcade look in the app shell —
+         fall through to the platform's real sans monospace instead. */
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Roboto Mono", "Droid Sans Mono", monospace;
       --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       /* Safe-area insets, ONE source of truth: every consumer below reads
          --inset-*, never env() directly. env() alone is 0 at the iOS app
