@@ -1,10 +1,5 @@
 [
  {
-  "rev": "d6af63a",
-  "date": "2026-08-20T22:25:58Z",
-  "note": "New: What's new entries are labeled by type — New, Fixed or Dropped"
- },
- {
   "rev": "99c5eac",
   "date": "2026-08-20T23:37:55+02:00",
   "note": "New: The menu font now ships with the game — the same crisp face on every platform"
@@ -13,11 +8,6 @@
   "rev": "3ad18c4",
   "date": "2026-08-20T23:37:55+02:00",
   "note": "Fixed: The menu no longer lags on slower Android phones"
- },
- {
-  "rev": "5037add",
-  "date": "2026-08-20T23:37:55+02:00",
-  "note": "Fixed: Menus on Android now use the intended clean monospace font"
  },
  {
   "rev": "e05d4cd",
@@ -45,11 +35,6 @@
   "note": "New: Level picker icons now show each level's type — stopwatch for race-the-clock, hourglass for a time limit, arrows for distance"
  },
  {
-  "rev": "d56e10b",
-  "date": "2026-08-09T20:56:47+02:00",
-  "note": "New: The level picker shows an icon for each level's game mode — stopwatch, hourglass, finish flag, and friends"
- },
- {
   "rev": "292aa21",
   "date": "2026-08-09T20:56:47+02:00",
   "note": "New: The Flux Dash level — race 1,000 m to the gold finish pad through an ever-changing cave; fastest time wins"
@@ -67,12 +52,7 @@
  {
   "rev": "08d3f98",
   "date": "2026-07-29T07:28:08Z",
-  "note": "Fixed: Everything shifting down a moment after launching from the Home Screen"
- },
- {
-  "rev": "976faa9",
-  "date": "2026-07-29T07:02:35Z",
-  "note": "Fixed: Everything shifting down a moment after the app opens"
+  "note": "Fixed: Everything shifting down a moment after launch — in the apps and from the Home Screen"
  },
  {
   "rev": "286b359",
@@ -87,17 +67,12 @@
  {
   "rev": "67d643c",
   "date": "2026-07-22T15:55:09+02:00",
-  "note": "New: The website keeps the screen awake while you fly or watch a replay, like the apps"
+  "note": "New: The screen stays awake while you fly or watch a replay — in the apps and on the website"
  },
  {
   "rev": "5f9a872",
   "date": "2026-07-22T15:55:09+02:00",
   "note": "New: The Android and iOS apps show the status bar (clock, battery) on top of the game"
- },
- {
-  "rev": "47e9a13",
-  "date": "2026-07-22T15:55:09+02:00",
-  "note": "New: The Android and iOS apps keep the screen awake while you fly or watch a replay"
  },
  {
   "rev": "f4b3448",
@@ -193,11 +168,6 @@
   "rev": "9573796",
   "date": "2026-07-13T13:55:12+02:00",
   "note": "See what changed — a What's New page in the About screen"
- },
- {
-  "rev": "b496b8c",
-  "date": "2026-07-13T12:46:15+02:00",
-  "note": "New: Level picker shows the record holder in Fly mode too"
  },
  {
   "rev": "58e4e8d",
