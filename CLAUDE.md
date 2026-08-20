@@ -1799,8 +1799,15 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   `appBuild()` (versionName + versionCode) for the About screen's App
   build row. **targetSdk/compileSdk = 36** (2026-08, Play requires
   targeting within 1 year of the latest Android release or updates are
-  blocked — expect this bump roughly yearly; compileSdk 36 also forced
-  AGP ≥ 8.9.1, now 8.13.2). **Gotcha**: targeting 36 enables predictive
+  blocked — expect this bump roughly yearly). **AGP 9.x** (2026-08, same
+  push): Kotlin is BUILT INTO AGP 9 — `org.jetbrains.kotlin.android` must
+  not be applied any more (it conflicts, so there's no Kotlin version pin
+  left in the repo) and the `kotlinOptions` block is gone (jvmTarget
+  defaults to `compileOptions.targetCompatibility`); the Gradle floor
+  moved to 9.5.0, pinned in all four android workflows
+  (`gradle-version:`) — bump those pins together with AGP, they're the
+  only Gradle version source (no wrapper in-repo). **Gotcha**: targeting
+  36 enables predictive
   back by default, which stops delivering `onBackPressed()` — the whole
   back-button story here — so the manifest opts out via
   `android:enableOnBackInvokedCallback="false"`; a future Android release

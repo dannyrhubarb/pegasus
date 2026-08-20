@@ -1,6 +1,6 @@
 plugins {
+    // Kotlin is built into AGP 9 — no org.jetbrains.kotlin.android here.
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
 }
 
 android {
@@ -65,9 +65,8 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+    // No kotlinOptions block: under built-in Kotlin, jvmTarget defaults to
+    // compileOptions.targetCompatibility (17 above).
 }
 
 dependencies {
