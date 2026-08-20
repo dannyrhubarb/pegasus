@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__add_repo"
     ]
   }
 }
