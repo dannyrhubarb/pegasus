@@ -176,12 +176,38 @@ so a held reset button fires exactly once.
 The whole out-of-flight UI is one fullscreen HTML overlay (`#menu` in
 `index.html` — HTML/CSS, not drawn in-canvas, so it stays crisp at any size),
 styled as a **neon vector arcade**: dark CRT base, a drifting perspective
-grid (`#menu::before`), a scanline+vignette+sweep overlay (`.crt`, always the
+grid (the `.grid` div, first child of `#menu`), a scanline+vignette+sweep
+overlay (`.crt`, always the
 last child of `#menu`, `pointer-events:none` so it never eats a tap), chunky
 monospace lettering with layered `text-shadow` glow (no webfonts/CDNs — the
 repo stays self-contained), and **custom neon toggle switches — no native
 form elements**. Palette in `:root` (`--cyan`/`--magenta`/`--amber`/
-`--green`). Respects `prefers-reduced-motion`. One `.screen` is visible at a
+`--green`). Respects `prefers-reduced-motion`.
+**Menu animations must be compositor-only — animate `transform`/`opacity`,
+never `background-position`, `top`, `box-shadow`(-ish paints on large
+areas), or anything inside an SVG filter** (perf lesson, 2026-08): the menu
+ran at 2–3 fps on a weak Android phone (native WebView shell) while the
+WebGL game held 60, because idle menu ambience was raster-bound —
+measured headless (dpr 3, 3 s idle): 5.4 s of raster tasks before vs
+0.4 s after. The three offenders, each preserved visually: the grid drift
+animated `background-position` (full repaint of the huge transformed
+surface every frame — now the static perspective+mask lives on the
+`.grid` div and its `::before` translates one 46 px grid period,
+composited); the `.crt::after` sweep animated `top` (layout+paint per
+frame — now `translateY(400%)` of its own 40%-height); and the ship
+hero's flame flicker (9 Hz) sat under two `feGaussianBlur(18)` halo
+ellipses plus a whole-SVG CSS `drop-shadow`, re-running all three blurs
+every tick — the halos are now plain radial-gradient ellipses tuned to
+match the blurred look, and the drop-shadow moved onto the static hull
+group (`.ship-hero .hull`, a CSS `filter: url(#sh-glow) drop-shadow(…)`
+chain — the CSS property overrides the group's SVG `filter` attribute, so
+the chain must repeat the url).
+**Font stack gotcha (the "wrong fonts on Android" report, 2026-08)**:
+`--mono` must not contain `"Courier New"` — Android aliases it to its
+slab-serif typewriter face (Cutive Mono), which is what every menu label
+rendered in on Android (iOS resolves `ui-monospace` → SF Mono and never
+reaches it). The stack now falls through to `"Roboto Mono", "Droid Sans
+Mono", monospace` on Android; `editor.html`'s stack matches. One `.screen` is visible at a
 time; the page **boots with the main menu open** (markup, not JS, so it shows
 while the wasm loads):
 - **scr-announce** (DORMANT — kept for future messages): a load-time
