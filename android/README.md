@@ -12,7 +12,7 @@ already does in Android browsers.
 
 ## Build & run locally
 
-Prerequisites: JDK 17+, Gradle 8.11+ (or run `gradle wrapper` once and use
+Prerequisites: JDK 17+, Gradle 9.5+ (or run `gradle wrapper` once and use
 `./gradlew`), the Android SDK (easiest via Android Studio), and the Rust
 toolchain.
 

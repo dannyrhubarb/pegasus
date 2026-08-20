@@ -1,6 +1,6 @@
 plugins {
-    // 8.9.1 is the first AGP with compileSdk 36 support; CI's Gradle 8.14.3
-    // covers this version's Gradle floor (8.13).
-    id("com.android.application") version "8.13.2" apply false
-    id("org.jetbrains.kotlin.android") version "2.0.21" apply false
+    // AGP 9 ships built-in Kotlin: the org.jetbrains.kotlin.android plugin
+    // must NOT be applied any more (it conflicts) — the Kotlin compiler
+    // version now rides AGP. Gradle floor is 9.5.0 (the CI workflows pin it).
+    id("com.android.application") version "9.3.1" apply false
 }
