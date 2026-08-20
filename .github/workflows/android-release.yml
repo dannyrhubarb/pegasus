@@ -150,7 +150,7 @@ jobs:
           source-dir: pages-app
           message: "Android APK build ${{ github.run_number }}"
 
-      - name: Upload to Play internal track
+      - name: Upload to Play track
         if: ${{ env.HAS_PLAY_JSON == 'true' }}
         uses: r0adkll/upload-google-play@v1
         with:
@@ -161,5 +161,5 @@ jobs:
           # track directly so every merge reaches the 12 testers during the
           # 14-day window. Switch back to `internal` once production access
           # is granted.
-          track: alpha
+          tracks: alpha
           status: completed
