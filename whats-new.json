@@ -1,5 +1,20 @@
 [
  {
+  "rev": "99c5eac",
+  "date": "2026-08-20T23:37:55+02:00",
+  "note": "The menu now shows the same crisp font on every platform"
+ },
+ {
+  "rev": "3ad18c4",
+  "date": "2026-08-20T23:37:55+02:00",
+  "note": "The menu no longer lags on slower Android phones"
+ },
+ {
+  "rev": "5037add",
+  "date": "2026-08-20T23:37:55+02:00",
+  "note": "Menus on Android now use the intended clean monospace font"
+ },
+ {
   "rev": "e05d4cd",
   "date": "2026-08-10T21:36:19+02:00",
   "note": "Fixed the ghost ship racing through walls on the Flux levels after you take the record — hauntings reported by Marcus, ghost busted accordingly"
