@@ -1,4 +1,21 @@
 {
-  "57851582c10db4706e9bc62cb235e6e770f17cac": "A flag now marks the spot where the record run ended on distance levels, flying the record holder's initial — planted at the suggestion of Marcus",
-  "59f48487423bd7e8cd9d0a4388ce35f38399b881": "The minimap now shows a progress bar filling up as you close in on the record — another fine idea out of the Marcus suggestion box"
+  "01180604f1a50e1e3356b3232b6a70f5744f0038": "Dropped: The time of day from high score boards — the date is enough",
+  "08d3f984e3d3e5ab2cc5f97c91bd27171a55c180": "Fixed: Everything shifting down a moment after launch — in the apps and from the Home Screen",
+  "26c46c4ec70d5dbe318b27f4467d42a46d646e88": "New: Level picker icons now show each level's type — stopwatch for race-the-clock, hourglass for a time limit, arrows for distance",
+  "286b359444b81c6c69d5858b3568e48c83c1307f": "Fixed: Touches being ignored on Android until you lifted your finger and tapped again",
+  "292aa21d2ad32baf36280d4ddaf7466b123c4a25": "New: The Flux Dash level — race 1,000 m to the gold finish pad through an ever-changing cave; fastest time wins",
+  "3ad18c492a43cd8cb40aa57e6338e860bbb95fc2": "Fixed: The menu no longer lags on slower Android phones",
+  "47e9a1375025b45965284f42d05516c6dc6634ec": null,
+  "5037addfffc9ce5a1a63550f424b26a87710bf6f": null,
+  "57851582c10db4706e9bc62cb235e6e770f17cac": "New: A flag marks the spot where the record run ended on distance levels, flying the record holder's initial — planted at the suggestion of Marcus",
+  "59f48487423bd7e8cd9d0a4388ce35f38399b881": "New: The minimap shows a progress bar filling up as you close in on the record — another fine idea out of the Marcus suggestion box",
+  "5f9a872010ff1626530cfddbd194891e89eb7537": "New: The Android and iOS apps show the status bar (clock, battery) on top of the game",
+  "600430aa7c242c035a10a0eede975b482e78d257": "New: The Flux Sprint level — get as far as you can in 60 seconds through an endless cave that reshuffles every attempt",
+  "67d643cb0f81a0e9fd51686c1dfd5320107efe44": "New: The screen stays awake while you fly or watch a replay — in the apps and on the website",
+  "976faa9b6a40065c1e29c8be85ae86b2e037c159": null,
+  "99c5eac80e940e384f7d6989f57bca909b19e172": "New: The menu font now ships with the game — the same crisp face on every platform",
+  "9fb885133a428a6b6038996c46609ee99774c5c1": "New: The Android and iOS apps show their app version and build number on the About screen",
+  "d56e10b7f2206e756a6fbee34946934e18668c28": null,
+  "e05d4cdd1f637a6fbf9bbcf41d09ed81bbba0dba": "Fixed: The ghost ship no longer races through walls on the Flux levels after you take the record — hauntings reported by Marcus, ghost busted accordingly",
+  "ee87aa572a5fd62b5908f1a55b5bd60aa71c845b": "New: The Expanse and The Glide each get Sprint (60 seconds) and Dash (1,000 m race) variants — with the record ghost to race, since their worlds never change"
 }
