@@ -920,17 +920,21 @@ Hand-drawn replays are thereby self-contained
 serialize/deserialize). **Backend caveat**: the deployed verifier's pinned
 sim-core must understand the recording format and know each shipped
 level's params (THE REPIN RULE in the backend repo's CLAUDE.md). The
-2026-07-17 backend repin covers v4 + the Rift/Hollows params check; a
+deployed verifier decodes **v3/v4/v5** (the current pin covers the Sprint/
+Dash v5 fields, their forgery guards and every shipped level's params); a
 newly shipped level verifies immediately as an unknown stem (the level
 check is skipped by design, physics still fully verified) and gains its
-params pinning at the next repin — EXCEPT when the level also needs a new
-recording format: The Flux Sprint and The Flux Dash write **v5** (the
-`time_limit_ticks` + `goal_distance` header fields), which the pinned
-verifier must decode, so their submissions are silently discarded until
-the v5 repin ships (prepared on the backend's
-`claude/flux-one-minute-level-c3d5zy` branch together with the verifier's
-run-clock forgery guard and goal-level checks — see the backend
-CLAUDE.md).
+params pinning at the next repin — EXCEPT when the level needs a NEW
+recording format, whose submissions are silently discarded until the
+verifier's repin decodes it (this bit The Flux Sprint/Dash at v5's
+introduction). The **cosmetic trailer** (see "Hybrid recording") needs no
+repin by design — but note its security rules there: presentation-only,
+enum-whitelisted values (never free text — trailer content is
+attacker-controlled and reaches other players' screens), and the backend
+rejects malformed or oversized tails at submit
+(`Recording::deserialize_with_tail` → `TailInfo`, cap
+`TRAILER_MAX_BYTES`), so the ignored-trailing-bytes property can't park
+arbitrary content in public replay storage.
 
 ## Rendering architecture
 - **High-DPI**: `high_dpi: true` in `window_conf`. The code treats
@@ -1486,11 +1490,18 @@ for now:
   (verified back through history — no version ever checked
   end-of-buffer), so old clients AND the pinned backend verifier decode a
   trailered blob unchanged and just present the replay without the extra
-  context — no version bump, no repin. Two hard rules: entries carry
+  context — no version bump, no repin. Three hard rules: entries carry
   **presentation data only** (anything the sim consumed would silently
-  desync old clients' resim), and readers skip unknown tags by length /
+  desync old clients' resim); readers skip unknown tags by length /
   treat malformed tails as "no trailer" (the trailer itself extends the
-  same way). Written only when an entry is non-default, so
+  same way); and values shown to other players must be **enum-whitelisted,
+  never free text** — trailer content is attacker-controlled (it rides
+  stored replays to other players' screens). The backend verifier
+  additionally rejects malformed or oversized tails at submit
+  (`deserialize_with_tail` → `TailInfo`, cap `TRAILER_MAX_BYTES` = 256 B)
+  so the tail can't smuggle bulk content into public replay storage —
+  game-side decoding stays lenient. Written only when an entry is
+  non-default, so
   default-scheme recordings stay byte-identical to the pre-trailer
   format. Tag 1 = control scheme (`Recording.scheme`, `SCHEME_STICK` /
   `SCHEME_SPLIT` — kept current per recorded tick by the frame loop, last
