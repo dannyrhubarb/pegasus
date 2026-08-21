@@ -119,9 +119,11 @@ Four input paths feed the same physics, combined in the main loop:
     until the nose settles within `FLIP_DONE_RAD (~20°)` — the gate resets
     the ramp, so post-flip thrust also fades in. (There is no separate JET
     thrust-only button any more — stick-hold covers one-handed play.)
-  - **Split controls** (opt-in two-handed scheme, `#split-toggle-row`,
+  - **Split controls** (two-handed scheme, `#split-toggle-row`,
     `pegasus_split_controls` → `set_split_controls` → `SPLIT_CONTROLS`,
-    off by default): the screen halves at the vertical midline — a fresh
+    **on by default** since 2026-08 — turning it off restores the
+    one-handed stick-hold scheme): the screen halves at the vertical
+    midline — a fresh
     touch on the LEFT half spawns a floating **throttle button** under the
     finger (`ThrottleButton` + `draw_throttle` in main.rs; hold = full
     throttle, instant like the keyboard — none of the stick-hold
@@ -293,7 +295,7 @@ while the wasm loads):
   default** → `set_sound_enabled` → `SOUND_ON`; off mutes the thruster loop
   and skips boom playback), **Velocity vector** (`#vel-toggle-row`), **Invert
   stick** (`#inv-toggle-row`), **Split controls** (`#split-toggle-row`,
-  `pegasus_split_controls`, off by default → `set_split_controls` →
+  `pegasus_split_controls`, **on by default** → `set_split_controls` →
   `SPLIT_CONTROLS`; left-half throttle button / right-half steering stick —
   see "Input sources"), **Race best ghost** (`#ghost-toggle-row`, on by
   default), **Debug HUD** (`#debug-toggle-row`, `pegasus_debug_hud`, **off by

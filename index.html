@@ -2306,13 +2306,13 @@
       }
     }, 200);
 
-    // Split-controls toggle: a separate floating throttle button on the
-    // LEFT half of the screen (hold = full throttle, rides the finger); the
-    // right-half stick then steers only. Forwarded to the WASM
+    // Split-controls toggle (on by default): a separate floating throttle
+    // button on the LEFT half of the screen (hold = full throttle, rides the
+    // finger); the right-half stick then steers only. Forwarded to the WASM
     // `set_split_controls` export and persisted per device (same pattern as
     // the invert toggle).
     const splitToggle = document.getElementById("split-toggle");
-    splitToggle.checked = localStorage.getItem("pegasus_split_controls") === "1";
+    splitToggle.checked = localStorage.getItem("pegasus_split_controls") !== "0";
     function applySplitSetting() {
       call("set_split_controls", splitToggle.checked ? 1 : 0);
     }
