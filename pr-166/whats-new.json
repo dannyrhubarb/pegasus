@@ -1,5 +1,10 @@
 [
  {
+  "rev": "d93272f",
+  "date": "2026-08-21T13:46:00Z",
+  "note": "Replays of runs flown with split controls now show the throttle button the pilot was pressing"
+ },
+ {
   "rev": "4d1cb22",
   "date": "2026-08-21T09:49:42Z",
   "note": "New Settings toggle \"Split controls\" — a floating throttle button on the left half of the screen, while the stick on the right steers only. Thanks to Linus for the suggestion!"
