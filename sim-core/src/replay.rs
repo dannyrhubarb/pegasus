@@ -60,6 +60,12 @@ pub const REPLAY_FORMAT_VERSION_V5: u16 = 5;
 //   tail as "no trailer", so the trailer extends the same way.
 // The trailer is written only when an entry has a non-default value, so a
 // default-scheme recording stays byte-identical to the pre-trailer format.
+// Security rules (the trailer is attacker-controlled content that reaches
+// OTHER players' screens via stored replays): values presented to users
+// must be enum/whitelist-validated — never free text — and the backend
+// verifier rejects blobs whose tail is not a well-formed trailer within
+// TRAILER_MAX_BYTES (see TailInfo), so the ignored-trailing-bytes property
+// can't be used to smuggle arbitrary content into public replay storage.
 pub const REPLAY_TRAILER_MAGIC: [u8; 4] = *b"PGXT";
 // Trailer tag 1: the control scheme the run was flown with (u8 payload,
 // 0 = one-handed stick-hold, 1 = split controls). Replays render the input
@@ -69,6 +75,28 @@ pub const REPLAY_TRAILER_MAGIC: [u8; 4] = *b"PGXT";
 pub const TRAILER_TAG_SCHEME: u8 = 1;
 pub const SCHEME_STICK: u8 = 0;
 pub const SCHEME_SPLIT: u8 = 1;
+
+// Submit-validation cap on the tail (magic + all entries), enforced by the
+// backend verifier — never by game-side decoding. A legitimate trailer
+// today is 8 B, so this leaves generous headroom for future tags while
+// keeping the tail useless as a channel for smuggling bulk content into
+// replay storage.
+pub const TRAILER_MAX_BYTES: usize = 256;
+
+// What followed the counted sections (events + keyframes) of a blob —
+// reported by `deserialize_with_tail` so the backend verifier can gate
+// storage hygiene without changing how anything PLAYS a replay. `strict`
+// means the tail is empty, or a well-formed trailer (magic + TLV entries)
+// tiling exactly to the end of the buffer. The game itself stays lenient —
+// a malformed tail just reads as "no trailer" — but the verifier rejects
+// non-strict or oversized tails at submit time, because stored blobs are
+// re-served verbatim via CloudFront and a free-form tail would let a
+// submission park arbitrary bytes in public storage.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TailInfo {
+    pub len: usize,   // bytes after the last counted section
+    pub strict: bool, // empty, or a well-formed trailer tiling exactly to the end
+}
 
 // Resolved control values in effect for a physics step, quantized for
 // storage. "Resolved" = after the input-combining logic (stick ramp gates,
@@ -413,6 +441,16 @@ impl Recording {
     }
 
     pub fn deserialize(data: &[u8]) -> Result<(Recording, u32), &'static str> {
+        Self::deserialize_with_tail(data).map(|(rec, build_id, _)| (rec, build_id))
+    }
+
+    // `deserialize` plus a report on the bytes AFTER the counted sections
+    // (see TailInfo) — the backend verifier's entry point, so it can reject
+    // malformed/oversized tails at submit time. Decoding itself treats the
+    // tail identically to `deserialize` (leniently).
+    pub fn deserialize_with_tail(
+        data: &[u8],
+    ) -> Result<(Recording, u32, TailInfo), &'static str> {
         let mut r = Reader { data, pos: 0 };
         if r.bytes(4)? != REPLAY_MAGIC {
             return Err("bad magic");
@@ -516,16 +554,27 @@ impl Recording {
                 visited, run_ticks,
             });
         }
-        // Cosmetic trailer (see REPLAY_TRAILER_MAGIC). Parsed LENIENTLY —
-        // it carries only presentation data, so any malformation (short
-        // magic, truncated entry) just means "no trailer", never an error:
-        // a blob an old client decodes must never fail here.
+        // Cosmetic trailer (see REPLAY_TRAILER_MAGIC). Parsed LENIENTLY for
+        // decoding — it carries only presentation data, so any malformation
+        // (short magic, truncated entry) just means "no trailer", never an
+        // error: a blob an old client decodes must never fail here. The
+        // walk additionally reports the tail's strictness (TailInfo) for
+        // the backend verifier's storage-hygiene gate: strict = empty, or
+        // magic + well-formed TLV entries tiling exactly to the buffer end.
+        let tail_len = r.remaining();
         let mut scheme = SCHEME_STICK;
-        if r.remaining() >= 4 && r.bytes(4).is_ok_and(|b| b == REPLAY_TRAILER_MAGIC) {
-            while r.remaining() >= 3 {
-                let Ok(tag) = r.u8() else { break };
-                let Ok(len) = r.u16() else { break };
-                let Ok(payload) = r.bytes(len as usize) else { break };
+        let mut tail_strict = tail_len == 0;
+        if tail_len >= 4 && r.bytes(4).is_ok_and(|b| b == REPLAY_TRAILER_MAGIC) {
+            tail_strict = true;
+            while r.remaining() > 0 {
+                let (Ok(tag), Ok(len)) = (r.u8(), r.u16()) else {
+                    tail_strict = false;
+                    break;
+                };
+                let Ok(payload) = r.bytes(len as usize) else {
+                    tail_strict = false;
+                    break;
+                };
                 if tag == TRAILER_TAG_SCHEME && payload.len() == 1 {
                     scheme = payload[0];
                 }
@@ -539,6 +588,7 @@ impl Recording {
                 max_ticks: u32::MAX,
             },
             build_id,
+            TailInfo { len: tail_len, strict: tail_strict },
         ))
     }
 }
@@ -870,6 +920,38 @@ mod tests {
         b.push(TRAILER_TAG_SCHEME);
         b.extend_from_slice(&500u16.to_le_bytes());
         assert_eq!(Recording::deserialize(&b).expect("overrun entry").0.scheme, SCHEME_STICK);
+    }
+
+    #[test]
+    fn tail_info_reports_strictness_for_the_verifier() {
+        let mut rec = Recording::new(params(), lparams(), u32::MAX);
+        rec.push_keyframe(kf(0));
+        let clean = rec.serialize(0);
+        let tail = |b: &[u8]| Recording::deserialize_with_tail(b).expect("decodes").2;
+        // No tail at all: strict.
+        assert_eq!(tail(&clean), TailInfo { len: 0, strict: true });
+        // A well-formed trailer tiling exactly to the end: strict, and the
+        // legitimate scheme trailer is 8 B — comfortably under the cap.
+        rec.scheme = SCHEME_SPLIT;
+        let trailered = rec.serialize(0);
+        let info = tail(&trailered);
+        assert_eq!(info, TailInfo { len: 8, strict: true });
+        assert!(info.len <= TRAILER_MAX_BYTES);
+        // Free-form junk: not strict.
+        let mut b = clean.clone();
+        b.extend_from_slice(b"arbitrary smuggled bytes");
+        assert!(!tail(&b).strict);
+        // Junk AFTER a valid trailer entry breaks strictness too (the walk
+        // must reach exactly the end of the buffer).
+        let mut b = trailered.clone();
+        b.push(0xff);
+        assert!(!tail(&b).strict);
+        // An entry whose length overruns the buffer: not strict.
+        let mut b = clean.clone();
+        b.extend_from_slice(&REPLAY_TRAILER_MAGIC);
+        b.push(TRAILER_TAG_SCHEME);
+        b.extend_from_slice(&500u16.to_le_bytes());
+        assert!(!tail(&b).strict);
     }
 
     #[test]
