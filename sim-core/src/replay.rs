@@ -47,6 +47,29 @@ pub const REPLAY_FORMAT_VERSION: u16 = 3;
 pub const REPLAY_FORMAT_VERSION_EXT: u16 = 4;
 pub const REPLAY_FORMAT_VERSION_V5: u16 = 5;
 
+// Cosmetic TRAILER appended after the keyframes (any version): magic "PGXT"
+// followed by TLV entries (tag u8, len u16 LE, payload). This is the
+// format's FORWARD-compatibility channel: every parser ever shipped reads
+// exactly the counted sections and ignores trailing bytes, so an old client
+// (and the pinned backend verifier) decodes a trailered blob unchanged and
+// simply presents the replay without the extra context — no version bump,
+// no repin. Two hard rules keep that true:
+// - Entries carry PRESENTATION data only. Nothing the sim consumes may ever
+//   live here — an old client's resim would silently ignore it and desync.
+// - New readers skip unknown tags by their length and treat any malformed
+//   tail as "no trailer", so the trailer extends the same way.
+// The trailer is written only when an entry has a non-default value, so a
+// default-scheme recording stays byte-identical to the pre-trailer format.
+pub const REPLAY_TRAILER_MAGIC: [u8; 4] = *b"PGXT";
+// Trailer tag 1: the control scheme the run was flown with (u8 payload,
+// 0 = one-handed stick-hold, 1 = split controls). Replays render the input
+// widgets of the scheme that produced them: split runs draw the left-hand
+// throttle button (lit while the recorded throttle is up) next to the
+// steering stick.
+pub const TRAILER_TAG_SCHEME: u8 = 1;
+pub const SCHEME_STICK: u8 = 0;
+pub const SCHEME_SPLIT: u8 = 1;
+
 // Resolved control values in effect for a physics step, quantized for
 // storage. "Resolved" = after the input-combining logic (stick ramp gates,
 // source priority), so a future re-sim replays exactly what drove the
@@ -211,6 +234,11 @@ pub struct Recording {
     pub level: LevelParams,
     pub events: Vec<InputEvent>,
     pub keyframes: Vec<Keyframe>,
+    // Control scheme the run was flown with (SCHEME_*) — presentation only,
+    // rides the cosmetic trailer, never consumed by the sim. The recorder
+    // keeps it current per recorded tick (last write wins on a mid-run
+    // toggle); a blob without a trailer reads as SCHEME_STICK.
+    pub scheme: u8,
     ticks: u32,             // physics steps recorded so far
     last_input: Option<InputState>,
     max_ticks: u32,         // retention window (trimmed at keyframe boundaries)
@@ -223,6 +251,7 @@ impl Recording {
             level,
             events: Vec::new(),
             keyframes: Vec::new(),
+            scheme: SCHEME_STICK,
             ticks: 0,
             last_input: None,
             max_ticks,
@@ -297,6 +326,10 @@ impl Recording {
     // Event:  tick(4) throttle(1) rot(1) steer_x(1) steer_y(1) held(1) = 9 B
     // Keyframe: tick(4) + 11×f32                          = 48 B (v3)
     //           v4/v5 append visited(8) + run_ticks(4)    = 60 B
+    // Trailer (optional, any version, AFTER the last keyframe): "PGXT" +
+    //           TLV entries (tag u8, len u16, payload) — cosmetic data old
+    //           parsers never reach (see REPLAY_TRAILER_MAGIC). Written
+    //           only when an entry is non-default.
     // The version is picked per recording: a legacy procedural level writes
     // the byte-identical v3 layout; endless / terrain / time-scored levels
     // write v4; time-limited levels write v5.
@@ -366,6 +399,15 @@ impl Recording {
                 out.extend_from_slice(&k.visited.to_le_bytes());
                 out.extend_from_slice(&k.run_ticks.to_le_bytes());
             }
+        }
+        // Cosmetic trailer — only when there is a non-default value to
+        // carry, so a default-scheme recording stays byte-identical to the
+        // pre-trailer format.
+        if self.scheme != SCHEME_STICK {
+            out.extend_from_slice(&REPLAY_TRAILER_MAGIC);
+            out.push(TRAILER_TAG_SCHEME);
+            out.extend_from_slice(&1u16.to_le_bytes());
+            out.push(self.scheme);
         }
         out
     }
@@ -474,9 +516,28 @@ impl Recording {
                 visited, run_ticks,
             });
         }
+        // Cosmetic trailer (see REPLAY_TRAILER_MAGIC). Parsed LENIENTLY —
+        // it carries only presentation data, so any malformation (short
+        // magic, truncated entry) just means "no trailer", never an error:
+        // a blob an old client decodes must never fail here.
+        let mut scheme = SCHEME_STICK;
+        if r.remaining() >= 4 && r.bytes(4).is_ok_and(|b| b == REPLAY_TRAILER_MAGIC) {
+            while r.remaining() >= 3 {
+                let Ok(tag) = r.u8() else { break };
+                let Ok(len) = r.u16() else { break };
+                let Ok(payload) = r.bytes(len as usize) else { break };
+                if tag == TRAILER_TAG_SCHEME && payload.len() == 1 {
+                    scheme = payload[0];
+                }
+                // Unknown tags: skipped by their length (trailer extension).
+            }
+        }
         let last_input = events.last().map(|e| e.input);
         Ok((
-            Recording { params, level, events, keyframes, ticks, last_input, max_ticks: u32::MAX },
+            Recording {
+                params, level, events, keyframes, scheme, ticks, last_input,
+                max_ticks: u32::MAX,
+            },
             build_id,
         ))
     }
@@ -746,6 +807,69 @@ mod tests {
         assert_eq!(back.level, lp);
         assert_eq!(back.events, rec.events);
         assert_eq!(back.keyframes, rec.keyframes);
+    }
+
+    #[test]
+    fn split_scheme_rides_a_trailer_old_parsers_never_reach() {
+        let mut rec = Recording::new(params(), lparams(), u32::MAX);
+        rec.scheme = SCHEME_SPLIT;
+        rec.push_keyframe(kf(0));
+        for _ in 0..KEYFRAME_EVERY {
+            let input = InputState { throttle: 255, stick_held: 1, ..Default::default() };
+            if rec.record_tick(input) {
+                rec.push_keyframe(kf(rec.ticks()));
+            }
+        }
+        let blob = rec.serialize(2);
+        // The trailer must not force a version bump — still a plain v3 blob.
+        assert_eq!(u16::from_le_bytes([blob[4], blob[5]]), REPLAY_FORMAT_VERSION);
+        let (back, _) = Recording::deserialize(&blob).expect("deserialize");
+        assert_eq!(back.scheme, SCHEME_SPLIT);
+        assert_eq!(back.events, rec.events);
+        assert_eq!(back.keyframes, rec.keyframes);
+        // An old parser stops after the counted sections and never sees the
+        // trailer: chopping it off must decode to the same recording minus
+        // the scheme — which is exactly what a pre-trailer client does with
+        // the full blob (it reads the counted bytes and returns).
+        let counted = blob.len() - 8; // magic 4 + tag 1 + len 2 + payload 1
+        let (old, _) = Recording::deserialize(&blob[..counted]).expect("counted sections");
+        assert_eq!(old.scheme, SCHEME_STICK);
+        assert_eq!(old.events, back.events);
+        assert_eq!(old.keyframes, back.keyframes);
+    }
+
+    #[test]
+    fn default_scheme_writes_no_trailer_and_malformed_trailers_are_lenient() {
+        // A default-scheme recording stays byte-identical to the
+        // pre-trailer format (nothing appended).
+        let mut rec = Recording::new(params(), lparams(), u32::MAX);
+        rec.push_keyframe(kf(0));
+        let blob = rec.serialize(0);
+        assert_eq!(blob.len(), 93 + rec.events.len() * 9 + rec.keyframes.len() * 48);
+        let (back, _) = Recording::deserialize(&blob).expect("no trailer");
+        assert_eq!(back.scheme, SCHEME_STICK);
+        // Unknown tags are skipped by their length so the scheme entry
+        // after one still lands (trailer extensibility).
+        let mut b = blob.clone();
+        b.extend_from_slice(&REPLAY_TRAILER_MAGIC);
+        b.push(99);
+        b.extend_from_slice(&1u16.to_le_bytes());
+        b.push(7);
+        b.push(TRAILER_TAG_SCHEME);
+        b.extend_from_slice(&1u16.to_le_bytes());
+        b.push(SCHEME_SPLIT);
+        let (back, _) = Recording::deserialize(&b).expect("unknown tag skipped");
+        assert_eq!(back.scheme, SCHEME_SPLIT);
+        // Malformed tails never error — a truncated magic and an entry
+        // whose length overruns the buffer both read as "no trailer".
+        let mut b = blob.clone();
+        b.extend_from_slice(b"PG");
+        assert_eq!(Recording::deserialize(&b).expect("short tail").0.scheme, SCHEME_STICK);
+        let mut b = blob.clone();
+        b.extend_from_slice(&REPLAY_TRAILER_MAGIC);
+        b.push(TRAILER_TAG_SCHEME);
+        b.extend_from_slice(&500u16.to_le_bytes());
+        assert_eq!(Recording::deserialize(&b).expect("overrun entry").0.scheme, SCHEME_STICK);
     }
 
     #[test]

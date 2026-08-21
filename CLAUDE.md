@@ -133,8 +133,13 @@ Four input paths feed the same physics, combined in the main loop:
     `fresh_touch_in` (the zone-predicate form of `fresh_touch`), and a
     claimed finger is followed across the midline. The button parks
     bottom-LEFT as a translucent ghost, mirroring the stick's bottom-right
-    park. Replays/ghosts are untouched: throttle was always an analog
-    channel in `InputState`, so recordings are scheme-agnostic.
+    park. Replay physics is untouched (throttle was always an analog
+    channel in `InputState`), but the scheme flown rides the recording's
+    **cosmetic trailer** (see "Hybrid recording") so replays render the
+    widgets of the scheme that produced them: a split run's playback adds
+    the half-size throttle button bottom-left (lit while the recorded
+    throttle is up — under this scheme the throttle channel IS the
+    button), mirroring the recorded-input stick.
   - **Floating**: while flying, a fresh touch **anywhere on screen** spawns
     the stick centred under the finger and claims that touch id — the whole
     canvas is the flight-control surface (the pause/restart buttons are HTML
@@ -1474,7 +1479,24 @@ for now:
   versions, so older server blobs stop decoding (watch/ghost pushes
   no-op gracefully); add version-tolerant reads when the game is
   released.
-- Trimming keeps the retained window **starting at a keyframe** with the
+- **Cosmetic trailer** (2026-08 — the format's FORWARD-compatibility
+  channel): optional bytes after the last keyframe, any version — magic
+  `PGXT` + TLV entries (tag u8, len u16, payload). Every parser ever
+  shipped reads exactly the counted sections and ignores trailing bytes
+  (verified back through history — no version ever checked
+  end-of-buffer), so old clients AND the pinned backend verifier decode a
+  trailered blob unchanged and just present the replay without the extra
+  context — no version bump, no repin. Two hard rules: entries carry
+  **presentation data only** (anything the sim consumed would silently
+  desync old clients' resim), and readers skip unknown tags by length /
+  treat malformed tails as "no trailer" (the trailer itself extends the
+  same way). Written only when an entry is non-default, so
+  default-scheme recordings stay byte-identical to the pre-trailer
+  format. Tag 1 = control scheme (`Recording.scheme`, `SCHEME_STICK` /
+  `SCHEME_SPLIT` — kept current per recorded tick by the frame loop, last
+  write wins on a mid-run toggle): replays render the input widgets of
+  the scheme the run was flown with (see "Input sources" → Split
+  controls).
   effective input re-seeded there, so it stays replayable after the cap.
   The window is `HYBRID_MAX_SECS = 60 min` (~1 MB/h worst case) — a memory
   safety net, not an expected limit: a ghost needs the run from its spawn,

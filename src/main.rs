@@ -1126,18 +1126,19 @@ fn draw_stick(center: Vec2, knob: Vec2, held: bool, scale: f32) {
 // Draw the split-scheme throttle button (logical px), in the stick's visual
 // language: soft filled base disc, ring, and a rocket-flame glyph in place
 // of a knob. Parked it dims like the parked stick; held it goes amber
-// (engine lit) and sits under the finger.
-fn draw_throttle(center: Vec2, held: bool) {
+// (engine lit) and sits under the finger. `scale` shrinks the whole widget
+// like draw_stick's (the replay's recorded-input display draws at 0.5).
+fn draw_throttle(center: Vec2, held: bool, scale: f32) {
     let (mul, accent) = if held { (1.0, (255u8, 200u8, 0u8)) } else { (0.45, (255, 255, 255)) };
     let a = |alpha: f32| (alpha * mul * 255.0) as u8;
     const SIDES: u8 = 64;
-    draw_poly(center.x, center.y, SIDES, THROTTLE_RADIUS, 0.0,
+    draw_poly(center.x, center.y, SIDES, THROTTLE_RADIUS * scale, 0.0,
         Color::from_rgba(255, 255, 255, a(0.08)));
-    draw_poly_lines(center.x, center.y, SIDES, THROTTLE_RADIUS, 0.0, 2.5,
+    draw_poly_lines(center.x, center.y, SIDES, THROTTLE_RADIUS * scale, 0.0, 2.5 * scale,
         Color::from_rgba(accent.0, accent.1, accent.2, a(if held { 0.7 } else { 0.35 })));
     // Thrust glyph: nose-up rocket triangle over a small exhaust triangle.
     let col = Color::from_rgba(accent.0, accent.1, accent.2, a(if held { 0.85 } else { 0.45 }));
-    let s = 18.0;
+    let s = 18.0 * scale;
     draw_triangle(
         vec2(center.x, center.y - s * 1.2),
         vec2(center.x - s * 0.85, center.y + s * 0.5),
@@ -1598,6 +1599,11 @@ async fn main() {
                     continue; // parked wreck: nothing to record or report
                 }
                 let destroyed = rep.impact.as_ref().is_some_and(|i| i.destroyed);
+                // The scheme flown rides the recording's cosmetic trailer
+                // (presentation only — replays render the widgets of the
+                // scheme that produced them; last write wins on a mid-run
+                // settings toggle).
+                recorder.scheme = if split { SCHEME_SPLIT } else { SCHEME_STICK };
                 // Hybrid recording: the input in effect for this step (an
                 // event only when it changed) + periodic keyframes. The
                 // destruction tick skips its periodic keyframe — the
@@ -2824,6 +2830,13 @@ async fn main() {
             sw - safe_right - STICK_RADIUS - 24.0,
             sh - safe_bottom - STICK_RADIUS - 28.0,
         );
+        // The throttle button's parked home (bottom-LEFT, mirroring the
+        // stick's park) — shared by live split-scheme flight and the
+        // GUI-hidden replay display of a split-scheme recording.
+        let btn_park = vec2(
+            safe_left + THROTTLE_RADIUS + 24.0,
+            sh - safe_bottom - THROTTLE_RADIUS - 28.0,
+        );
         if matches!(mode, Mode::Flying) && !crashed && !ui_paused {
             if stick.id.is_some() {
                 draw_stick(stick.center, stick.knob, stick.held, 1.0);
@@ -2831,17 +2844,12 @@ async fn main() {
                 draw_stick(stick_park, Vec2::ZERO, false, 1.0);
             }
             // Split controls: the throttle button — under the finger while
-            // held, parked bottom-LEFT (mirroring the stick's park spot)
-            // otherwise.
+            // held, parked otherwise.
             if split {
                 if throttle_btn.held() {
-                    draw_throttle(throttle_btn.pos, true);
+                    draw_throttle(throttle_btn.pos, true, 1.0);
                 } else {
-                    let btn_park = vec2(
-                        safe_left + THROTTLE_RADIUS + 24.0,
-                        sh - safe_bottom - THROTTLE_RADIUS - 28.0,
-                    );
-                    draw_throttle(btn_park, false);
+                    draw_throttle(btn_park, false, 1.0);
                 }
             }
         }
@@ -2909,6 +2917,14 @@ async fn main() {
                 draw_text(msg, (sw - dims.width) / 2.0, sh * 0.42, fs,
                     Color::from_rgba(255, 180, 60, 255));
             }
+            // Recordings are presented with the scheme they were flown
+            // with (the blob's cosmetic trailer; a pre-trailer blob reads
+            // as the one-handed scheme): a split-controls run also shows
+            // the left-hand throttle button, lit while the recorded
+            // throttle is up — under that scheme the throttle channel IS
+            // the button (hold = full throttle).
+            let rp_split =
+                watch_rec.as_ref().map_or(recorder.scheme, |r| r.scheme) == SCHEME_SPLIT;
             if REPLAY_UI_VISIBLE.load(Ordering::Relaxed) != 0 {
                 // Half size, tucked into the corner with tighter margins
                 // than the full-size park spot, and clear of the HTML replay
@@ -2921,11 +2937,23 @@ async fn main() {
                 );
                 draw_stick(replay_stick_home, vec2(isx, isy) * STICK_TRAVEL,
                     inp.stick_held != 0, 0.5);
+                if rp_split {
+                    // Mirrored bottom-left, same clearance over the bar.
+                    let br = THROTTLE_RADIUS * 0.5;
+                    let replay_btn_home = vec2(
+                        safe_left + br + 12.0,
+                        sh - safe_bottom - br - 168.0,
+                    );
+                    draw_throttle(replay_btn_home, inp.throttle > 0, 0.5);
+                }
             } else {
-                // GUI auto-hidden: the stick takes back its full-size parked
-                // home, exactly where the live stick sits.
+                // GUI auto-hidden: the widgets take back their full-size
+                // parked homes, exactly where the live controls sit.
                 draw_stick(stick_park, vec2(isx, isy) * STICK_TRAVEL,
                     inp.stick_held != 0, 1.0);
+                if rp_split {
+                    draw_throttle(btn_park, inp.throttle > 0, 1.0);
+                }
             }
         } else if complete_timer > 0.0 {
             // The banner leads with what the run scored: the completion
