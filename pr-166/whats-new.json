@@ -1,8 +1,8 @@
 [
  {
-  "rev": "5a2cac6",
-  "date": "2026-08-21T16:01:33Z",
-  "note": "New: Settings toggle \"Split controls\" — a floating throttle button on the left half of the screen, while the stick on the right steers only. Thanks to Linus for the suggestion!"
+  "rev": "187f10c",
+  "date": "2026-08-21T16:22:14Z",
+  "note": "New: Settings toggle \"Split controls\" — a floating throttle button on the left half of the screen, while the stick on the right steers only. Thanks to Limpan for the suggestion!"
  },
  {
   "rev": "99c5eac",
