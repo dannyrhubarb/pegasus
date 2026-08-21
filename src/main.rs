@@ -365,9 +365,9 @@ pub extern "C" fn set_invert_stick(on: i32) {
 // touch on the LEFT half spawns a floating THROTTLE button under the finger
 // (hold = full throttle) and the RIGHT half spawns the attitude stick, which
 // then steers only (stick-hold no longer lights the engine). Set from the
-// Settings toggle, persisted in localStorage; off by default — the
-// one-handed stick-hold scheme stays the default.
-static SPLIT_CONTROLS: AtomicU32 = AtomicU32::new(0);
+// Settings toggle, persisted in localStorage; on by default — the
+// one-handed stick-hold scheme is the opt-out alternative.
+static SPLIT_CONTROLS: AtomicU32 = AtomicU32::new(1);
 
 #[unsafe(no_mangle)]
 pub extern "C" fn set_split_controls(on: i32) {

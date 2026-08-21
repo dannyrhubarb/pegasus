@@ -28,12 +28,12 @@ the nose direction; a PD controller (spring + damper) torques the ship the
 short way to that angle. Two gates keep steering cheap: a *flick grace*
 (short touches never thrust) and a *flip settle* (commanding a >92° turn
 keeps the engine cold until the nose is nearly there). Holding the stick is
-the only touch thrust control in the default scheme (the old JET button is
-gone). Keyboard/gamepad use direct rate rotation and override the PD
+the only touch thrust control in the one-handed scheme (the old JET button
+is gone). Keyboard/gamepad use direct rate rotation and override the PD
 controller while held.
 
-**Split controls** (Settings toggle, off by default) is the two-handed
-alternative: the screen halves at the midline, a fresh left-half touch
+**Split controls** (Settings toggle, on by default) is the two-handed
+scheme: the screen halves at the midline, a fresh left-half touch
 spawns a floating throttle button (hold = full throttle, instant; it rides
 the finger) and the right-half stick steers only. The § 3 gates exist to
 disambiguate steering from burning on the one-handed stick, so **none of
