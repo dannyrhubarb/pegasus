@@ -1,5 +1,10 @@
 [
  {
+  "rev": "fc4ef37",
+  "date": "2026-08-21T19:05:11+02:00",
+  "note": "New: Settings toggle \"Split controls\" — a floating throttle button on the left half of the screen, while the stick on the right steers only. Thanks to Limpan for the suggestion!"
+ },
+ {
   "rev": "99c5eac",
   "date": "2026-08-20T23:37:55+02:00",
   "note": "New: The menu font now ships with the game — the same crisp face on every platform"
