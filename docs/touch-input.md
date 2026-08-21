@@ -78,6 +78,14 @@ on a *familiar* id, phased `Started`.
 pure functions so they can be unit-tested; `prev_touch_ids` in the frame loop
 is the memory they need.
 
+Split controls (the Settings toggle) add a second claimant: the left-half
+floating throttle button. Both claims run the same rule through
+`fresh_touch_in` (the zone-predicate form of `fresh_touch`) — the zone only
+decides where a touch *lands*; once claimed, a finger is followed by
+identity wherever it moves, across the midline included. The follow/release
+logic (`stick_touch_lost`) is shared verbatim, so the phase-collapse and
+recycled-id cases behave identically for both controls.
+
 ## The bug this came from
 
 The stick claimed a touch only on `TouchPhase::Started`:

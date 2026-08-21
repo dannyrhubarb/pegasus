@@ -119,6 +119,22 @@ Four input paths feed the same physics, combined in the main loop:
     until the nose settles within `FLIP_DONE_RAD (~20°)` — the gate resets
     the ramp, so post-flip thrust also fades in. (There is no separate JET
     thrust-only button any more — stick-hold covers one-handed play.)
+  - **Split controls** (opt-in two-handed scheme, `#split-toggle-row`,
+    `pegasus_split_controls` → `set_split_controls` → `SPLIT_CONTROLS`,
+    off by default): the screen halves at the vertical midline — a fresh
+    touch on the LEFT half spawns a floating **throttle button** under the
+    finger (`ThrottleButton` + `draw_throttle` in main.rs; hold = full
+    throttle, instant like the keyboard — none of the stick-hold
+    flick/flip/ramp gating, which only exists because the one-handed stick
+    doubles as the engine; the button rides the finger while held) and the
+    RIGHT half spawns the attitude stick, which then **steers only**
+    (stick-hold no longer lights the engine). The zone gates only where a
+    touch LANDS — both claims run the identity-not-phase rule via
+    `fresh_touch_in` (the zone-predicate form of `fresh_touch`), and a
+    claimed finger is followed across the midline. The button parks
+    bottom-LEFT as a translucent ghost, mirroring the stick's bottom-right
+    park. Replays/ghosts are untouched: throttle was always an analog
+    channel in `InputState`, so recordings are scheme-agnostic.
   - **Floating**: while flying, a fresh touch **anywhere on screen** spawns
     the stick centred under the finger and claims that touch id — the whole
     canvas is the flight-control surface (the pause/restart buttons are HTML
@@ -271,7 +287,10 @@ while the wasm loads):
 - **scr-settings**: **Sound** (`#sound-toggle-row`, `pegasus_sound`, **off by
   default** → `set_sound_enabled` → `SOUND_ON`; off mutes the thruster loop
   and skips boom playback), **Velocity vector** (`#vel-toggle-row`), **Invert
-  stick** (`#inv-toggle-row`), **Race best ghost** (`#ghost-toggle-row`, on by
+  stick** (`#inv-toggle-row`), **Split controls** (`#split-toggle-row`,
+  `pegasus_split_controls`, off by default → `set_split_controls` →
+  `SPLIT_CONTROLS`; left-half throttle button / right-half steering stick —
+  see "Input sources"), **Race best ghost** (`#ghost-toggle-row`, on by
   default), **Debug HUD** (`#debug-toggle-row`, `pegasus_debug_hud`, **off by
   default** → `set_debug_hud` → `DEBUG_HUD`; shows the telemetry text line —
   see "HUD") as styled toggles; same localStorage → export → atomic plumbing.

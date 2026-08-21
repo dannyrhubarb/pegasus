@@ -1138,6 +1138,10 @@
         <span>Invert stick</span>
         <input type="checkbox" id="inv-toggle"><span class="tgl"></span>
       </label>
+      <label class="setrow" id="split-toggle-row">
+        <span>Split controls (throttle left)</span>
+        <input type="checkbox" id="split-toggle"><span class="tgl"></span>
+      </label>
       <label class="setrow" id="ghost-toggle-row">
         <span>Race best ghost</span>
         <input type="checkbox" id="ghost-toggle"><span class="tgl"></span>
@@ -2299,6 +2303,27 @@
       if (typeof wasm_exports !== "undefined" && wasm_exports.set_invert_stick) {
         applyInvSetting();
         clearInterval(invTimer);
+      }
+    }, 200);
+
+    // Split-controls toggle: a separate floating throttle button on the
+    // LEFT half of the screen (hold = full throttle, rides the finger); the
+    // right-half stick then steers only. Forwarded to the WASM
+    // `set_split_controls` export and persisted per device (same pattern as
+    // the invert toggle).
+    const splitToggle = document.getElementById("split-toggle");
+    splitToggle.checked = localStorage.getItem("pegasus_split_controls") === "1";
+    function applySplitSetting() {
+      call("set_split_controls", splitToggle.checked ? 1 : 0);
+    }
+    splitToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_split_controls", splitToggle.checked ? "1" : "0");
+      applySplitSetting();
+    });
+    const splitTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_split_controls) {
+        applySplitSetting();
+        clearInterval(splitTimer);
       }
     }, 200);
 
