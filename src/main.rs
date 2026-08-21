@@ -361,6 +361,19 @@ pub extern "C" fn set_invert_stick(on: i32) {
     INVERT_STICK.store(on as u32, Ordering::Relaxed);
 }
 
+// "Split controls": the screen halves at the vertical midline — a fresh
+// touch on the LEFT half spawns a floating THROTTLE button under the finger
+// (hold = full throttle) and the RIGHT half spawns the attitude stick, which
+// then steers only (stick-hold no longer lights the engine). Set from the
+// Settings toggle, persisted in localStorage; off by default — the
+// one-handed stick-hold scheme stays the default.
+static SPLIT_CONTROLS: AtomicU32 = AtomicU32::new(0);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_split_controls(on: i32) {
+    SPLIT_CONTROLS.store(on as u32, Ordering::Relaxed);
+}
+
 // Runtime level loading (levels are DATA, not code — levels/*.level files
 // fetched by index.html): JS asks for a buffer with level_buf_ptr(len),
 // writes the UTF-8 level text into wasm memory, then calls load_level(len).
@@ -948,6 +961,10 @@ const STICK_TRAVEL: f32 = 60.0;  // logical px from centre = full deflection
 const STICK_DZ: f32 = 0.15;      // radial dead-zone (rescaled)
 const STICK_RADIUS: f32 = 85.0;  // logical px, ring radius (matches the old 170px element)
 const STICK_KNOB_R: f32 = 32.0;  // logical px, knob radius
+// Split-controls scheme (SPLIT_CONTROLS): the throttle button's ring radius.
+// Visual + park layout only — any owned touch is full throttle regardless of
+// where the finger sits on the button.
+const THROTTLE_RADIUS: f32 = 64.0; // logical px
 
 // The floating stick's live state, tracked across frames (all logical px).
 // `id` = the claimed touch (None = parked).
@@ -981,9 +998,24 @@ struct TouchStick {
 // touch) and an end+start pair collapsing into one frame leaves a genuinely
 // new finger on a familiar id.
 fn fresh_touch<'a>(frame: &'a [Touch], prev_ids: &[u64]) -> Option<&'a Touch> {
+    fresh_touch_in(frame, prev_ids, |_| true)
+}
+
+// The zone-predicate form of `fresh_touch` — same identity-not-phase rule,
+// restricted to touches landing where `zone` says. Split controls run two
+// claimants (left half = throttle button, right half = stick), each scanning
+// with its own half-screen zone; the zone only decides where a touch LANDS —
+// once claimed, a finger is followed by id wherever it moves, midline
+// included.
+fn fresh_touch_in<'a>(
+    frame: &'a [Touch],
+    prev_ids: &[u64],
+    zone: impl Fn(&Touch) -> bool,
+) -> Option<&'a Touch> {
     frame.iter().find(|t| {
         !matches!(t.phase, TouchPhase::Ended | TouchPhase::Cancelled)
             && (t.phase == TouchPhase::Started || !prev_ids.contains(&t.id))
+            && zone(t)
     })
 }
 
@@ -1030,6 +1062,31 @@ impl TouchStick {
     }
 }
 
+// The split-scheme floating throttle button's live state (logical px).
+// `id` = the claimed touch (None = parked bottom-left). The button rides
+// the finger while held — `pos` follows every move — and any owned touch is
+// full throttle: unlike the stick-hold path there is no flick delay, ramp
+// or flip gate (the button is an explicit burn command, instant like the
+// keyboard), and no dead-zone (position on the button carries no meaning).
+struct ThrottleButton {
+    id: Option<u64>,
+    pos: Vec2,
+}
+
+impl ThrottleButton {
+    fn new() -> Self {
+        ThrottleButton { id: None, pos: Vec2::ZERO }
+    }
+
+    fn held(&self) -> bool {
+        self.id.is_some()
+    }
+
+    fn release(&mut self) {
+        self.id = None;
+    }
+}
+
 // Draw the floating stick (logical px), matching the original HTML element:
 // a soft translucent filled base disc, faint ▲◀▶▼ hint arrows, a ring, and a
 // big soft knob. Parked (not held) the whole thing is dimmed to ~0.45; held
@@ -1064,6 +1121,35 @@ fn draw_stick(center: Vec2, knob: Vec2, held: bool, scale: f32) {
     // Big soft knob.
     draw_poly(center.x + knob.x, center.y + knob.y, SIDES, STICK_KNOB_R * scale, 0.0,
         Color::from_rgba(accent.0, accent.1, accent.2, a(if held { 0.85 } else { 0.45 })));
+}
+
+// Draw the split-scheme throttle button (logical px), in the stick's visual
+// language: soft filled base disc, ring, and a rocket-flame glyph in place
+// of a knob. Parked it dims like the parked stick; held it goes amber
+// (engine lit) and sits under the finger.
+fn draw_throttle(center: Vec2, held: bool) {
+    let (mul, accent) = if held { (1.0, (255u8, 200u8, 0u8)) } else { (0.45, (255, 255, 255)) };
+    let a = |alpha: f32| (alpha * mul * 255.0) as u8;
+    const SIDES: u8 = 64;
+    draw_poly(center.x, center.y, SIDES, THROTTLE_RADIUS, 0.0,
+        Color::from_rgba(255, 255, 255, a(0.08)));
+    draw_poly_lines(center.x, center.y, SIDES, THROTTLE_RADIUS, 0.0, 2.5,
+        Color::from_rgba(accent.0, accent.1, accent.2, a(if held { 0.7 } else { 0.35 })));
+    // Thrust glyph: nose-up rocket triangle over a small exhaust triangle.
+    let col = Color::from_rgba(accent.0, accent.1, accent.2, a(if held { 0.85 } else { 0.45 }));
+    let s = 18.0;
+    draw_triangle(
+        vec2(center.x, center.y - s * 1.2),
+        vec2(center.x - s * 0.85, center.y + s * 0.5),
+        vec2(center.x + s * 0.85, center.y + s * 0.5),
+        col,
+    );
+    draw_triangle(
+        vec2(center.x - s * 0.45, center.y + s * 0.75),
+        vec2(center.x + s * 0.45, center.y + s * 0.75),
+        vec2(center.x, center.y + s * 1.4),
+        col,
+    );
 }
 
 #[macroquad::main(window_conf)]
@@ -1217,6 +1303,8 @@ async fn main() {
     const COMPLETE_DIALOG_DELAY: f32 = 1.6;
     let mut complete_timer = 0.0f32;
     let mut stick = TouchStick::new();
+    // Split-controls scheme: the left-half floating throttle button.
+    let mut throttle_btn = ThrottleButton::new();
     // Touch ids that were on screen at the end of last frame — the stick's
     // fresh-touch gate (see fresh_touch: a phase test can't spot a new finger).
     let mut prev_touch_ids: Vec<u64> = Vec::new();
@@ -1357,6 +1445,12 @@ async fn main() {
         let tpos = |t: &Touch| t.position / touch_dpi;
         let invert = INVERT_STICK.load(Ordering::Relaxed) != 0;
         let stick_active = matches!(mode, Mode::Flying) && crash_timer <= 0.0 && !ui_paused;
+        // Split controls: the screen halves at the midline — LEFT fresh
+        // touches become the floating throttle button, RIGHT ones the
+        // stick (which then steers only). The zone gates only where a
+        // touch LANDS; a claimed finger is followed across the midline.
+        let split = SPLIT_CONTROLS.load(Ordering::Relaxed) != 0;
+        let half_x = screen_width() / 2.0;
         let frame_touches = touches();
         // Keep following / release the claimed stick touch.
         if let Some(id) = stick.id {
@@ -1365,12 +1459,29 @@ async fn main() {
                 _ => stick.release(),
             }
         }
+        // …and the throttle button's (same identity rules; the button
+        // rides the finger, so `pos` follows every move).
+        if let Some(id) = throttle_btn.id {
+            match frame_touches.iter().find(|t| t.id == id) {
+                Some(t) if !stick_touch_lost(Some(t)) => throttle_btn.pos = tpos(t),
+                _ => throttle_btn.release(),
+            }
+        }
         if !stick_active {
             stick.release();
         }
+        if !stick_active || !split {
+            throttle_btn.release();
+        }
         // Claim a fresh touch — by identity, not by phase (see fresh_touch).
+        // Under split controls the stick only claims touches landing on the
+        // right half; the left half belongs to the throttle button below.
         let claim = if stick_active && stick.id.is_none() {
-            fresh_touch(&frame_touches, &prev_touch_ids)
+            if split {
+                fresh_touch_in(&frame_touches, &prev_touch_ids, |t| tpos(t).x >= half_x)
+            } else {
+                fresh_touch(&frame_touches, &prev_touch_ids)
+            }
         } else {
             None
         };
@@ -1380,6 +1491,14 @@ async fn main() {
             stick.center = p;
             stick.held = true;
             stick.apply(p, invert);
+        }
+        if split
+            && stick_active
+            && throttle_btn.id.is_none()
+            && let Some(t) = fresh_touch_in(&frame_touches, &prev_touch_ids, |t| tpos(t).x < half_x)
+        {
+            throttle_btn.id = Some(t.id);
+            throttle_btn.pos = tpos(t);
         }
         prev_touch_ids.clear();
         prev_touch_ids.extend(
@@ -1414,10 +1533,17 @@ async fn main() {
         } else {
             stick_thrust_t = 0.0;
         }
-        let stick_throttle =
-            ((stick_thrust_t - STICK_THRUST_DELAY) / STICK_THRUST_RAMP).clamp(0.0, 1.0);
+        // Under split controls stick-hold never thrusts (the stick steers
+        // only) and the flick/flip gates above are moot — the throttle
+        // button is an explicit burn command, instant like the keyboard.
+        let stick_throttle = if split {
+            0.0
+        } else {
+            ((stick_thrust_t - STICK_THRUST_DELAY) / STICK_THRUST_RAMP).clamp(0.0, 1.0)
+        };
         let mut throttle_cmd = stick_throttle;
-        if is_mouse_button_down(MouseButton::Left)
+        if (split && throttle_btn.held())
+            || is_mouse_button_down(MouseButton::Left)
             || is_key_down(KeyCode::Down)
             || PAD_THRUST.load(Ordering::Relaxed) != 0
         {
@@ -2704,6 +2830,20 @@ async fn main() {
             } else {
                 draw_stick(stick_park, Vec2::ZERO, false, 1.0);
             }
+            // Split controls: the throttle button — under the finger while
+            // held, parked bottom-LEFT (mirroring the stick's park spot)
+            // otherwise.
+            if split {
+                if throttle_btn.held() {
+                    draw_throttle(throttle_btn.pos, true);
+                } else {
+                    let btn_park = vec2(
+                        safe_left + THROTTLE_RADIUS + 24.0,
+                        sh - safe_bottom - THROTTLE_RADIUS - 28.0,
+                    );
+                    draw_throttle(btn_park, false);
+                }
+            }
         }
 
         // Crash dialog / replay overlay / status banners. `ui_do_reset` (the
@@ -3601,6 +3741,35 @@ mod tests {
         // itself must still prefer a genuinely new id over the resting one.
         let frame = [touch(0, TouchPhase::Stationary), touch(1, TouchPhase::Moved)];
         assert_eq!(fresh_touch(&frame, &[0]).map(|t| t.id), Some(1));
+    }
+
+    fn touch_at(id: u64, phase: TouchPhase, x: f32) -> Touch {
+        Touch { id, phase, position: vec2(x, 20.0) }
+    }
+
+    // Split controls run two claimants over the same fresh scan, each with a
+    // half-screen zone: the throttle button takes touches LANDING left of
+    // the midline, the stick right of it. The zone must not weaken the
+    // identity rule — a phase-collapsed `Moved` landing is still claimed by
+    // its own half, and stays invisible to the other half's scan even when
+    // it is the only fresh touch on screen.
+    #[test]
+    fn split_zones_partition_fresh_touches_by_landing_half() {
+        let half = 500.0;
+        let left = |t: &Touch| t.position.x < half;
+        let right = |t: &Touch| t.position.x >= half;
+        // Two fingers landing in one frame, one per half (both collapsed to
+        // Moved): each scan claims its own.
+        let frame = [touch_at(0, TouchPhase::Moved, 100.0), touch_at(1, TouchPhase::Moved, 900.0)];
+        assert_eq!(fresh_touch_in(&frame, &[], left).map(|t| t.id), Some(0));
+        assert_eq!(fresh_touch_in(&frame, &[], right).map(|t| t.id), Some(1));
+        // Known ids are not re-claimed by either scan.
+        assert!(fresh_touch_in(&frame, &[0, 1], left).is_none());
+        assert!(fresh_touch_in(&frame, &[0, 1], right).is_none());
+        // A lone left-half touch never reaches the stick's scan.
+        let left_only = [touch_at(2, TouchPhase::Moved, 100.0)];
+        assert!(fresh_touch_in(&left_only, &[], right).is_none());
+        assert_eq!(fresh_touch_in(&left_only, &[], left).map(|t| t.id), Some(2));
     }
 
     // The whole world is pure functions of (level, position/slot index).

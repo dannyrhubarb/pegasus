@@ -28,8 +28,17 @@ the nose direction; a PD controller (spring + damper) torques the ship the
 short way to that angle. Two gates keep steering cheap: a *flick grace*
 (short touches never thrust) and a *flip settle* (commanding a >92° turn
 keeps the engine cold until the nose is nearly there). Holding the stick is
-the only touch thrust control (the old JET button is gone). Keyboard/gamepad
-use direct rate rotation and override the PD controller while held.
+the only touch thrust control in the default scheme (the old JET button is
+gone). Keyboard/gamepad use direct rate rotation and override the PD
+controller while held.
+
+**Split controls** (Settings toggle, off by default) is the two-handed
+alternative: the screen halves at the midline, a fresh left-half touch
+spawns a floating throttle button (hold = full throttle, instant; it rides
+the finger) and the right-half stick steers only. The § 3 gates exist to
+disambiguate steering from burning on the one-handed stick, so **none of
+them apply under split controls** — throttle there is an explicit command,
+like the keyboard.
 
 ## 2. Heading controller (how the nose chases the stick)
 
@@ -62,6 +71,9 @@ The gate resets the ramp, so a post-flip burn always fades in. If flips get
 faster (higher `TORQUE_MAX`), consider tightening `FLIP_DONE_RAD` so the
 relight doesn't happen mid-swing.
 
+All four gates are bypassed under split controls (see § 1) — the dedicated
+throttle button needs no disambiguation, so it commands 1.0 immediately.
+
 ## 4. Stick geometry (Rust, `src/main.rs` — the stick is in-canvas now)
 
 | Knob | Now | What it is | Notes |
@@ -70,6 +82,7 @@ relight doesn't happen mid-swing.
 | `STICK_DZ` | 0.15 | Radial dead-zone (fraction of travel, rescaled) | Below it: thrust-only hold, no heading command. Bigger = easier "just burn straight"; smaller = twitchier |
 | `STICK_ZONE` | 0.55 | Touches below this fraction of viewport height grab the stick | Lower value = bigger grab area (0.55 → lower 45%) |
 | `STICK_RADIUS` / `STICK_KNOB_R` | 85 / 32 (CSS px) | Visual only — input math uses `STICK_TRAVEL` | Keep `RADIUS ≈ TRAVEL + KNOB_R` so visuals match feel |
+| `THROTTLE_RADIUS` | 64 (CSS px) | Split-scheme throttle button ring (visual + park layout) | Any owned touch is full throttle — finger position on the button carries no meaning |
 
 (Values are CSS px, multiplied by `dpi` at draw/hit-test time — same rule as
 every other pixel constant.)
@@ -114,8 +127,8 @@ the controller-picker below.
 
 ## 8. Toward a settings / controller pane
 
-The plumbing pattern already exists, with two working examples
-(velocity-vector and invert-stick toggles) in `index.html`:
+The plumbing pattern already exists, with three working examples
+(velocity-vector, invert-stick and split-controls toggles) in `index.html`:
 
 1. Checkbox/slider in the info overlay (`stopPropagation`, **no**
    `preventDefault` — that kills checkbox clicks).
