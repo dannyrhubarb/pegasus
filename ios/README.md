@@ -82,8 +82,9 @@ Two workflows, both on free public-repo macOS runners:
   and an **unsigned** `xcodebuild` so shell/project regressions are caught
   before anyone opens Xcode. Needs no secrets.
 - **`ios-testflight.yml`** — on **manual dispatch only** (Actions → iOS
-  TestFlight → Run workflow; automatic publishing on `main` pushes is
-  paused since 2026-08 — the push trigger and its deliberately inverted
+  TestFlight → Run workflow, or release both apps at once via the
+  **Release apps** wrapper workflow; automatic publishing on `main` pushes
+  is paused since 2026-08 — the push trigger and its deliberately inverted
   `paths-ignore` filter are kept commented out in the workflow for when
   it resumes): archives with
   xcodebuild **cloud signing** (the App Store Connect API key creates and

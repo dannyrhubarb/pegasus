@@ -1,0 +1,52 @@
+# One-click store release: dispatches BOTH store-release workflows — iOS
+# TestFlight and Android release — now that automatic publishing on main
+# pushes is paused and releasing is a manual action. Untick a platform in
+# the dispatch form to release just one.
+#
+# It DISPATCHES the two workflows via the API instead of calling them as
+# reusable workflows (`uses:` / workflow_call) — DELIBERATELY, do not "tidy"
+# this: a workflow_call'ed workflow runs under the CALLER's
+# github.run_number, and both apps use their own workflow's run number as
+# the store build number (CFBundleVersion / versionCode), which Apple and
+# Google require to keep increasing — a fresh wrapper's counter would reset
+# them. Dispatching gives each workflow its own run and keeps its own
+# monotonic counter. workflow_dispatch events created with GITHUB_TOKEN are
+# exempt from the no-recursive-workflows guard, so the default token works
+# (with actions: write).
+name: Release apps
+
+on:
+  workflow_dispatch:
+    inputs:
+      ios:
+        description: "iOS — TestFlight"
+        type: boolean
+        default: true
+      android:
+        description: "Android — Play track + sideload APK"
+        type: boolean
+        default: true
+
+permissions:
+  actions: write # dispatch the two release workflows
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Dispatch iOS TestFlight
+        if: ${{ inputs.ios }}
+        run: gh workflow run ios-testflight.yml --ref "$GITHUB_REF_NAME"
+
+      - name: Dispatch Android release
+        if: ${{ inputs.android }}
+        run: gh workflow run android-release.yml --ref "$GITHUB_REF_NAME"
+
+      - name: Where to watch
+        run: |
+          echo "Dispatched. Follow the runs at:"
+          echo "  https://github.com/$GH_REPO/actions/workflows/ios-testflight.yml"
+          echo "  https://github.com/$GH_REPO/actions/workflows/android-release.yml"

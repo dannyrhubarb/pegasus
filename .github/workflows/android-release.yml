@@ -53,6 +53,7 @@ on:
   #     - ".github/workflows/ios-*.yml"
   #     - ".github/workflows/android-build.yml"
   #     - ".github/workflows/android-test-apk.yml"
+  #     - ".github/workflows/release-apps.yml"
   #     - ".github/actions/**"
 
 concurrency:
