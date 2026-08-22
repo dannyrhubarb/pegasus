@@ -26,7 +26,7 @@ jobs:
     # Fork PRs never deployed a preview (read-only token), nothing to remove.
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Remove preview from gh-pages branch
         uses: ./.github/actions/sync-pages-branch
@@ -35,7 +35,7 @@ jobs:
           message: "${{ env.SCOPE }}: teardown"
 
       - name: Comment teardown
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             await github.rest.issues.createComment({
