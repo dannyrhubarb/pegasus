@@ -32,8 +32,9 @@ changes.
   debug APK on an ubuntu runner and attaches it as an artifact, so every
   PR produces a directly installable build. No secrets needed.
 - **`android-release.yml`** — on **manual dispatch only** (Actions →
-  Android release → Run workflow; automatic publishing on `main` pushes
-  is paused since 2026-08 — the push trigger and its deliberately
+  Android release → Run workflow, or release both apps at once via the
+  **Release apps** wrapper workflow; automatic publishing on `main`
+  pushes is paused since 2026-08 — the push trigger and its deliberately
   inverted `paths-ignore` filter are kept commented out in the workflow
   for when it resumes): builds a **signed AAB + universal APK**
   (artifacts), **publishes the APK to GitHub Pages** at

@@ -57,6 +57,7 @@ on:
   #     - ".github/workflows/publish-pages.yml"
   #     - ".github/workflows/android-*.yml"
   #     - ".github/workflows/ios-build.yml"
+  #     - ".github/workflows/release-apps.yml"
   #     - ".github/actions/**"
 
 concurrency:

@@ -1927,7 +1927,17 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   (2026-08, owner request)**: both release workflows (`android-release.yml`
   and `ios-testflight.yml`) used to also run on every `main` push that
   could reach a device; store publishing is now a deliberate manual action
-  (Actions → run workflow). The push triggers are COMMENTED OUT in place
+  (Actions → run workflow). **`release-apps.yml` (Release apps)** is the
+  one-click wrapper: dispatching it fires both store workflows (per-platform
+  boolean inputs to skip one). It API-dispatches them (`gh workflow run`)
+  rather than `workflow_call`ing them — DELIBERATE: a called workflow runs
+  under the caller's `github.run_number`, and both apps use their own run
+  number as the store build number (CFBundleVersion / versionCode must keep
+  increasing), so a fresh wrapper counter would reset them; dispatch keeps
+  each workflow's own counter. (GITHUB_TOKEN-created `workflow_dispatch`
+  events are exempt from the no-recursive-workflows guard — unlike the
+  `push` case that makes publish-pages.yml use `workflow_run`.)
+  The push triggers are COMMENTED OUT in place
   in both files, hard-won filter comments included — resuming automatic
   publishing is uncommenting those blocks verbatim, nothing else. The
   preserved rationale (still binding when they return): the filters are
