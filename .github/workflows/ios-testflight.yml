@@ -1,10 +1,9 @@
 # Build, sign and upload the iOS app to TestFlight.
 #
-# Runs on manual dispatch, and on EVERY push to main that could change what
-# lands on a device — which is nearly all of them, since the app bundles the
-# whole web build. Merging to main is the deliberate release boundary; a
-# rebase merge of N commits is one push, so it produces one upload, and
-# `concurrency` serializes merges that land close together.
+# Runs on MANUAL DISPATCH ONLY (Actions → iOS TestFlight → Run workflow).
+# Automatic publishing on every main push is PAUSED (owner request, 2026-08);
+# the commented-out push trigger below — including its hard-won paths-ignore
+# rationale — is kept intact so resuming is just uncommenting it.
 #
 # If two builds land inside Apple's Beta App Review window the second gets
 # ANOTHER_BUILD_IN_REVIEW; testflight-distribute.py treats that as a soft
@@ -29,35 +28,36 @@
 name: iOS TestFlight
 
 on:
-  push:
-    branches: [main]
-    # INVERTED ON PURPOSE — do not "tidy" this back into a paths: allowlist.
-    # The app bundles the whole web build, so ios/ holds only the SHELL: a
-    # change to src/, index.html, mq_js_bundle.js or levels/ changes what
-    # ships to a device just as much as a Swift change. The old
-    # ios/**-only filter meant game fixes reached the website and left both
-    # apps frozen — the 2026-07 Android touch fix shipped only because its
-    # PR happened to also touch android/. An allowlist has to be remembered
-    # every time a file is added; this fails OPEN instead, so the worst case
-    # is one wasted build rather than a silently stale app.
-    paths-ignore:
-      - "docs/**"
-      - "tests/**"
-      - "**.md"
-      # Workflows that cannot change what lands on a device. NOT the whole
-      # of .github/: this workflow's OWN file must stay unignored so a fix
-      # to it is exercised by the next merge — that is how the Android
-      # release's `secrets in step if:` fix was verified (03e67a8, a
-      # commit touching nothing else). Forgetting to list a NEW workflow
-      # here costs one wasted build, which is the safe direction.
-      - ".github/workflows/ci.yml"
-      - ".github/workflows/deploy.yml"
-      - ".github/workflows/preview-*.yml"
-      - ".github/workflows/publish-pages.yml"
-      - ".github/workflows/android-*.yml"
-      - ".github/workflows/ios-build.yml"
-      - ".github/actions/**"
   workflow_dispatch:
+  # Push trigger PAUSED — restore by uncommenting this block verbatim.
+  # push:
+  #   branches: [main]
+  #   # INVERTED ON PURPOSE — do not "tidy" this back into a paths: allowlist.
+  #   # The app bundles the whole web build, so ios/ holds only the SHELL: a
+  #   # change to src/, index.html, mq_js_bundle.js or levels/ changes what
+  #   # ships to a device just as much as a Swift change. The old
+  #   # ios/**-only filter meant game fixes reached the website and left both
+  #   # apps frozen — the 2026-07 Android touch fix shipped only because its
+  #   # PR happened to also touch android/. An allowlist has to be remembered
+  #   # every time a file is added; this fails OPEN instead, so the worst case
+  #   # is one wasted build rather than a silently stale app.
+  #   paths-ignore:
+  #     - "docs/**"
+  #     - "tests/**"
+  #     - "**.md"
+  #     # Workflows that cannot change what lands on a device. NOT the whole
+  #     # of .github/: this workflow's OWN file must stay unignored so a fix
+  #     # to it is exercised by the next merge — that is how the Android
+  #     # release's `secrets in step if:` fix was verified (03e67a8, a
+  #     # commit touching nothing else). Forgetting to list a NEW workflow
+  #     # here costs one wasted build, which is the safe direction.
+  #     - ".github/workflows/ci.yml"
+  #     - ".github/workflows/deploy.yml"
+  #     - ".github/workflows/preview-*.yml"
+  #     - ".github/workflows/publish-pages.yml"
+  #     - ".github/workflows/android-*.yml"
+  #     - ".github/workflows/ios-build.yml"
+  #     - ".github/actions/**"
 
 concurrency:
   group: ios-testflight

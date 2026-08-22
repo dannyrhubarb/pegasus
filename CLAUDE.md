@@ -1821,9 +1821,10 @@ re-acquired on the `visibilitychange` back while still wanted).
   `Assets.xcassets` (no alpha — App Store validation rejects it);
   re-render if the SVG changes.
 - **CI**: `ios-build.yml` (PRs touching `ios/` — sync + UNSIGNED
-  xcodebuild, no secrets) and `ios-testflight.yml` (manual dispatch +
-  **every `main` push that could reach a device** — cloud-signed archive
-  → TestFlight;
+  xcodebuild, no secrets) and `ios-testflight.yml` (**manual dispatch
+  ONLY** — automatic publish on `main` pushes is PAUSED since 2026-08,
+  owner request; see the paused-trigger note under Android CI —
+  cloud-signed archive → TestFlight;
   needs the four `APP_STORE_CONNECT_API_*`/`APPLE_TEAM_ID` repo secrets
   and the ASC app record; build number = workflow run number). Both run on
   **`macos-26` and select the newest stable Xcode** — App Store Connect
@@ -1917,15 +1918,22 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   back, so the leave-the-app gesture keeps its predictive animation).
 - **CI**: `android-build.yml` (PRs touching `android/` — debug APK built
   on ubuntu + attached as an installable artifact, no secrets) and
-  `android-release.yml` (manual dispatch + **every `main` push that could
-  reach a device** — signed AAB + universal APK artifacts; uploads the AAB to
+  `android-release.yml` (**manual dispatch ONLY** — see the paused-trigger
+  note below — signed AAB + universal APK artifacts; uploads the AAB to
   the **Play internal track** when `PLAY_SERVICE_ACCOUNT_JSON` is set,
   skipped otherwise; needs the four `ANDROID_KEYSTORE_*`/`ANDROID_KEY_*`
   secrets; versionCode = workflow run number; **the first Play upload
-  must be manual** — Google requirement). **Both release workflows filter
-  with `paths-ignore` (docs/tests/markdown/`.github`), NOT a `paths`
-  allowlist — INVERTED ON PURPOSE**: the apps bundle the whole web build,
-  so `ios/`+`android/` are only the SHELLS and a change to `src/`,
+  must be manual** — Google requirement). **Automatic publish PAUSED
+  (2026-08, owner request)**: both release workflows (`android-release.yml`
+  and `ios-testflight.yml`) used to also run on every `main` push that
+  could reach a device; store publishing is now a deliberate manual action
+  (Actions → run workflow). The push triggers are COMMENTED OUT in place
+  in both files, hard-won filter comments included — resuming automatic
+  publishing is uncommenting those blocks verbatim, nothing else. The
+  preserved rationale (still binding when they return): the filters are
+  `paths-ignore` (docs/tests/markdown/named-irrelevant-workflows), NOT a
+  `paths` allowlist — INVERTED ON PURPOSE: the apps bundle the whole web
+  build, so `ios/`+`android/` are only the SHELLS and a change to `src/`,
   `index.html`, `mq_js_bundle.js` or `levels/` changes what ships to a
   device. The old shell-only filters left both apps frozen while the
   website moved (the 2026-07 Android touch fix shipped only because its PR
@@ -1936,7 +1944,10 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   irrelevant workflows rather than all of `.github/` **so each release
   workflow's OWN file stays unignored** — a fix to it is then exercised by
   the next merge, which is how `03e67a8` (a commit touching nothing but
-  `android-release.yml`) was verified.
+  `android-release.yml`) was verified. **Pause side effect**: the sideload
+  APK at Pages `app/pegasus.apk` and TestFlight both go stale between
+  manual runs — a merged fix reaches the website automatically but reaches
+  devices only when someone dispatches the release workflows.
 - **`tools/check-bundle-sync.py`** (CI, 2026-07) pins the three
   hand-maintained copy lists — `build-site`, `ios/sync-web.sh`,
   `android/sync-web.sh` — against each other. Adding a file to the website

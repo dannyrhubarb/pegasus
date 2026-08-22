@@ -3,10 +3,12 @@
 # upload the AAB to the Play internal testing track — the Android twin of
 # ios-testflight.yml.
 #
-# Runs on manual dispatch, and on EVERY push to main that could change what
-# lands on a device — which is nearly all of them, since the app bundles the
-# whole web build. Merging to main is the deliberate release boundary; a
-# rebase merge of N commits is one push, so it produces one release run.
+# Runs on MANUAL DISPATCH ONLY (Actions → Android release → Run workflow).
+# Automatic publishing on every main push is PAUSED (owner request, 2026-08);
+# the commented-out push trigger below — including its hard-won paths-ignore
+# rationale — is kept intact so resuming is just uncommenting it. Note the
+# pause also stops the sideload APK on GitHub Pages (app/pegasus.apk) from
+# auto-refreshing — a manual run updates it.
 #
 # Required repository secrets (signing):
 #   ANDROID_KEYSTORE_BASE64     the upload keystore (.jks), base64-encoded
@@ -25,32 +27,33 @@
 name: Android release
 
 on:
-  push:
-    branches: [main]
-    # INVERTED ON PURPOSE — see the twin comment in ios-testflight.yml. The
-    # app bundles the whole web build, so android/ is only the SHELL and a
-    # game change alters what ships to a device. An allowlist has to be
-    # remembered every time a file is added; this fails OPEN, so the worst
-    # case is a wasted build rather than a silently stale app.
-    paths-ignore:
-      - "docs/**"
-      - "tests/**"
-      - "**.md"
-      # Workflows that cannot change what lands on a device. NOT the whole
-      # of .github/: this workflow's OWN file must stay unignored so a fix
-      # to it is exercised by the next merge — that is how this workflow's
-      # `secrets in step if:` fix was verified (03e67a8, a commit
-      # touching nothing else). Forgetting to list a NEW workflow
-      # here costs one wasted build, which is the safe direction.
-      - ".github/workflows/ci.yml"
-      - ".github/workflows/deploy.yml"
-      - ".github/workflows/preview-*.yml"
-      - ".github/workflows/publish-pages.yml"
-      - ".github/workflows/ios-*.yml"
-      - ".github/workflows/android-build.yml"
-      - ".github/workflows/android-test-apk.yml"
-      - ".github/actions/**"
   workflow_dispatch:
+  # Push trigger PAUSED — restore by uncommenting this block verbatim.
+  # push:
+  #   branches: [main]
+  #   # INVERTED ON PURPOSE — see the twin comment in ios-testflight.yml. The
+  #   # app bundles the whole web build, so android/ is only the SHELL and a
+  #   # game change alters what ships to a device. An allowlist has to be
+  #   # remembered every time a file is added; this fails OPEN, so the worst
+  #   # case is a wasted build rather than a silently stale app.
+  #   paths-ignore:
+  #     - "docs/**"
+  #     - "tests/**"
+  #     - "**.md"
+  #     # Workflows that cannot change what lands on a device. NOT the whole
+  #     # of .github/: this workflow's OWN file must stay unignored so a fix
+  #     # to it is exercised by the next merge — that is how this workflow's
+  #     # `secrets in step if:` fix was verified (03e67a8, a commit
+  #     # touching nothing else). Forgetting to list a NEW workflow
+  #     # here costs one wasted build, which is the safe direction.
+  #     - ".github/workflows/ci.yml"
+  #     - ".github/workflows/deploy.yml"
+  #     - ".github/workflows/preview-*.yml"
+  #     - ".github/workflows/publish-pages.yml"
+  #     - ".github/workflows/ios-*.yml"
+  #     - ".github/workflows/android-build.yml"
+  #     - ".github/workflows/android-test-apk.yml"
+  #     - ".github/actions/**"
 
 concurrency:
   group: android-release
