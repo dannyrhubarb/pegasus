@@ -1765,8 +1765,30 @@ backend-verification flow.
   may simply lead with neutral ticks, which the verifier is fine with).
   JS resets the run (`ui_command 1`) and holds `set_ui_pause(1)` through
   the 3-2-1, so the sim is guaranteed fresh and frozen when the gun fires.
-  **A mid-race respawn/level-switch drops the remote feed** (the shared
-  clock is broken); rematches re-arm a fresh one.
+  The countdown gates only the FIRST launch after a level pick — respawns
+  inside a persistent room (below) use the ordinary armed-idle gate. A
+  level switch still drops the remote feed (new world).
+- **Persistent rooms (2026-08)**: a run's end does NOT end the session —
+  after a crash / fuel-out / completion (and the optional submit dialog)
+  the player respawns straight back into the shared world, and an R / ⟳
+  restart is just a quick respawn; the room lives until someone actively
+  leaves (the pause screen's Exit, or a disconnect). Mechanism: the local
+  reset block keeps the opponent feed, restarts the outgoing mirror at the
+  fresh recording's origin and queues an 8-byte **respawn marker**
+  (`mp_push_respawn_marker`, a pseudo-batch with `total = u32::MAX`)
+  IN-BAND on `MP_OUT` — ordering against the batches is correct by
+  construction, no JS involvement. The receiver's `mp_ingest_stream`
+  replaces its `RemoteFeed` exactly at the marker (spawn keyframe = the
+  local recorder's kf 0, a pure function of the shared level+seed) and
+  clears the remote-over flag; `ingest_batch` independently caps a
+  hostile batch's tick total so it can't spin the receiver's catch-up
+  loop. On `seed = random` levels the pinned concrete seed means respawns
+  keep the SAME world (`with_rolled_seed` no-ops on the pinned text) —
+  the room IS its world until the host picks anew. The opponent
+  silhouette stays visible through the local wreck/dialog/armed-idle wait
+  (`mp_pose` gates only on `Flying | CrashDialog`); their own crash still
+  hides them until their marker arrives. Unit test:
+  `persistent_room_respawn_marker_resets_the_feed_bit_exactly`.
 - **JS (`pegMP` in index.html, after the analytics module)**: same
   never-break-the-game rules as analytics (every entry point try/caught) —
   but deliberately NOT analytics' `navigator.webdriver` gate, so e2e
@@ -1777,11 +1799,13 @@ backend-verification flow.
   (`hello` incl. build id — mismatch shows a "may drift" banner, the
   keyframe snap covers it — `level`, `ready`, `start`, `run_end`) +
   binary input batches relayed verbatim to/from the wasm. Menu:
-  `scr-mp` / `scr-mp-host` (room code) / `scr-mp-join` / `scr-mp-lobby` /
-  `scr-mp-results`, all with `.mbtn.back` (hardware back for free) +
-  `histPath` entries; the level picker gains an `"mp"` mode (host pick →
-  `pegMP.hostPickedLevel`). The countdown overlay + the magenta
-  `#mp-banner` notice live outside `#menu` (over the frozen game).
+  `scr-mp` / `scr-mp-host` (room code) / `scr-mp-join` / `scr-mp-lobby`,
+  all with `.mbtn.back` (hardware back for free) + `histPath` entries;
+  the level picker gains an `"mp"` mode (host pick →
+  `pegMP.hostPickedLevel`). There is NO results screen (persistent rooms
+  replaced it — run ends are transient banners). The countdown overlay +
+  the magenta `#mp-banner` notice live outside `#menu` (over the frozen
+  game).
 - **Seed pinning**: the host rewrites `seed = random` to a concrete roll
   before transmitting AND loads that same text itself (`pushLevel(file,
   textOverride)`), so both fly identical rock and the backend's
@@ -1819,14 +1843,20 @@ backend-verification flow.
 - **Run end**: the module watches the analytics run channel
   (`run_end_seq` + cause/dist/ticks mirrors — no new channel) for its own
   end, sends `run_end {cause, score}` (time levels: completion seconds,
-  DNF = null), and flags the peer's via `set_mp_remote_over`. The
-  ui-state poll's wrap-up target becomes `scr-mp-results` while
-  `pegMP.inRace()` (submit dialog first as usual; consent detour skipped
-  during races). Results: win/lose/dead-heat (lower wins on time levels,
-  DNF loses to any finish), Rematch (host re-picks the same file — a
-  random-seed level re-rolls) and Exit. **Disconnect mid-race degrades to
-  a normal solo run** (banner, feed torn down) — the local flight is
-  never blocked by network state.
+  DNF = null), and flags the peer's via `set_mp_remote_over`. A received
+  run_end is a transient banner ("X CRASHED — 1234 m" / "X FINISHED —
+  0:58.3"; quick restarts pass silently) — never a blocking screen. While
+  `pegMP.inRace()` the ui-state poll's wrap-up is `pegMP.respawn()` — the
+  submit dialog first as usual, closed through the `"mp-respawn"`
+  pseudo-target (`closeNameDialog`); the consent detour stays out of the
+  room flow. A reset-cause end restarts the outgoing stream directly from
+  the run watcher (no dialog on resets). Leaving: the pause screen's Exit
+  calls `pegMP.leaveRoom()` BEFORE the reset (teardown first ⇒ no respawn
+  marker is sent; the peer gets a clean disconnect) and restores the
+  level's original text so a pinned random seed re-rolls in solo play.
+  **Disconnect mid-race degrades to a normal solo run** ("OPPONENT LEFT —
+  FLYING SOLO" banner, feed torn down) — the local flight is never
+  blocked by network state.
 
 ## Physics notes
 

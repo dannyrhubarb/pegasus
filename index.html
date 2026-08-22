@@ -842,16 +842,6 @@
       text-shadow: 0 0 10px rgba(255, 194, 75, 0.8), 0 0 30px rgba(255, 194, 75, 0.4);
     }
     #mp-code-input { letter-spacing: 0.3em; }
-    .mp-res-row {
-      font: 800 clamp(20px, 5.4vw, 30px)/1.35 var(--mono);
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      color: var(--text);
-    }
-    .mp-res-row .mp-res-score {
-      color: var(--amber);
-      text-shadow: 0 0 12px rgba(255, 194, 75, 0.5);
-    }
     /* 3-2-1 countdown: floats over the live (frozen) game — purely visual,
        pointer-events off; the game is held by set_ui_pause through it. */
     #mp-countdown {
@@ -1402,15 +1392,6 @@
       <div class="mbtn back" id="btn-mp-fail-back">&#8249; Back</div>
     </div>
 
-    <div class="screen" id="scr-mp-results">
-      <div class="title crash" id="mp-res-title">RACE OVER</div>
-      <div class="mp-res-row" id="mp-res-you"></div>
-      <div class="mp-res-row" id="mp-res-peer"></div>
-      <div class="hint" id="mp-res-status"></div>
-      <div class="mbtn primary" id="btn-mp-rematch" style="display:none">Rematch</div>
-      <div class="mbtn back" id="btn-mp-exit">&#8249; Exit race</div>
-    </div>
-
     <!-- CRT scanlines + vignette + sweep, over everything but tap-transparent -->
     <div class="crt" aria-hidden="true"></div>
   </div>
@@ -1823,8 +1804,12 @@
     document.getElementById("btn-fly").addEventListener("click", () => openLevelPicker("fly"));
     document.getElementById("btn-resume").addEventListener("click", closeMenu);
     document.getElementById("btn-exit").addEventListener("click", () => {
-      // Abandoning the run ends it (reset-ended runs are never submitted
-      // online); the fresh ship waits, paused, behind the menu.
+      // In a multiplayer room this IS the active "leave the room" choice
+      // (torn down BEFORE the reset below, so no respawn marker is sent
+      // and the peer gets a clean disconnect). Abandoning the run ends it
+      // (reset-ended runs are never submitted online); the fresh ship
+      // waits, paused, behind the menu.
+      pegMP.leaveRoom();
       call("ui_command", 1);
       showScreen("scr-home");
     });
@@ -1953,7 +1938,6 @@
         case "scr-mp-join":    return ["scr-home", "scr-mp", "scr-mp-join"];
         case "scr-mp-lobby":   return ["scr-home", "scr-mp", "scr-mp-lobby"];
         case "scr-mp-fail":    return ["scr-home", "scr-mp", "scr-mp-fail"];
-        case "scr-mp-results": return ["scr-home", "game", "scr-mp-results"];
         default:             return ["scr-home", s]; // future screens: child of home
       }
     }
@@ -2103,11 +2087,17 @@
         // scr-gameover.
         collectEndedRun();
         pegAnalytics.pollRuns();
-        // During a multiplayer race the wrap-up is the race results screen
-        // (waiting for the opponent / win-lose), not the solo game-over;
-        // the consent detour stays out of the race flow.
-        const afterScore = pegMP.inRace() ? "scr-mp-results"
-          : pegAnalytics.consentDue() ? "scr-consent" : "scr-gameover";
+        // In a multiplayer room the wrap-up is a RESPAWN, not a screen:
+        // the room is persistent — after the optional submit dialog the
+        // player flies again in the shared world until they actively
+        // leave. The consent detour stays out of the room flow.
+        if (pegMP.inRace()) {
+          if (pendingSubmit) openNameDialog("mp-respawn");
+          else pegMP.respawn();
+          prevState = st;
+          return;
+        }
+        const afterScore = pegAnalytics.consentDue() ? "scr-consent" : "scr-gameover";
         // Every crash-ended publishable run gets the submit/skip dialog in
         // the game-over screen's slot (leading there on either choice); the
         // callsign input arrives prefilled once a name is persisted.
@@ -3039,6 +3029,12 @@
     // The submit-score dialog doubles as the Settings name editor: with a
     // pending run it submits on save, without one it just persists the name.
     let nameReturnTo = "scr-gameover";
+    // In a multiplayer room the dialog's exit is a respawn, not a screen
+    // (the room is persistent) — "mp-respawn" is that pseudo-target.
+    function closeNameDialog() {
+      if (nameReturnTo === "mp-respawn") pegMP.respawn();
+      else showScreen(nameReturnTo);
+    }
     function openNameDialog(returnTo) {
       nameReturnTo = returnTo;
       // Big amber score readout like the game-over screen; empty (zero
@@ -3064,7 +3060,7 @@
         submitScore(pendingSubmit.file, pendingSubmit.entry);
         pendingSubmit = null;
       }
-      showScreen(nameReturnTo);
+      closeNameDialog();
     });
     document.getElementById("btn-name-skip").addEventListener("click", () => {
       // Only the crash-flow ask counts as a skip — closing the Settings
@@ -3074,7 +3070,7 @@
           { action: "skipped", level: levelStem(pendingSubmit.file) });
       }
       pendingSubmit = null; // this run stays unsubmitted; asks again next crash
-      showScreen(nameReturnTo);
+      closeNameDialog();
     });
     nameInput.addEventListener("keydown", e => {
       e.stopPropagation(); // typing must never reach the game's key handlers
@@ -3771,11 +3767,6 @@
       const codeInput = document.getElementById("mp-code-input");
       const pickBtn = document.getElementById("btn-mp-pick");
       const shareBtn = document.getElementById("btn-mp-share");
-      const resTitle = document.getElementById("mp-res-title");
-      const resYou = document.getElementById("mp-res-you");
-      const resPeer = document.getElementById("mp-res-peer");
-      const resStatus = document.getElementById("mp-res-status");
-      const rematchBtn = document.getElementById("btn-mp-rematch");
       const countEl = document.getElementById("mp-countdown");
       const countNum = document.getElementById("mp-count-num");
       const bannerEl = document.getElementById("mp-banner");
@@ -3784,11 +3775,10 @@
       let ws = null, pc = null, dc = null;
       let iceServers = null;
       let role = null;           // "host" | "guest"
-      let state = "idle";        // idle|hosting|joining|lobby|starting|racing|results
+      let state = "idle";        // idle|hosting|joining|lobby|starting|racing
       let peerName = "";
       let peerBuild = "";
       let raceFile = null;       // the level file the race runs on
-      let localEnd = null, remoteEnd = null; // {cause, score}
       let sendTimer = null, countTimer = null;
       let lastEndSeq = null;     // run_end_seq at the gun (own-run watcher)
       let bannerTimer = null;
@@ -3883,7 +3873,6 @@
         call("set_mp_active", 0);
         state = "idle";
         role = null;
-        localEnd = remoteEnd = null;
         lastEndSeq = null;
         peerName = "";
         peerBuild = "";
@@ -3892,14 +3881,35 @@
       // Full exit (menus): tear down and restore the level's ORIGINAL text
       // — the race may have loaded a seed-pinned copy of a `seed = random`
       // level, which must not survive into solo play.
-      function exitToMenu(screen) {
-        const file = raceFile;
-        raceFile = null;
-        teardownNet();
+      // Leaving the room is the ONE explicit exit from a persistent
+      // session: tear the network down (set_mp_active 0 — the wasm sweeps
+      // the opponent feed) and restore the level's original text, so a
+      // pinned random seed goes back to re-rolling in solo play. Safe to
+      // call when idle (no-op beyond the teardown bookkeeping).
+      function leaveRoom() {
         try {
+          const file = raceFile;
+          raceFile = null;
+          teardownNet();
           if (file && levelTexts[file] !== undefined) pushLevel(file);
         } catch (_) {}
-        showScreen(screen);
+      }
+
+      // Persistent room: after the local run wraps up (crash / fuel-out /
+      // completion → the optional submit dialog), respawn straight back
+      // into the shared world — no results screen, the room lives until
+      // someone actively leaves. The wasm reset queues the in-band respawn
+      // marker for the peer; here we just fire the respawn and resume the
+      // outgoing stream. If the room died while a dialog was up (peer
+      // gone → teardown), fall through to the normal solo game-over.
+      function respawn() {
+        try {
+          if (state !== "racing") { showScreen("scr-gameover"); return; }
+          uiCmdPending = true;   // see the ui-state poll's state-2 guard
+          call("ui_command", 1);
+          closeMenu();
+          startStreaming();
+        } catch (_) {}
       }
 
       function connectWs(onOpen) {
@@ -4123,7 +4133,7 @@
             prepareLevel(String(m.file || "race.level"), String(m.text || ""));
             dcSend({ t: "ready" });
             lobbyStatus.textContent = "Level loaded — get ready…";
-            if (overlay !== "scr-mp-lobby" && overlay !== "scr-mp-results") showScreen("scr-mp-lobby");
+            if (overlay !== "scr-mp-lobby") showScreen("scr-mp-lobby");
             break;
           case "ready": // host: guest has the level — fire the gun
             if (role !== "host") break;
@@ -4134,30 +4144,34 @@
             if (role !== "guest") break;
             beginCountdown();
             break;
-          case "run_end":
-            // null score = a DNF (time-level crash/reset) — keep it null,
-            // Number(null) would masquerade as a 0.0 s finish.
-            remoteEnd = {
-              cause: String(m.cause || "crash"),
-              score: m.score === null || m.score === undefined ? null : Number(m.score),
-            };
+          case "run_end": {
+            // Persistent room: the peer's ended run is a moment, not a
+            // screen — a transient banner with their result; their respawn
+            // marker (in-band on the binary stream) then resets the ghost
+            // for the next run. null score = a DNF, never a 0.0 s finish.
+            const sc = m.score === null || m.score === undefined ? null : Number(m.score);
+            const cause = String(m.cause || "crash");
+            const who = (peerName || "RIVAL").toUpperCase();
+            if (cause === "complete") {
+              banner(who + " FINISHED — " + fmtScore(raceFile, sc));
+            } else if (cause !== "reset") {
+              // A quick in-room restart (cause reset) passes silently.
+              banner(who + " CRASHED" + (sc !== null && !levelIsTime(raceFile)
+                ? " — " + fmtScore(raceFile, sc) : ""));
+            }
             call("set_mp_remote_over");
-            updateResults();
             break;
+          }
         }
       }
 
       function onPeerGone() {
         try {
           if (state === "racing" || state === "starting") {
-            // Mid-race: the race degrades to a normal solo run — never
+            // Mid-race: the room degrades to a normal solo run — never
             // block the player's own flight on network state.
             teardownNet();
-            banner("OPPONENT LOST — RACE VOID");
-          } else if (state === "results") {
-            teardownNet();
-            resStatus.textContent = "Opponent left";
-            rematchBtn.style.display = "none";
+            banner("OPPONENT LEFT — FLYING SOLO");
           } else if (state !== "idle") {
             const msg = "Opponent disconnected";
             hostStatus.textContent = msg;
@@ -4207,7 +4221,6 @@
       function beginCountdown() {
         try {
           state = "starting";
-          localEnd = remoteEnd = null;
           call("set_mp_active", 1);
           pushTextToWasm(peerName, "set_mp_name");
           uiCmdPending = true;   // see the ui-state poll's state-2 guard
@@ -4276,11 +4289,7 @@
           const score = levelIsTime(raceFile)
             ? (cause === "complete" ? ticks / 120 : null)
             : wasm_exports.run_end_dist();
-          localEnd = { cause, score };
           dcSend({ t: "run_end", cause, score });
-          // A mid-race restart/exit abandons the race locally (the wasm
-          // already dropped the opponent feed with the respawn).
-          if (cause === "reset") banner("RACE LEFT — FLYING SOLO");
           clearInterval(sendTimer); // one last drain below, then quiet
           try {
             if (dc && dc.readyState === "open" && wasm_exports.mp_out_take) {
@@ -4290,71 +4299,20 @@
               }
             }
           } catch (_) {}
-          updateResults();
+          // A manual mid-run restart (R / ⟳) is just a quick respawn in
+          // the persistent room: the wasm already reset and queued the
+          // in-band respawn marker — resume the stream right away. Ended
+          // runs (crash/fuel/complete) resume it from respawn() after the
+          // wrap-up instead.
+          if (cause === "reset") startStreaming();
         } catch (_) {}
       }, 200);
-
-      function fmtRaceScore(end) {
-        if (!end) return "…";
-        if (end.score === null || end.score === undefined || isNaN(end.score)) return "DNF";
-        return fmtScore(raceFile, end.score);
-      }
-
-      // Lower-is-better on time levels; DNF loses to any finish.
-      function winnerOf(a, b) {
-        const an = a.score === null || a.score === undefined || isNaN(a.score);
-        const bn = b.score === null || b.score === undefined || isNaN(b.score);
-        if (an && bn) return 0;
-        if (an) return -1;
-        if (bn) return 1;
-        if (a.score === b.score) return 0;
-        const lowerWins = levelIsTime(raceFile);
-        return (a.score < b.score) === lowerWins ? 1 : -1;
-      }
-
-      function updateResults() {
-        try {
-          if (state !== "racing" && state !== "results") return;
-          resYou.innerHTML = "";
-          resPeer.innerHTML = "";
-          const row = (el, who, end) => {
-            el.textContent = who + " — ";
-            const sc = document.createElement("span");
-            sc.className = "mp-res-score";
-            sc.textContent = fmtRaceScore(end);
-            el.appendChild(sc);
-          };
-          row(resYou, "YOU", localEnd);
-          row(resPeer, (peerName || "THEM").toUpperCase(), remoteEnd);
-          if (localEnd && remoteEnd) {
-            state = "results";
-            const w = winnerOf(localEnd, remoteEnd);
-            resTitle.textContent = w > 0 ? "YOU WIN" : w < 0 ? "YOU LOSE" : "DEAD HEAT";
-            resTitle.classList.toggle("win", w > 0);
-            resStatus.textContent = "";
-            // Rematch: host re-runs the level pick (re-rolling a random
-            // seed); the guest follows the same level/ready/start flow.
-            rematchBtn.style.display = role === "host" && dc && dc.readyState === "open" ? "" : "none";
-            if (role === "guest" && dc && dc.readyState === "open") {
-              resStatus.textContent = "The host can start a rematch";
-            }
-          } else {
-            resTitle.textContent = "RACE OVER";
-            resTitle.classList.remove("win");
-            resStatus.textContent = localEnd
-              ? "Waiting for " + (peerName || "your opponent").toUpperCase() + " to finish…"
-              : "";
-            rematchBtn.style.display = "none";
-          }
-        } catch (_) {}
-      }
 
       // --- UI wiring -----------------------------------------------------
       document.getElementById("btn-mp").addEventListener("click", () => {
         // Re-entering the multiplayer menu while a session is live returns
         // to wherever that session stands; otherwise the fresh menu.
-        if (state === "results") showScreen("scr-mp-results");
-        else if (state === "hosting") showScreen("scr-mp-host");
+        if (state === "hosting") showScreen("scr-mp-host");
         else if (state === "lobby") showScreen("scr-mp-lobby");
         else showScreen("scr-mp");
       });
@@ -4416,9 +4374,6 @@
         codeInput.value = codeInput.value.toUpperCase();
       });
       pickBtn.addEventListener("click", () => openLevelPicker("mp"));
-      rematchBtn.addEventListener("click", () => {
-        if (role === "host" && raceFile) hostPickedLevel(raceFile);
-      });
       // Back/leave buttons tear the session down (hardware back rides the
       // .mbtn.back class on each).
       document.getElementById("btn-mp-host-back").addEventListener("click", () => {
@@ -4436,15 +4391,14 @@
       document.getElementById("btn-mp-fail-back").addEventListener("click", () => {
         showScreen("scr-mp"); // the failed attempt was already torn down
       });
-      document.getElementById("btn-mp-exit").addEventListener("click", () => {
-        exitToMenu("scr-home");
-      });
 
       return {
         configure,
         hostPickedLevel,
-        // The race wrap-up owns the post-run flow while a race is live.
-        inRace: () => state === "racing" || state === "results",
+        respawn,
+        leaveRoom,
+        // The room owns the post-run flow while a session is live.
+        inRace: () => state === "racing" || state === "starting",
       };
     })();
 
