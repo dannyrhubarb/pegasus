@@ -31,14 +31,14 @@ changes.
 - **`android-build.yml`** — on every PR touching `android/`: builds a
   debug APK on an ubuntu runner and attaches it as an artifact, so every
   PR produces a directly installable build. No secrets needed.
-- **`android-release.yml`** — on manual dispatch and on **every push to
-  `main` that could change what lands on a device** (the filter is
-  `paths-ignore` for docs/tests/markdown/`.github`, deliberately inverted —
-  the app bundles the whole web build, so a game change matters as much as
-  a Kotlin one): builds a **signed AAB + universal APK**
+- **`android-release.yml`** — on **manual dispatch only** (Actions →
+  Android release → Run workflow; automatic publishing on `main` pushes
+  is paused since 2026-08 — the push trigger and its deliberately
+  inverted `paths-ignore` filter are kept commented out in the workflow
+  for when it resumes): builds a **signed AAB + universal APK**
   (artifacts), **publishes the APK to GitHub Pages** at
   `https://dannyrhubarb.github.io/pegasus/app/pegasus.apk` (a public
-  direct-download sideload link, refreshed every release), and uploads
+  direct-download sideload link, refreshed every release run), and uploads
   the AAB to the **Play internal testing track** once
   `PLAY_SERVICE_ACCOUNT_JSON` is configured (the step is skipped until
   then). `versionCode` = the workflow run number.
@@ -99,8 +99,9 @@ hassle.
 4. **Automate uploads**: Play Console → Setup → API access → link a Google
    Cloud project → create a service account with the *Release manager*
    role, download its JSON key, and paste the whole JSON into the
-   `PLAY_SERVICE_ACCOUNT_JSON` repo secret. From then on the release
-   workflow uploads every build to the internal track by itself.
+   `PLAY_SERVICE_ACCOUNT_JSON` repo secret. From then on every release
+   workflow run uploads its build to the internal track by itself (runs
+   are manual-dispatch only while automatic publishing is paused).
 5. **Wider testing/production**: personal accounts created after 2023
    must run a closed test (≥ 12 testers for 14 days) before applying for
    production access. Internal testing (up to 100 testers by email) works
