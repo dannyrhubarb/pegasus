@@ -500,28 +500,38 @@ impl RemoteFeed {
         }
     }
 
-    // Fold received batches into the recording. Events replay through
+    // Fold one received batch into the recording. Events replay through
     // record_tick (same dedup as the sender's recorder, so the event lists
     // stay identical); keyframes append for the player's drift check.
+    fn ingest_batch(&mut self, (total, events, kfs): MpBatch) {
+        // The respawn marker (total == u32::MAX) is routed by
+        // mp_ingest_stream and never lands here; independently, an absurd
+        // total from a hostile peer is capped so it can't spin the
+        // catch-up loop below for minutes on the RECEIVER's CPU.
+        let total = total.min(self.rec.ticks().saturating_add(120_000));
+        for kf in kfs {
+            if self.rec.keyframes.last().is_none_or(|k| kf.tick > k.tick) {
+                self.rec.push_keyframe(kf);
+            }
+        }
+        for e in events {
+            if e.tick >= self.rec.ticks() {
+                self.pending.push_back(e);
+            }
+        }
+        while self.rec.ticks() < total {
+            let t = self.rec.ticks();
+            while self.pending.front().is_some_and(|e| e.tick <= t) {
+                self.cur_input = self.pending.pop_front().unwrap().input;
+            }
+            self.rec.record_tick(self.cur_input);
+        }
+    }
+
+    #[cfg(test)]
     fn ingest(&mut self, data: &[u8]) {
-        for (total, events, kfs) in mp_parse_batches(data) {
-            for kf in kfs {
-                if self.rec.keyframes.last().is_none_or(|k| kf.tick > k.tick) {
-                    self.rec.push_keyframe(kf);
-                }
-            }
-            for e in events {
-                if e.tick >= self.rec.ticks() {
-                    self.pending.push_back(e);
-                }
-            }
-            while self.rec.ticks() < total {
-                let t = self.rec.ticks();
-                while self.pending.front().is_some_and(|e| e.tick <= t) {
-                    self.cur_input = self.pending.pop_front().unwrap().input;
-                }
-                self.rec.record_tick(self.cur_input);
-            }
+        for b in mp_parse_batches(data) {
+            self.ingest_batch(b);
         }
     }
 
@@ -566,6 +576,32 @@ impl RemoteFeed {
         }
         Some(p.lerped_pose((self.accum / PHYSICS_DT).clamp(0.0, 1.0)))
     }
+}
+
+// Route a drained wire stream into the remote-feed slot: ordinary batches
+// fold into the current feed; the respawn marker (an 8-byte pseudo-batch
+// with total = u32::MAX — see mp_remote_respawn) replaces it with a fresh
+// feed on the shared spawn state, exactly between the old run's bytes and
+// the new run's. `spawn_kf` is the local recorder's keyframe 0 — a pure
+// function of the shared level+seed, so it is the peer's spawn too.
+// Returns true when a marker was seen (the caller clears the remote-over
+// flag: the fresh feed is a run that has not ended).
+fn mp_ingest_stream(
+    slot: &mut Option<RemoteFeed>,
+    data: &[u8],
+    spawn_kf: Keyframe,
+    level: &world::Level,
+) -> bool {
+    let mut reset = false;
+    for batch in mp_parse_batches(data) {
+        if batch.0 == u32::MAX {
+            *slot = Some(RemoteFeed::new(spawn_kf, level));
+            reset = true;
+        } else if let Some(mr) = slot.as_mut() {
+            mr.ingest_batch(batch);
+        }
+    }
+    reset
 }
 
 // The attitude stick is now read directly from macroquad's touch API inside
@@ -1241,6 +1277,18 @@ pub extern "C" fn set_mp_remote_over() {
     MP_REMOTE_OVER.store(1, Ordering::Relaxed);
 }
 
+// The respawn marker: an 8-byte pseudo-batch with an impossible tick total
+// (u32::MAX ≈ 414 days of sim). The local reset block appends it to MP_OUT
+// so it rides the outgoing byte stream IN-BAND — everything before it is
+// the ended run, everything after the fresh one, with no JS-side ordering
+// to get wrong. The receiving side's mp_ingest_stream turns it into a
+// fresh RemoteFeed exactly between the two runs' bytes.
+fn mp_push_respawn_marker(out: &mut Vec<u8>) {
+    out.extend_from_slice(&u32::MAX.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+}
+
 /// Push a received input/keyframe batch (BLOB_IN bytes, possibly several
 /// concatenated batches — the DataChannel message payload verbatim).
 #[unsafe(no_mangle)]
@@ -1904,21 +1952,30 @@ async fn main() {
             MP_IN.lock().unwrap().clear();
             MP_REMOTE_OVER.store(0, Ordering::Relaxed);
         }
-        if let Some(mr) = mp_remote.as_mut() {
-            if MP_REMOTE_OVER.load(Ordering::Relaxed) != 0 {
+        if mp_remote.is_some() {
+            if MP_REMOTE_OVER.load(Ordering::Relaxed) != 0
+                && let Some(mr) = mp_remote.as_mut()
+            {
                 mr.over = true;
             }
             let data = std::mem::take(&mut *MP_IN.lock().unwrap());
-            if !data.is_empty() {
-                mr.ingest(&data);
+            if !data.is_empty()
+                && let Some(&kf0) = recorder.keyframes.first()
+                && mp_ingest_stream(&mut mp_remote, &data, kf0, &sim.level)
+            {
+                // The peer respawned into the shared world: the recreated
+                // feed is a fresh, not-ended run.
+                MP_REMOTE_OVER.store(0, Ordering::Relaxed);
             }
             // Advances on the render clock even while the local sim is
             // paused/dead — the opponent is still flying out there.
-            mr.advance(get_frame_time());
-            MP_REMOTE_DIST.store(
-                mr.player.as_ref().map_or(0.0, |p| p.sim.max_dist).to_bits(),
-                Ordering::Relaxed,
-            );
+            if let Some(mr) = mp_remote.as_mut() {
+                mr.advance(get_frame_time());
+                MP_REMOTE_DIST.store(
+                    mr.player.as_ref().map_or(0.0, |p| p.sim.max_dist).to_bits(),
+                    Ordering::Relaxed,
+                );
+            }
         }
 
         // One-shot HTML-UI commands (menu buttons). Reset flows through the
@@ -2592,14 +2649,17 @@ async fn main() {
             Mode::CrashDialog => None,
         };
 
-        // The multiplayer opponent — same gating idea as the record ghost
-        // (flight only, hidden pre-gun and around the local wreck), but its
-        // clock is the OPPONENT'S real time, not lockstep with local ticks:
-        // where you see them lags only by network latency, never by your
-        // own pauses. RemoteFeed::pose hides it after its re-simmed crash
-        // or a finished run.
+        // The multiplayer opponent — its clock is the OPPONENT'S real time,
+        // not lockstep with local ticks: where you see them lags only by
+        // network latency, never by your own pauses. Unlike the record
+        // ghost it stays visible through the local wreck, the crash dialog
+        // and the armed-idle wait after a respawn — the room is persistent
+        // and the peer is still flying out there; only replay playback
+        // hides it (a watched replay can be a foreign world).
+        // RemoteFeed::pose hides it after its own re-simmed crash or a
+        // finished run.
         let mp_pose: Option<(f32, f32, f32)> = match (&mp_remote, mode) {
-            (Some(mr), Mode::Flying) if run_started && !crashed => mr.pose(),
+            (Some(mr), Mode::Flying | Mode::CrashDialog) => mr.pose(),
             _ => None,
         };
 
@@ -3866,11 +3926,20 @@ async fn main() {
             replay_player = None;
             replay_ghost = None;
             watch_rec = None;
-            // A respawn breaks the race's shared tick clock: drop the feed
-            // and stop mirroring. The JS side reports the abandoned run to
-            // the peer (run_end, cause reset); a rematch re-arms a fresh
-            // feed through mp_arm after the next synchronized countdown.
-            mp_remote = None;
+            // Persistent room (2026-08): a respawn no longer ends the
+            // session — the peer keeps flying, so their feed lives on.
+            // The outgoing mirror restarts at the fresh recording's origin
+            // with the respawn marker queued IN-BAND between the two runs'
+            // bytes (the mirror above ran before this block, so the ended
+            // run's final batch already sits ahead of it). Leaving the
+            // room is the explicit exit, which drops MP_ACTIVE first (the
+            // sweep above then tears the feed down and no marker is sent).
+            if MP_ACTIVE.load(Ordering::Relaxed) != 0 {
+                mp_evt_sent = 0;
+                mp_kf_sent = 1;
+                mp_ticks_sent = 0;
+                mp_push_respawn_marker(&mut MP_OUT.lock().unwrap());
+            }
             glow = 0.0;
             recorder.push_keyframe(sim.keyframe(0, 0.0));
         }
@@ -4996,6 +5065,80 @@ mod tests {
             &p.sim.keyframe(p.tick, 0.0),
             &q.sim.keyframe(q.tick, 0.0),
             "incremental remote feed",
+        );
+    }
+
+    #[test]
+    fn persistent_room_respawn_marker_resets_the_feed_bit_exactly() {
+        // Persistent rooms: after the peer's run ends they respawn into the
+        // same world and stream a NEW run down the same DataChannel. The
+        // respawn marker (mp_remote_respawn's 8-byte pseudo-batch) rides
+        // the byte stream between the two runs, so mp_ingest_stream must
+        // replace the feed exactly there — the second run then reconstructs
+        // and re-simulates bit-exactly even when the old run's tail, the
+        // marker and the new run's start are drained in ONE read.
+        let run_a = contact_free_recording();
+        let run_b = {
+            // A different flight in the same world (mirrored steer, other
+            // throttle phase) — folding it into run A's feed by mistake
+            // could not reproduce it.
+            let script = |tick: u32| -> InputState {
+                if tick < 50 {
+                    return InputState::from_controls(0.7, 0, 0.0, 0.0, false);
+                }
+                let throttle = if (tick / 70).is_multiple_of(2) { 0.18 } else { 0.08 };
+                let f = tick as f32 * 0.013;
+                InputState::from_controls(throttle, 0, -f.cos() * 0.2, -0.9, true)
+            };
+            let mut sim = Sim::new(lvl());
+            let mut rec = Recording::new(sim_params(), lvl().to_params(), u32::MAX);
+            rec.push_keyframe(sim.keyframe(0, 0.0));
+            for t in 0..4 * KEYFRAME_EVERY {
+                let input = script(t);
+                let rep = sim.tick(input);
+                if rec.record_tick(input) {
+                    rec.push_keyframe(sim.keyframe(rec.ticks(), input.throttle_f32()));
+                }
+                assert!(rep.impact.is_none(), "run B hit rock at tick {t}");
+            }
+            rec
+        };
+        let spawn_kf = run_a.keyframes[0];
+
+        // One combined wire stream: all of run A, the respawn marker, all
+        // of run B (each run as one batch — chunking is covered by the
+        // incremental test above).
+        let mut wire = Vec::new();
+        mp_encode_batch(&mut wire, run_a.ticks(), &run_a.events, &run_a.keyframes[1..]);
+        mp_push_respawn_marker(&mut wire);
+        mp_encode_batch(&mut wire, run_b.ticks(), &run_b.events, &run_b.keyframes[1..]);
+
+        let mut slot = Some(RemoteFeed::new(spawn_kf, &lvl()));
+        assert!(
+            mp_ingest_stream(&mut slot, &wire, spawn_kf, &lvl()),
+            "respawn marker not seen"
+        );
+        let feed = slot.as_mut().expect("feed after respawn");
+        assert_eq!(feed.rec.ticks(), run_b.ticks());
+        assert_eq!(feed.rec.events, run_b.events, "second run's events diverged");
+        assert_eq!(feed.rec.keyframes, run_b.keyframes, "second run's keyframes diverged");
+
+        let mut guard = 0;
+        while feed.player.as_ref().is_none_or(|p| p.tick < feed.rec.ticks()) && guard < 10_000 {
+            feed.advance(0.25);
+            guard += 1;
+        }
+        let p = feed.player.as_ref().expect("remote player");
+        assert!(!p.snapped, "respawned feed snapped on the same binary");
+
+        let mut q = ResimPlayer::new(&run_b).expect("reference player");
+        while !q.finished {
+            q.step_one(&run_b);
+        }
+        assert_state_bits_eq(
+            &p.sim.keyframe(p.tick, 0.0),
+            &q.sim.keyframe(q.tick, 0.0),
+            "post-respawn remote feed",
         );
     }
 
