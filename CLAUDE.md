@@ -2018,6 +2018,21 @@ which populates the registry cache) whenever `Cargo.lock` changes, and
 commit the refreshed page.
 
 ## Git workflow
+- **Keep version pins at latest stable (owner policy, 2026-08)**: GitHub
+  Actions majors, runner images, Gradle/AGP/Kotlin/SDK levels, Xcode and
+  dependencies should track the latest stable release. When a newer
+  stable version is discovered to be available (a deprecation notice in a
+  run log, a new major spotted in passing), **proactively open a small
+  housekeeping PR with the bumps** rather than waiting for something to
+  force it — the point is avoiding integration debt. Check release notes
+  for breaking changes before crossing majors; CI + the preview deploy
+  validate the rest. **HARD EXCEPTION — sim-affecting crates**: `rapier2d`,
+  `glam` (pinned to macroquad's re-export) and anything else compiled into
+  `sim-core` must NEVER be bumped as routine housekeeping — a physics-crate
+  bump changes simulation results, which breaks stored replays, the racing
+  ghost and backend score verification, and requires the full REPIN dance
+  (see the backend CLAUDE.md) as a deliberate, coordinated change.
+  macroquad is pinned at 0.4.15 on purpose (vendored JS bundle matches it).
 - **Commit authorship**: every commit's author should be the real human
   contributor driving the session — never `Claude <noreply@anthropic.com>`.
   Use that person's GitHub-provided private noreply address
