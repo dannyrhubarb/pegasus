@@ -11,6 +11,10 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Pegasus">
   <link rel="apple-touch-icon" href="./icon-180.png">
+  <!-- Bundled menu font (see the @font-face below). Preloaded because the
+       menu is the first paint; crossorigin is required on font preloads
+       even same-origin or the browser fetches it twice. -->
+  <link rel="preload" href="./fonts/jetbrains-mono.woff2" as="font" type="font/woff2" crossorigin>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { overflow: hidden; background: #05060f; }
@@ -23,9 +27,24 @@
 
     /* ---------------------------------------------------------------------
        Retro vector-arcade look: neon glow on a dark CRT, chunky monospace
-       lettering, scanlines. All self-contained (no external fonts/CDNs —
-       glow comes from layered text-shadow, not a webfont).
+       lettering, scanlines. Self-contained: the one webfont is VENDORED in
+       the repo (fonts/, served same-origin and bundled into both app
+       shells) — still no CDNs at runtime.
        --------------------------------------------------------------------- */
+    /* JetBrains Mono (SIL OFL 1.1 — attribution on the third-party licenses
+       page, license text in fonts/OFL.txt): one latin-subset VARIABLE file
+       covers every weight the menu uses (400/700/800), ~31 KB. Bundled so
+       all platforms render the same face — before this, each platform
+       resolved the stack differently (iOS SF Mono, Android Droid Sans Mono,
+       and before PR #164 Android's slab-serif Courier New alias). The stack
+       below stays as fallback for load failure / non-latin glyphs. */
+    @font-face {
+      font-family: "JetBrains Mono";
+      font-style: normal;
+      font-weight: 400 800;
+      font-display: swap;
+      src: url("./fonts/jetbrains-mono.woff2") format("woff2");
+    }
     :root {
       --text: #cfe7ff;
       --dim: #7fb4dd;
@@ -36,7 +55,11 @@
       --green: #46ff9c;
       --red: #ff5a3c;
       --panel: rgba(12, 22, 44, 0.55);
-      --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Courier New", monospace;
+      /* Bundled JetBrains Mono first (identical on every device), then the
+         platform monos as fallback. No "Courier New" in the fallbacks:
+         Android aliases it to its slab-serif typewriter face (Cutive Mono),
+         which broke the arcade look in the app shell. */
+      --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, "Roboto Mono", "Droid Sans Mono", monospace;
       --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       /* Safe-area insets, ONE source of truth: every consumer below reads
          --inset-*, never env() directly. env() alone is 0 at the iOS app
@@ -285,23 +308,37 @@
       pointer-events: all;
     }
     #menu.open { display: flex; }
-    /* Faint perspective grid drifting toward a low horizon. */
-    #menu::before {
-      content: "";
+    /* Faint perspective grid drifting toward a low horizon. Two elements on
+       purpose (perf, 2026-08): the outer .grid div holds the STATIC
+       perspective transform + mask, and the drift animates a transform on
+       its ::before — compositor-only, no repaints. The original one-element
+       version animated background-position, which repaints the huge
+       transformed surface every frame and was a big part of menus running
+       at 2-3 fps on weak Android phones (WebView shell). The pattern
+       repeats every 46px, so translating 0 → 46px loops seamlessly; the
+       ::before overscans 46px above so the sweep never exposes an edge. */
+    .grid {
       position: absolute;
       inset: -20% -20% -20% -20%;
-      background:
-        repeating-linear-gradient(0deg,  rgba(52, 231, 255, 0.09) 0 1px, transparent 1px 46px),
-        repeating-linear-gradient(90deg, rgba(52, 231, 255, 0.09) 0 1px, transparent 1px 46px);
-      background-position: center;
       transform: perspective(420px) rotateX(62deg) translateY(12%);
       transform-origin: center 70%;
       mask-image: linear-gradient(180deg, transparent 40%, #000 100%);
       -webkit-mask-image: linear-gradient(180deg, transparent 40%, #000 100%);
-      animation: gridflow 6s linear infinite;
+      overflow: hidden;
       pointer-events: none;
     }
-    @keyframes gridflow { to { background-position: center 46px; } }
+    .grid::before {
+      content: "";
+      position: absolute;
+      left: 0; right: 0; top: -46px; bottom: 0;
+      background:
+        repeating-linear-gradient(0deg,  rgba(52, 231, 255, 0.09) 0 1px, transparent 1px 46px),
+        repeating-linear-gradient(90deg, rgba(52, 231, 255, 0.09) 0 1px, transparent 1px 46px);
+      background-position: center;
+      animation: gridflow 6s linear infinite;
+      will-change: transform;
+    }
+    @keyframes gridflow { to { transform: translateY(46px); } }
 
     /* CRT overlay: scanlines + vignette + a slow bright sweep. Sits on top
        of the screens visually but never eats a tap (pointer-events:none). */
@@ -318,11 +355,15 @@
     .crt::after {
       content: "";
       position: absolute;
-      left: 0; right: 0; height: 40%;
+      left: 0; right: 0; top: -40%; height: 40%;
       background: linear-gradient(180deg, transparent, rgba(120, 220, 255, 0.05), transparent);
+      /* Sweep via transform, not top: animating top re-layouts + repaints
+         every frame; translateY runs on the compositor. 400% of own height
+         (40% of parent) = the old -40% → 120% travel. */
       animation: sweep 7s linear infinite;
+      will-change: transform;
     }
-    @keyframes sweep { 0% { top: -40%; } 100% { top: 120%; } }
+    @keyframes sweep { to { transform: translateY(400%); } }
 
     .screen {
       position: relative;
@@ -404,8 +445,17 @@
       width: clamp(150px, 40vw, 260px);
       height: auto;
       margin: 2px 0 6px;
-      filter: drop-shadow(0 0 18px rgba(120, 190, 255, 0.45));
       animation: bob 3.4s ease-in-out infinite;
+    }
+    /* The blue glow lives on the STATIC hull group, not on .ship-hero
+       (perf, 2026-08): with the drop-shadow on the whole SVG, every flame
+       flicker tick (9/s) re-ran the big blur over the full element — a
+       chunk of the 2-3 fps menu on weak Android phones. The CSS filter
+       property overrides the group's filter attribute, so the chain must
+       repeat the sh-glow url. The flame loses its faint blue halo, but it
+       has its own orange halos anyway. */
+    .ship-hero .hull {
+      filter: url(#sh-glow) drop-shadow(0 0 18px rgba(120, 190, 255, 0.45));
     }
     @keyframes bob {
       0%, 100% { transform: translateY(0); }
@@ -415,13 +465,14 @@
       transform-box: fill-box;
       transform-origin: 50% 0%;
       animation: flame 0.11s steps(2, jump-none) infinite;
+      will-change: transform, opacity;
     }
     @keyframes flame {
       0%   { opacity: 0.8;  transform: scaleY(0.86); }
       100% { opacity: 1;    transform: scaleY(1.08); }
     }
     @media (prefers-reduced-motion: reduce) {
-      .ship-hero, .ship-hero .flame, .title, #menu::before, .crt::after { animation: none; }
+      .ship-hero, .ship-hero .flame, .title, .grid::before, .crt::after { animation: none; }
     }
     /* Short screens (landscape phones): drop the hero so the buttons — the
        Fly button especially — stay above the fold. */
@@ -791,16 +842,6 @@
       text-shadow: 0 0 10px rgba(255, 194, 75, 0.8), 0 0 30px rgba(255, 194, 75, 0.4);
     }
     #mp-code-input { letter-spacing: 0.3em; }
-    .mp-res-row {
-      font: 800 clamp(20px, 5.4vw, 30px)/1.35 var(--mono);
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      color: var(--text);
-    }
-    .mp-res-row .mp-res-score {
-      color: var(--amber);
-      text-shadow: 0 0 12px rgba(255, 194, 75, 0.5);
-    }
     /* 3-2-1 countdown: floats over the live (frozen) game — purely visual,
        pointer-events off; the game is held by set_ui_pause through it. */
     #mp-countdown {
@@ -984,6 +1025,7 @@
 
   <!-- Game menu: open at boot (markup, not JS, so it shows while wasm loads) -->
   <div id="menu" class="open" role="dialog" aria-modal="true">
+    <div class="grid" aria-hidden="true"></div>
 
     <!-- DORMANT load-time announcement kept for future messages. To show
          one: put the text in .announce-msg, move the `on` class from
@@ -1023,17 +1065,32 @@
             <feGaussianBlur stdDeviation="6" result="blur"/>
             <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
           </filter>
-          <filter id="sh-softglow" x="-100%" y="-100%" width="300%" height="300%">
-            <feGaussianBlur stdDeviation="18"/>
-          </filter>
+          <!-- Halo gradients approximating the old feGaussianBlur(18) on
+               flat ellipses (perf, 2026-08): the flame flickers 9x/s, and
+               re-running two Gaussian blurs per tick helped drag the menu
+               to 2-3 fps on weak Android phones. Radii grew by ~30 (the
+               blur's spread) so the visible blob size matches. -->
+          <radialGradient id="sh-halo1" cx="50%" cy="50%" r="50%">
+            <stop offset="0%"  stop-color="#ff5500" stop-opacity="1"/>
+            <stop offset="30%" stop-color="#ff5500" stop-opacity="0.85"/>
+            <stop offset="55%" stop-color="#ff5500" stop-opacity="0.45"/>
+            <stop offset="78%" stop-color="#ff5500" stop-opacity="0.15"/>
+            <stop offset="100%" stop-color="#ff5500" stop-opacity="0"/>
+          </radialGradient>
+          <radialGradient id="sh-halo2" cx="50%" cy="50%" r="50%">
+            <stop offset="0%"  stop-color="#ffaa00" stop-opacity="0.8"/>
+            <stop offset="35%" stop-color="#ffaa00" stop-opacity="0.55"/>
+            <stop offset="65%" stop-color="#ffaa00" stop-opacity="0.22"/>
+            <stop offset="100%" stop-color="#ffaa00" stop-opacity="0"/>
+          </radialGradient>
         </defs>
         <g class="flame">
-          <ellipse cx="256.0" cy="417.7" rx="65" ry="100" fill="#ff5500" opacity="0.35" filter="url(#sh-softglow)"/>
-          <ellipse cx="256.0" cy="402.7" rx="34" ry="70" fill="#ffaa00" opacity="0.45" filter="url(#sh-softglow)"/>
+          <ellipse cx="256.0" cy="417.7" rx="98" ry="112" fill="url(#sh-halo1)" opacity="0.35"/>
+          <ellipse cx="256.0" cy="402.7" rx="66" ry="100" fill="url(#sh-halo2)" opacity="0.45"/>
           <polygon points="256.0,472.8 213.2,372.0 298.8,372.0" fill="url(#sh-thrustOuter)"/>
           <polygon points="256.0,431.5 234.6,372.0 277.4,372.0" fill="url(#sh-thrustInner)"/>
         </g>
-        <g filter="url(#sh-glow)">
+        <g class="hull" filter="url(#sh-glow)">
           <polygon points="256.0,96.9 249.4,96.9 241.9,100.5" fill="rgb(247,59,53)"/>
           <polygon points="256.0,96.9 241.9,100.5 230.8,112.2" fill="rgb(246,59,53)"/>
           <polygon points="256.0,96.9 230.8,112.2 221.8,127.8" fill="rgb(244,58,52)"/>
@@ -1167,6 +1224,10 @@
         <span>Invert stick</span>
         <input type="checkbox" id="inv-toggle"><span class="tgl"></span>
       </label>
+      <label class="setrow" id="split-toggle-row">
+        <span>Split controls (throttle left)</span>
+        <input type="checkbox" id="split-toggle"><span class="tgl"></span>
+      </label>
       <label class="setrow" id="ghost-toggle-row">
         <span>Race best ghost</span>
         <input type="checkbox" id="ghost-toggle"><span class="tgl"></span>
@@ -1193,11 +1254,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">46b9214-pr-148</div>
+        <div class="info-value" id="git-rev">e884b43-pr-148</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-08-18T19:45:30Z</div>
+        <div class="info-value" id="build-time">2026-08-22T12:40:37Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -1329,15 +1390,6 @@
       <div class="mp-diag" id="mp-fail-info"></div>
       <div id="mp-fail-hints"></div>
       <div class="mbtn back" id="btn-mp-fail-back">&#8249; Back</div>
-    </div>
-
-    <div class="screen" id="scr-mp-results">
-      <div class="title crash" id="mp-res-title">RACE OVER</div>
-      <div class="mp-res-row" id="mp-res-you"></div>
-      <div class="mp-res-row" id="mp-res-peer"></div>
-      <div class="hint" id="mp-res-status"></div>
-      <div class="mbtn primary" id="btn-mp-rematch" style="display:none">Rematch</div>
-      <div class="mbtn back" id="btn-mp-exit">&#8249; Exit race</div>
     </div>
 
     <!-- CRT scanlines + vignette + sweep, over everything but tap-transparent -->
@@ -1752,8 +1804,12 @@
     document.getElementById("btn-fly").addEventListener("click", () => openLevelPicker("fly"));
     document.getElementById("btn-resume").addEventListener("click", closeMenu);
     document.getElementById("btn-exit").addEventListener("click", () => {
-      // Abandoning the run ends it (reset-ended runs are never submitted
-      // online); the fresh ship waits, paused, behind the menu.
+      // In a multiplayer room this IS the active "leave the room" choice
+      // (torn down BEFORE the reset below, so no respawn marker is sent
+      // and the peer gets a clean disconnect). Abandoning the run ends it
+      // (reset-ended runs are never submitted online); the fresh ship
+      // waits, paused, behind the menu.
+      pegMP.leaveRoom();
       call("ui_command", 1);
       showScreen("scr-home");
     });
@@ -1882,7 +1938,6 @@
         case "scr-mp-join":    return ["scr-home", "scr-mp", "scr-mp-join"];
         case "scr-mp-lobby":   return ["scr-home", "scr-mp", "scr-mp-lobby"];
         case "scr-mp-fail":    return ["scr-home", "scr-mp", "scr-mp-fail"];
-        case "scr-mp-results": return ["scr-home", "game", "scr-mp-results"];
         default:             return ["scr-home", s]; // future screens: child of home
       }
     }
@@ -2032,11 +2087,17 @@
         // scr-gameover.
         collectEndedRun();
         pegAnalytics.pollRuns();
-        // During a multiplayer race the wrap-up is the race results screen
-        // (waiting for the opponent / win-lose), not the solo game-over;
-        // the consent detour stays out of the race flow.
-        const afterScore = pegMP.inRace() ? "scr-mp-results"
-          : pegAnalytics.consentDue() ? "scr-consent" : "scr-gameover";
+        // In a multiplayer room the wrap-up is a RESPAWN, not a screen:
+        // the room is persistent — after the optional submit dialog the
+        // player flies again in the shared world until they actively
+        // leave. The consent detour stays out of the room flow.
+        if (pegMP.inRace()) {
+          if (pendingSubmit) openNameDialog("mp-respawn");
+          else pegMP.respawn();
+          prevState = st;
+          return;
+        }
+        const afterScore = pegAnalytics.consentDue() ? "scr-consent" : "scr-gameover";
         // Every crash-ended publishable run gets the submit/skip dialog in
         // the game-over screen's slot (leading there on either choice); the
         // callsign input arrives prefilled once a name is persisted.
@@ -2297,7 +2358,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "46b9214-pr-148";
+    const wasmRev = "e884b43-pr-148";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -2414,6 +2475,27 @@
       if (typeof wasm_exports !== "undefined" && wasm_exports.set_invert_stick) {
         applyInvSetting();
         clearInterval(invTimer);
+      }
+    }, 200);
+
+    // Split-controls toggle (on by default): a separate floating throttle
+    // button on the LEFT half of the screen (hold = full throttle, rides the
+    // finger); the right-half stick then steers only. Forwarded to the WASM
+    // `set_split_controls` export and persisted per device (same pattern as
+    // the invert toggle).
+    const splitToggle = document.getElementById("split-toggle");
+    splitToggle.checked = localStorage.getItem("pegasus_split_controls") !== "0";
+    function applySplitSetting() {
+      call("set_split_controls", splitToggle.checked ? 1 : 0);
+    }
+    splitToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_split_controls", splitToggle.checked ? "1" : "0");
+      applySplitSetting();
+    });
+    const splitTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_split_controls) {
+        applySplitSetting();
+        clearInterval(splitTimer);
       }
     }, 200);
 
@@ -2947,6 +3029,12 @@
     // The submit-score dialog doubles as the Settings name editor: with a
     // pending run it submits on save, without one it just persists the name.
     let nameReturnTo = "scr-gameover";
+    // In a multiplayer room the dialog's exit is a respawn, not a screen
+    // (the room is persistent) — "mp-respawn" is that pseudo-target.
+    function closeNameDialog() {
+      if (nameReturnTo === "mp-respawn") pegMP.respawn();
+      else showScreen(nameReturnTo);
+    }
     function openNameDialog(returnTo) {
       nameReturnTo = returnTo;
       // Big amber score readout like the game-over screen; empty (zero
@@ -2972,7 +3060,7 @@
         submitScore(pendingSubmit.file, pendingSubmit.entry);
         pendingSubmit = null;
       }
-      showScreen(nameReturnTo);
+      closeNameDialog();
     });
     document.getElementById("btn-name-skip").addEventListener("click", () => {
       // Only the crash-flow ask counts as a skip — closing the Settings
@@ -2982,7 +3070,7 @@
           { action: "skipped", level: levelStem(pendingSubmit.file) });
       }
       pendingSubmit = null; // this run stays unsubmitted; asks again next crash
-      showScreen(nameReturnTo);
+      closeNameDialog();
     });
     nameInput.addEventListener("keydown", e => {
       e.stopPropagation(); // typing must never reach the game's key handlers
@@ -3679,11 +3767,6 @@
       const codeInput = document.getElementById("mp-code-input");
       const pickBtn = document.getElementById("btn-mp-pick");
       const shareBtn = document.getElementById("btn-mp-share");
-      const resTitle = document.getElementById("mp-res-title");
-      const resYou = document.getElementById("mp-res-you");
-      const resPeer = document.getElementById("mp-res-peer");
-      const resStatus = document.getElementById("mp-res-status");
-      const rematchBtn = document.getElementById("btn-mp-rematch");
       const countEl = document.getElementById("mp-countdown");
       const countNum = document.getElementById("mp-count-num");
       const bannerEl = document.getElementById("mp-banner");
@@ -3692,11 +3775,10 @@
       let ws = null, pc = null, dc = null;
       let iceServers = null;
       let role = null;           // "host" | "guest"
-      let state = "idle";        // idle|hosting|joining|lobby|starting|racing|results
+      let state = "idle";        // idle|hosting|joining|lobby|starting|racing
       let peerName = "";
       let peerBuild = "";
       let raceFile = null;       // the level file the race runs on
-      let localEnd = null, remoteEnd = null; // {cause, score}
       let sendTimer = null, countTimer = null;
       let lastEndSeq = null;     // run_end_seq at the gun (own-run watcher)
       let bannerTimer = null;
@@ -3791,7 +3873,6 @@
         call("set_mp_active", 0);
         state = "idle";
         role = null;
-        localEnd = remoteEnd = null;
         lastEndSeq = null;
         peerName = "";
         peerBuild = "";
@@ -3800,14 +3881,35 @@
       // Full exit (menus): tear down and restore the level's ORIGINAL text
       // — the race may have loaded a seed-pinned copy of a `seed = random`
       // level, which must not survive into solo play.
-      function exitToMenu(screen) {
-        const file = raceFile;
-        raceFile = null;
-        teardownNet();
+      // Leaving the room is the ONE explicit exit from a persistent
+      // session: tear the network down (set_mp_active 0 — the wasm sweeps
+      // the opponent feed) and restore the level's original text, so a
+      // pinned random seed goes back to re-rolling in solo play. Safe to
+      // call when idle (no-op beyond the teardown bookkeeping).
+      function leaveRoom() {
         try {
+          const file = raceFile;
+          raceFile = null;
+          teardownNet();
           if (file && levelTexts[file] !== undefined) pushLevel(file);
         } catch (_) {}
-        showScreen(screen);
+      }
+
+      // Persistent room: after the local run wraps up (crash / fuel-out /
+      // completion → the optional submit dialog), respawn straight back
+      // into the shared world — no results screen, the room lives until
+      // someone actively leaves. The wasm reset queues the in-band respawn
+      // marker for the peer; here we just fire the respawn and resume the
+      // outgoing stream. If the room died while a dialog was up (peer
+      // gone → teardown), fall through to the normal solo game-over.
+      function respawn() {
+        try {
+          if (state !== "racing") { showScreen("scr-gameover"); return; }
+          uiCmdPending = true;   // see the ui-state poll's state-2 guard
+          call("ui_command", 1);
+          closeMenu();
+          startStreaming();
+        } catch (_) {}
       }
 
       function connectWs(onOpen) {
@@ -4031,7 +4133,7 @@
             prepareLevel(String(m.file || "race.level"), String(m.text || ""));
             dcSend({ t: "ready" });
             lobbyStatus.textContent = "Level loaded — get ready…";
-            if (overlay !== "scr-mp-lobby" && overlay !== "scr-mp-results") showScreen("scr-mp-lobby");
+            if (overlay !== "scr-mp-lobby") showScreen("scr-mp-lobby");
             break;
           case "ready": // host: guest has the level — fire the gun
             if (role !== "host") break;
@@ -4042,30 +4144,34 @@
             if (role !== "guest") break;
             beginCountdown();
             break;
-          case "run_end":
-            // null score = a DNF (time-level crash/reset) — keep it null,
-            // Number(null) would masquerade as a 0.0 s finish.
-            remoteEnd = {
-              cause: String(m.cause || "crash"),
-              score: m.score === null || m.score === undefined ? null : Number(m.score),
-            };
+          case "run_end": {
+            // Persistent room: the peer's ended run is a moment, not a
+            // screen — a transient banner with their result; their respawn
+            // marker (in-band on the binary stream) then resets the ghost
+            // for the next run. null score = a DNF, never a 0.0 s finish.
+            const sc = m.score === null || m.score === undefined ? null : Number(m.score);
+            const cause = String(m.cause || "crash");
+            const who = (peerName || "RIVAL").toUpperCase();
+            if (cause === "complete") {
+              banner(who + " FINISHED — " + fmtScore(raceFile, sc));
+            } else if (cause !== "reset") {
+              // A quick in-room restart (cause reset) passes silently.
+              banner(who + " CRASHED" + (sc !== null && !levelIsTime(raceFile)
+                ? " — " + fmtScore(raceFile, sc) : ""));
+            }
             call("set_mp_remote_over");
-            updateResults();
             break;
+          }
         }
       }
 
       function onPeerGone() {
         try {
           if (state === "racing" || state === "starting") {
-            // Mid-race: the race degrades to a normal solo run — never
+            // Mid-race: the room degrades to a normal solo run — never
             // block the player's own flight on network state.
             teardownNet();
-            banner("OPPONENT LOST — RACE VOID");
-          } else if (state === "results") {
-            teardownNet();
-            resStatus.textContent = "Opponent left";
-            rematchBtn.style.display = "none";
+            banner("OPPONENT LEFT — FLYING SOLO");
           } else if (state !== "idle") {
             const msg = "Opponent disconnected";
             hostStatus.textContent = msg;
@@ -4115,7 +4221,6 @@
       function beginCountdown() {
         try {
           state = "starting";
-          localEnd = remoteEnd = null;
           call("set_mp_active", 1);
           pushTextToWasm(peerName, "set_mp_name");
           uiCmdPending = true;   // see the ui-state poll's state-2 guard
@@ -4184,11 +4289,7 @@
           const score = levelIsTime(raceFile)
             ? (cause === "complete" ? ticks / 120 : null)
             : wasm_exports.run_end_dist();
-          localEnd = { cause, score };
           dcSend({ t: "run_end", cause, score });
-          // A mid-race restart/exit abandons the race locally (the wasm
-          // already dropped the opponent feed with the respawn).
-          if (cause === "reset") banner("RACE LEFT — FLYING SOLO");
           clearInterval(sendTimer); // one last drain below, then quiet
           try {
             if (dc && dc.readyState === "open" && wasm_exports.mp_out_take) {
@@ -4198,71 +4299,20 @@
               }
             }
           } catch (_) {}
-          updateResults();
+          // A manual mid-run restart (R / ⟳) is just a quick respawn in
+          // the persistent room: the wasm already reset and queued the
+          // in-band respawn marker — resume the stream right away. Ended
+          // runs (crash/fuel/complete) resume it from respawn() after the
+          // wrap-up instead.
+          if (cause === "reset") startStreaming();
         } catch (_) {}
       }, 200);
-
-      function fmtRaceScore(end) {
-        if (!end) return "…";
-        if (end.score === null || end.score === undefined || isNaN(end.score)) return "DNF";
-        return fmtScore(raceFile, end.score);
-      }
-
-      // Lower-is-better on time levels; DNF loses to any finish.
-      function winnerOf(a, b) {
-        const an = a.score === null || a.score === undefined || isNaN(a.score);
-        const bn = b.score === null || b.score === undefined || isNaN(b.score);
-        if (an && bn) return 0;
-        if (an) return -1;
-        if (bn) return 1;
-        if (a.score === b.score) return 0;
-        const lowerWins = levelIsTime(raceFile);
-        return (a.score < b.score) === lowerWins ? 1 : -1;
-      }
-
-      function updateResults() {
-        try {
-          if (state !== "racing" && state !== "results") return;
-          resYou.innerHTML = "";
-          resPeer.innerHTML = "";
-          const row = (el, who, end) => {
-            el.textContent = who + " — ";
-            const sc = document.createElement("span");
-            sc.className = "mp-res-score";
-            sc.textContent = fmtRaceScore(end);
-            el.appendChild(sc);
-          };
-          row(resYou, "YOU", localEnd);
-          row(resPeer, (peerName || "THEM").toUpperCase(), remoteEnd);
-          if (localEnd && remoteEnd) {
-            state = "results";
-            const w = winnerOf(localEnd, remoteEnd);
-            resTitle.textContent = w > 0 ? "YOU WIN" : w < 0 ? "YOU LOSE" : "DEAD HEAT";
-            resTitle.classList.toggle("win", w > 0);
-            resStatus.textContent = "";
-            // Rematch: host re-runs the level pick (re-rolling a random
-            // seed); the guest follows the same level/ready/start flow.
-            rematchBtn.style.display = role === "host" && dc && dc.readyState === "open" ? "" : "none";
-            if (role === "guest" && dc && dc.readyState === "open") {
-              resStatus.textContent = "The host can start a rematch";
-            }
-          } else {
-            resTitle.textContent = "RACE OVER";
-            resTitle.classList.remove("win");
-            resStatus.textContent = localEnd
-              ? "Waiting for " + (peerName || "your opponent").toUpperCase() + " to finish…"
-              : "";
-            rematchBtn.style.display = "none";
-          }
-        } catch (_) {}
-      }
 
       // --- UI wiring -----------------------------------------------------
       document.getElementById("btn-mp").addEventListener("click", () => {
         // Re-entering the multiplayer menu while a session is live returns
         // to wherever that session stands; otherwise the fresh menu.
-        if (state === "results") showScreen("scr-mp-results");
-        else if (state === "hosting") showScreen("scr-mp-host");
+        if (state === "hosting") showScreen("scr-mp-host");
         else if (state === "lobby") showScreen("scr-mp-lobby");
         else showScreen("scr-mp");
       });
@@ -4324,9 +4374,6 @@
         codeInput.value = codeInput.value.toUpperCase();
       });
       pickBtn.addEventListener("click", () => openLevelPicker("mp"));
-      rematchBtn.addEventListener("click", () => {
-        if (role === "host" && raceFile) hostPickedLevel(raceFile);
-      });
       // Back/leave buttons tear the session down (hardware back rides the
       // .mbtn.back class on each).
       document.getElementById("btn-mp-host-back").addEventListener("click", () => {
@@ -4344,15 +4391,14 @@
       document.getElementById("btn-mp-fail-back").addEventListener("click", () => {
         showScreen("scr-mp"); // the failed attempt was already torn down
       });
-      document.getElementById("btn-mp-exit").addEventListener("click", () => {
-        exitToMenu("scr-home");
-      });
 
       return {
         configure,
         hostPickedLevel,
-        // The race wrap-up owns the post-run flow while a race is live.
-        inRace: () => state === "racing" || state === "results",
+        respawn,
+        leaveRoom,
+        // The room owns the post-run flow while a session is live.
+        inRace: () => state === "racing" || state === "starting",
       };
     })();
 
