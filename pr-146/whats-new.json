@@ -1,8 +1,8 @@
 [
  {
-  "rev": "38415d3",
-  "date": "2026-08-23T22:38:58Z",
-  "note": "Game controllers now fly like the split touch scheme — left hand burns (L1/L2), right stick points the nose — and pads keep working while AirPlaying to a TV"
+  "rev": "19f67b7",
+  "date": "2026-08-23T22:54:11Z",
+  "note": "Game controllers now fly like the split touch scheme — left hand burns, right stick points the nose — and the L2 trigger is a real analog throttle: squeeze gently for a feather burn"
  },
  {
   "rev": "61d1487",
