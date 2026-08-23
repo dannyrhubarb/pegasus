@@ -1634,6 +1634,15 @@ the format drops fields the level's version doesn't carry (v3 keyframes
 lose visited/run_ticks), so a finalized live recording and its decoded
 round-tripped blob differ in memory while their blobs match
 (unit-tested: `replay_ghost_races_other_runs_but_never_the_record_run_itself`).
+**Watching the record itself still gets a race (2026-08)**: on a board ▶
+of the record run, JS ships the RUNNER-UP as the ghost instead — the
+watch-ghost pick in `watchGlobalReplay` is the first board entry whose
+`replayPath` differs from the watched one (a same-path guard, not a rank
+test: paths are unique per submission, so every ordinary watch still gets
+the record and only the record's own watch falls through to the
+next-ranked replay). A board with no second replay clears the pending
+ghost as before, and the `same_recording` gate above remains the
+wasm-side safety net (own-run record replays, duplicate blobs).
 
 ### High scores & watching stored replays
 Scores, replays and the racing ghost are **global-only** — the local

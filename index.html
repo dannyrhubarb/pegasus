@@ -3140,14 +3140,20 @@
       pushTextToWasm(best ? best.name : "", "set_watch_best_name");
       // Ghost for the replay: THIS board's record run (its best entry with
       // a replay), fetched alongside the watch blob — the loaded level's
-      // ghost is the wrong world when browsing another level's board. The
-      // fetch is skipped when the watched entry IS the record (the game
-      // would drop the overlap anyway); a skipped or failed fetch pushes
-      // len 0, which CLEARS any ghost left pending by an aborted watch.
-      // The game still gates it (setting off / world mismatch), and falls
-      // back to the loaded level's ghost when none arrives.
-      const g = board.find(s => s.replayPath);
-      const ghostFetch = g && g.replayPath !== path
+      // ghost is the wrong world when browsing another level's board.
+      // Watching the RECORD itself gets the runner-up as its ghost instead
+      // (the record can't race itself — but the best replay still deserves
+      // a race): the next-ranked entry with a replay, if the board has one.
+      // No candidate ⇒ the push below sends len 0, which CLEARS any ghost
+      // left pending by an aborted watch; a failed fetch clears the same
+      // way. The game still gates whatever arrives (setting off / world
+      // mismatch), and falls back to the loaded level's ghost when none
+      // arrives.
+      // Same-path guard, not rank: paths are unique per submission, so this
+      // picks the record for every ordinary watch and the runner-up exactly
+      // when the watched entry IS the record.
+      const g = board.find(s => s.replayPath && s.replayPath !== path);
+      const ghostFetch = g
         ? fetch(backendCfg.replayBaseUrl + "/" + g.replayPath)
             .then(r => (r.ok ? r.arrayBuffer() : null))
             .catch(() => null)
