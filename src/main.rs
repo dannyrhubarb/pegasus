@@ -803,6 +803,20 @@ pub extern "C" fn set_watch_ghost_name(len: u32) {
     *WATCH_GHOST_NAME.lock().unwrap() = String::from_utf8_lossy(&b[..end]).into_owned();
 }
 
+// The watched replay's own pilot, floated under the replayed ship (amber —
+// the replay accent — where the ghost's label stays blue). Pushed by JS
+// with the rest of the watch context on every board ▶ (overwrite, so a
+// previous watch's pilot can't leak); adopted into replay_pilot_name at the
+// watch entry point. Own-run crash replays clear it — you know who flew.
+static WATCH_PILOT_NAME: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_watch_pilot_name(len: u32) {
+    let b = BLOB_IN.lock().unwrap();
+    let end = (len as usize).min(b.len());
+    *WATCH_PILOT_NAME.lock().unwrap() = String::from_utf8_lossy(&b[..end]).into_owned();
+}
+
 // --- HTML game-menu bridge (index.html owns the menu/pause/game-over UI) ---
 // The web wrapper drives the game with set_ui_pause + ui_command and observes
 // it through ui_state / cur_dist. UI_STATE and CUR_DIST are per-frame mirrors
@@ -1378,6 +1392,9 @@ async fn main() {
     // The replay ghost's callsign (WATCH_GHOST_NAME or GHOST_NAME depending
     // on where the recording came from), drawn under the silhouette.
     let mut replay_ghost_name = String::new();
+    // The watched replay's own pilot, drawn under the replayed ship (set at
+    // the watch entry from WATCH_PILOT_NAME; empty on own-run replays).
+    let mut replay_pilot_name = String::new();
 
     // Debris burst at (x, y) — fired at the real crash and again when the
     // replay reaches its end.
@@ -1509,6 +1526,8 @@ async fn main() {
                 replay_ghost = replay_ghost_player(g, &rec);
                 replay_ghost_name = GHOST_NAME.lock().unwrap().clone();
             }
+            // The watched pilot's callsign rides under the replayed ship.
+            replay_pilot_name = WATCH_PILOT_NAME.lock().unwrap().clone();
             watch_rec = Some(rec);
             replay_player = Some(p);
             mode = Mode::Replay;
@@ -1532,6 +1551,7 @@ async fn main() {
                         .clone()
                         .and_then(|g| replay_ghost_player(g, &recorder));
                     replay_ghost_name = GHOST_NAME.lock().unwrap().clone();
+                    replay_pilot_name.clear(); // own run — you know who flew
                     replay_player = Some(p);
                     mode = Mode::Replay;
                     REPLAY_PAUSED.store(0, Ordering::Relaxed);
@@ -2939,6 +2959,26 @@ async fn main() {
             draw_triangle(rot(d[0], d[1]), rot(d[2], d[3]), rot(d[4], d[5]), col);
         }
 
+        // The watched replay's pilot rides under the replayed ship — amber
+        // (the replay accent) where the ghost's label is blue, at the SAME
+        // offset as the ghost's label (while the ships overlap on the spawn
+        // the amber label simply draws on top — they separate within a
+        // moment). Hidden with the hull (the replayed explosion) and on
+        // own-run replays (empty — you know who flew).
+        if mode == Mode::Replay && ship_visible && !replay_pilot_name.is_empty() {
+            let label = replay_pilot_name.to_uppercase();
+            let fs = 28.0 * ui;
+            let dim = measure_text(&label, None, fs as u16, 1.0);
+            let s = w2s(cam_x, cam_y, sh, cam_x, cam_y);
+            let lx = s.x - dim.width / 2.0;
+            let ly = s.y + 1.05 * view_scale + fs;
+            // Same dark backing pass as the ghost label: contrast against
+            // lit rock, not just the void.
+            draw_text(&label, lx + 1.5 * ui, ly + 1.5 * ui,
+                fs, Color::from_rgba(26, 18, 8, 200));
+            draw_text(&label, lx, ly, fs, Color::from_rgba(255, 214, 130, 240));
+        }
+
         // Speed danger color, shared by the HUD readout and the (optional)
         // velocity arrow: green = landable, amber = damage-free touch, red =
         // damaging.
@@ -3068,6 +3108,7 @@ async fn main() {
                         .clone()
                         .and_then(|g| replay_ghost_player(g, &recorder));
                     replay_ghost_name = GHOST_NAME.lock().unwrap().clone();
+                    replay_pilot_name.clear(); // own run — you know who flew
                     replay_player = Some(p);
                     mode = Mode::Replay;
                     REPLAY_PAUSED.store(0, Ordering::Relaxed);
