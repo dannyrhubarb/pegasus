@@ -1,8 +1,8 @@
 [
  {
-  "rev": "30bda75",
-  "date": "2026-08-23T12:16:04Z",
-  "note": "New: The record ghost now races through replays too (except when watching the record run itself)"
+  "rev": "2d892c5",
+  "date": "2026-08-23T12:23:33Z",
+  "note": "New: The record ghost now haunts your replays too — every watch is a race (unless it IS the record run; a ghost can't race itself)"
  },
  {
   "rev": "dda8bff",
