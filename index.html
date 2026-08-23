@@ -3025,7 +3025,7 @@
           watch.textContent = "▶ watch";
           watch.addEventListener("click", e => {
             e.stopPropagation();
-            watchGlobalReplay(s.replayPath); // blob fetched only now, on tap
+            watchGlobalReplay(s.replayPath, s.name); // blob fetched only now, on tap
           });
           li.appendChild(watch);
         }
@@ -3120,9 +3120,13 @@
     // SURFACED on the status line ("HTTP 403" = CDN/permissions, "Failed to
     // fetch" = network/CORS, "rejected" = format/build mismatch) — a silent
     // watch button is undebuggable in the field.
-    function watchGlobalReplay(path) {
+    function watchGlobalReplay(path, pilotName) {
       setLoading(true);
       scoresStatus.style.display = "none";
+      // The watched pilot's callsign floats under the replayed ship
+      // in-game. Always pushed (empty clears), so a previous watch's
+      // pilot can't leak into the next replay.
+      pushTextToWasm(pilotName || "", "set_watch_pilot_name");
       // Record context for the replay HUD: THIS board's level's all-time #1
       // (the wasm can't look it up — the blob header carries physics params,
       // not the level's board identity). Always pushed, blank on a cold

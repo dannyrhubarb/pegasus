@@ -1745,7 +1745,12 @@ the real backend. All JS-side in `index.html`:
 - **Watching a server replay**: ▶ fetches `<replayBaseUrl>/<replayPath>`
   (CloudFront) and pushes the bytes into `watch_replay_blob`
   (`pushBytesToWasm`); the blob's header carries its level, so it re-sims
-  in the right world regardless of the selected level.
+  in the right world regardless of the selected level. The tapped entry's
+  pilot rides along (`set_watch_pilot_name`, always pushed — empty clears)
+  and floats under the replayed ship in AMBER (the replay accent; the
+  racing ghost's label stays blue) at the same offset as the ghost's
+  label — while the ships overlap on the spawn the amber label just draws
+  on top; own-run crash replays clear it — you know who flew.
 - **Global record → BEST + ghost** (`applyGlobalRecord`): after every
   level load (and when config.json arrives, and after a successful
   submit) the loaded level's **all-time board** is refreshed; the #1
