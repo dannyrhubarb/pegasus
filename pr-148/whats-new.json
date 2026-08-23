@@ -1,18 +1,28 @@
 [
  {
-  "rev": "e884b43",
-  "date": "2026-08-22T12:39:35Z",
+  "rev": "9571623",
+  "date": "2026-08-23T19:40:17Z",
   "note": "New: Multiplayer rooms now last until you leave — crash or finish, and you respawn right back in with your rival"
  },
  {
-  "rev": "e890572",
-  "date": "2026-08-22T12:06:18Z",
+  "rev": "e333e79",
+  "date": "2026-08-23T19:40:17Z",
   "note": "Multiplayer invite links: hosts can share a tap-to-join link instead of reading the room code aloud"
  },
  {
-  "rev": "2ce7f0f",
-  "date": "2026-08-22T12:06:18Z",
+  "rev": "c737fe4",
+  "date": "2026-08-23T19:40:17Z",
   "note": "Multiplayer: race a friend through the same cave — host a room code, they join from their phone, 3-2-1-GO"
+ },
+ {
+  "rev": "96e762a",
+  "date": "2026-08-23T19:39:28+02:00",
+  "note": "New: The record ghost now photobombs your replays — every playback is a race"
+ },
+ {
+  "rev": "dda8bff",
+  "date": "2026-08-23T11:57:26+02:00",
+  "note": "Fixed: Replays now show the replayed level's own best score and record holder, not the loaded level's"
  },
  {
   "rev": "6956d42",
