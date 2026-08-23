@@ -1,15 +1,5 @@
 [
  {
-  "rev": "9b41461",
-  "date": "2026-08-23T19:07:32Z",
-  "note": "New: Watched replays now name their pilot — the callsign rides right under the ship"
- },
- {
-  "rev": "cebf2d7",
-  "date": "2026-08-23T19:07:32Z",
-  "note": "Fixed: Pilot names under the ghost and the BEST readout no longer require squinting"
- },
- {
   "rev": "96e762a",
   "date": "2026-08-23T19:39:28+02:00",
   "note": "New: The record ghost now photobombs your replays — every playback is a race"
