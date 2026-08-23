@@ -375,6 +375,12 @@
       width: 100%;
       max-height: 100%;
       overflow-y: auto;
+      /* overflow-y: auto makes overflow-x COMPUTE to auto as well, so any
+         child even 1px wider than the padded content box turns the screen
+         into a horizontal scroller — which iOS rubber-bands (field bug:
+         sideways-bouncy level picker on <400px-wide iPhones, where the
+         88vw rowlist beat 100vw - 48px padding). Clip the axis for good. */
+      overflow-x: hidden;
       padding: max(var(--inset-top), 28px) 24px max(var(--inset-bottom), 28px);
       text-align: center;
     }
@@ -535,6 +541,7 @@
        (see #scr-announce). */
     .announce-msg {
       width: min(520px, 88vw);
+      max-width: 100%; /* same narrow-phone clamp as .rowlist */
       padding: 18px 20px;
       border: 1.5px solid var(--amber);
       border-radius: 10px;
@@ -553,7 +560,11 @@
       display: flex;
       flex-direction: column;
       gap: 8px;
+      /* max-width keeps the list inside .screen's 24px side padding on
+         narrow phones, where 88vw > 100vw - 48px (the sideways-bounce bug
+         — see the .screen overflow-x note). */
       width: min(440px, 88vw);
+      max-width: 100%;
     }
     /* The board can hold 50 entries — scroll the LIST itself (keeping the
        title, period chips and Back button fixed) rather than the whole
@@ -588,8 +599,20 @@
       flex-direction: column;
       align-items: flex-end;
       gap: 2px;
+      /* Flex min-width defaults to auto, so the nowrap "by <pilot>" line
+         below would refuse to shrink and shove the row wider than its card
+         on narrow phones (record names go up to 24 chars) — let it shrink
+         and ellipsize instead. */
+      min-width: 0;
     }
-    .rowlist .row .lbest-by { color: var(--faint); font-size: 0.78em; white-space: nowrap; }
+    .rowlist .row .lbest-by {
+      color: var(--faint);
+      font-size: 0.78em;
+      white-space: nowrap;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     .rowlist .row .lbest-by:empty { display: none; }
     /* Drill-down chevron (scores-mode picker: a row opens that level's board) */
     .rowlist .row .chev { color: var(--cyan); font-size: 1.25em; line-height: 1; opacity: 0.65; }

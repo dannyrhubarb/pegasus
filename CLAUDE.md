@@ -208,6 +208,21 @@ monospace lettering with layered `text-shadow` glow (the one webfont is
 self-contained), and **custom neon toggle switches — no native
 form elements**. Palette in `:root` (`--cyan`/`--magenta`/`--amber`/
 `--green`). Respects `prefers-reduced-motion`.
+**Screens must never scroll sideways — `.screen` is `overflow-x: hidden`
+and anything full-width needs `max-width: 100%`** (field bug, 2026-08):
+`.screen`'s `overflow-y: auto` makes its unspecified `overflow-x` COMPUTE
+to `auto`, so a child even 1 px wider than the padded content box turned
+the whole screen into a horizontal scroller that iOS rubber-bands — the
+"level picker bounces sideways" report. The culprit was `.rowlist`'s
+`width: min(440px, 88vw)` vs the screen's 24 px side padding: 88vw beats
+`100vw − 48px` below 400 CSS px, so iPhones up to the 393 px class
+overflowed by 1–2 px while ≥ 402 px models (the owner's) fit — which is
+why it reproduced only on some phones. Fixed with `max-width: 100%` on
+`.rowlist`/`.announce-msg` plus the `overflow-x: hidden` guard; the
+picker rows' nowrap "by <pilot>" line also got `min-width: 0` +
+ellipsis so a 24-char record name shrinks instead of shoving the row
+wide. Keep new wide elements under `max-width: 100%` and verify with a
+headless `scrollWidth > clientWidth` check at 320–393 px widths.
 **Menu animations must be compositor-only — animate `transform`/`opacity`,
 never `background-position`, `top`, `box-shadow`(-ish paints on large
 areas), or anything inside an SVG filter** (perf lesson, 2026-08): the menu
