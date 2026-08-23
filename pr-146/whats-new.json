@@ -1,12 +1,12 @@
 [
  {
-  "rev": "46c9cc5",
-  "date": "2026-08-23T21:35:53Z",
+  "rev": "ebd016c",
+  "date": "2026-08-23T22:18:46Z",
   "note": "Game controllers: the analog stick now points the nose (like the touch stick) with boost on its own button — and pads keep working while AirPlaying to a TV"
  },
  {
-  "rev": "f7cb187",
-  "date": "2026-08-23T21:32:20Z",
+  "rev": "61d1487",
+  "date": "2026-08-23T22:18:46Z",
   "note": "iPhone app: AirPlay your flight to the TV — the game goes full-screen on the big screen while your phone becomes the controller"
  },
  {
