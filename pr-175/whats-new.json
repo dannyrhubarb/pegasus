@@ -1,12 +1,12 @@
 [
  {
-  "rev": "bc57316",
-  "date": "2026-08-23T18:56:25Z",
+  "rev": "9b41461",
+  "date": "2026-08-23T19:07:32Z",
   "note": "New: Watched replays now name their pilot — the callsign rides right under the ship"
  },
  {
-  "rev": "2ff575d",
-  "date": "2026-08-23T18:53:07Z",
+  "rev": "cebf2d7",
+  "date": "2026-08-23T19:07:32Z",
   "note": "Fixed: Pilot names under the ghost and the BEST readout no longer require squinting"
  },
  {
