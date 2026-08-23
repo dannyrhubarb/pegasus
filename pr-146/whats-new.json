@@ -1,13 +1,18 @@
 [
  {
-  "rev": "19f67b7",
-  "date": "2026-08-23T22:54:11Z",
-  "note": "Game controllers now fly like the split touch scheme — left hand burns, right stick points the nose — and the L2 trigger is a real analog throttle: squeeze gently for a feather burn"
+  "rev": "b8c576a",
+  "date": "2026-08-23T23:40:47Z",
+  "note": "AirPlay the game to your TV — full-screen on the big screen, live, while your phone stays exactly the phone you know"
  },
  {
-  "rev": "61d1487",
-  "date": "2026-08-23T22:18:46Z",
-  "note": "iPhone app: AirPlay your flight to the TV — the game goes full-screen on the big screen while your phone becomes the controller"
+  "rev": "16e0d98",
+  "date": "2026-08-24T01:32:25+02:00",
+  "note": "Fixed: The in-app licenses page now scrolls and keeps clear of the notch - reading the fine print is officially possible again"
+ },
+ {
+  "rev": "495a794",
+  "date": "2026-08-23T23:26:05Z",
+  "note": "Game controllers now fly like the split touch scheme — left hand burns, right stick points the nose — and the L2 trigger is a real analog throttle: squeeze gently for a feather burn"
  },
  {
   "rev": "412b89d",
