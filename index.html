@@ -1506,6 +1506,64 @@
     // (e.g. after a reload), so probe once the WASM exports are ready too.
     if (firstGamepad()) startPadPolling();
 
+    // --- AirPlay spectator sync (iOS shell only) ---
+    // While a TV spectator is connected, the shell calls __pegSpecSetSync
+    // and this block drains the wasm's outbound sync frames each rAF,
+    // handing them to the shell as base64 (pegasusSpecData message); the
+    // shell relays them into the TV page (spectator.html), a second game
+    // instance following this run's live recording. Feature-detected and
+    // fully try/caught: on the plain website the shell handlers don't
+    // exist, the shell never calls in, and this is zero cost.
+    (function () {
+      let specOn = false;
+      let specArmed = false;   // set_sync(1) delivered to the wasm
+      let specPolling = false;
+      function specHandler() {
+        const wk = window.webkit;
+        return wk && wk.messageHandlers && wk.messageHandlers.pegasusSpecData;
+      }
+      function specDrain() {
+        if (!specOn) { specPolling = false; return; }
+        try {
+          const E = typeof wasm_exports !== "undefined" ? wasm_exports : null;
+          const h = specHandler();
+          if (E && E.sync_out_len && h) {
+            if (!specArmed) { E.set_sync(1); specArmed = true; }
+            const len = E.sync_out_len();
+            if (len > 0) {
+              const bytes = new Uint8Array(wasm_memory.buffer, E.sync_out_ptr(), len);
+              let s = "";
+              for (let i = 0; i < bytes.length; i += 0x8000)
+                s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+              h.postMessage(btoa(s));
+              E.sync_out_clear();
+            }
+          }
+        } catch (e) { /* the pipe must never break the game */ }
+        requestAnimationFrame(specDrain);
+      }
+      window.__pegSpecSetSync = function (enable) {
+        try {
+          specOn = !!enable;
+          if (!specOn && specArmed && typeof wasm_exports !== "undefined" &&
+              wasm_exports.set_sync) {
+            wasm_exports.set_sync(0);
+            specArmed = false;
+          }
+          if (specOn && !specPolling) {
+            specPolling = true;
+            requestAnimationFrame(specDrain);
+          }
+        } catch (e) {}
+      };
+      window.__pegSpecReqFull = function () {
+        try {
+          if (typeof wasm_exports !== "undefined" && wasm_exports.sync_request_full)
+            wasm_exports.sync_request_full();
+        } catch (e) {}
+      };
+    })();
+
     // Report the safe-area insets (all four sides) to the game, in CSS px.
     // The canvas is 100vh, so it extends UNDER the floating browser toolbar;
     // env(safe-area-inset-bottom) only covers the home indicator, so the

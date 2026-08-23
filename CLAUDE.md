@@ -68,6 +68,12 @@ push-retry loop for concurrent deploys):
 - `levels/` — **runtime level data**: `*.level` files (`key = value`) + `manifest.json` (menu order), fetched by `index.html` and pushed into the wasm — new levels deploy with no recompile (see "Levels")
 - `fonts/` — the **vendored menu webfont**: `jetbrains-mono.woff2` (latin variable, wght 400–800) + its `OFL.txt`, loaded via `@font-face` by `index.html`/`editor.html` so every platform renders the same face (see the menu-font note under "Game menu"); in all three bundle copy lists
 - `editor.html` — the **standalone level editor** (issue #89 v1, 2026-07): draws hand-drawn `.level` worlds — the same `poly`/`pad`/`start` representation The Hollows uses — on a pan/zoom canvas. Self-contained like `index.html` (no CDNs), copied by `build-site`. **Deliberately UNLINKED from the game UI** (owner decision pre-merge): it lives at its own path with no menu button and no picker row; the game only meets it through the `?custom=1` test-fly handoff. **While it stays unlinked, editor commits carry NO `Whats-new:` trailers** (the changelog must not advertise an unannounced feature — the PR #110 branch had its trailers stripped before merge; give the editor one proper entry when it's linked up for real). See "Level editor & custom drafts" under "Levels"
+- `spectator.html` — the **AirPlay TV page**: a second instance of the game
+  booted in spectator mode (`set_spectator`), following the phone's live
+  recording via the shell-relayed sync pipe (see the AirPlay bullet under
+  "iOS app"). No menu, no analytics, no input — loaded only by the iOS
+  shell's external-display window, but shipped in every bundle (it's in
+  all three copy lists) since the web build is the single source
 - `tools/gen-third-party-licenses.py` + `third-party-licenses.html` — the generated third-party attribution page served with the site and linked from the About screen; regenerate when `Cargo.lock` changes (see "License")
 - `privacy.html` — standalone privacy policy served with the site (and bundled into both apps), written for the Play Store listing's required privacy-policy URL; same substance as the About screen's `#privacy-note` — keep the two in agreement when the analytics story changes
 - `tools/gen-whats-new.py` + `tools/whats-new-backfill.json` + `tools/whats-new-overrides.json` — deploy-time generator for `whats-new.json`, the About screen's What's New changelog (see "What's new page" — **every user-facing commit needs a `Whats-new:` trailer**; the overrides file rewords already-merged entries)
@@ -1922,6 +1928,73 @@ re-acquired on the `visibilitychange` back while still wanted).
   `env()`, behavior unchanged (verified headless: unset vars reproduce
   the old computed styles exactly). The Android shell doesn't inject
   (no jank reported there); it can adopt the same vars if ever needed.
+- **AirPlay second screen — spectator instance** (`ios/Pegasus/AirPlay.swift`
+  + `spectator.html`, 2026-08): during AirPlay **screen mirroring**
+  (user-started from Control Center — there is NO API to start it
+  programmatically, so no in-app button can) the app replaces the
+  letterboxed mirror with a **full-screen 16:9 TV window** while the phone
+  stays COMPLETELY normal — portrait or landscape, every menu touchable,
+  nothing moves. The TV window (offered as a non-interactive
+  external-display scene; the `configurationForConnecting` callback fires
+  even with `UIApplicationSupportsMultipleScenes = false`, role matched
+  `!= .windowApplication` to dodge the iOS 16 rename) hosts a SECOND
+  WKWebView running `spectator.html`: a second instance of the SAME wasm
+  in spectator mode (`set_spectator`) that re-simulates the phone's LIVE
+  recording in lockstep — determinism (the replay/ghost/verifier
+  guarantee) is what makes the TV's independent 16:9 render bit-identical.
+  **Sync pipe**: the phone's frame loop publishes its recorder's growth
+  (full serialized `Recording` on run start / resync / connect, tiny
+  deltas otherwise — app-level wire format in main.rs, `encode_sync_delta`
+  / `decode_sync_delta`, unit-tested round-trip; `Recording::extend_live`
+  in replay.rs is the validated graft, additive — no stored-format bump,
+  no backend repin) into `SYNC_OUT`; index.html's `__pegSpecSetSync` block
+  drains it per rAF → base64 → `pegasusSpecData` message → the shell
+  relays into the TV page's `__pegSpecRecv` → `blob_in_ptr`/`spec_feed`.
+  The spectator drives the EXISTING replay-render bindings
+  (`replay_player`/`replay_frame` → `world_sim`, camera, glow, HUD,
+  recorded-input stick at its parked home; `spec_player_from` allows a
+  0-tick recording so the TV shows the right world's spawn during the
+  armed-idle wait; mode stays `Flying`, so no transport/exit paths engage).
+  A delta that doesn't join contiguously sets `spec_need_full` — the shell
+  polls it at 1 Hz and the phone resends the full blob (also auto-sent on
+  reset/level-load/trim, detected by `SyncWatermarks`: count regressions
+  **plus a `LevelParams` identity check** — an UNARMED level switch (or a
+  `seed = random` re-roll before arming) swaps recorders of identical
+  shape, 0 ticks + 1 spawn keyframe, so regression alone missed it and
+  the TV kept re-simming the old world; field bug 2026-08, unit-tested).
+  **The racing ghost mirrors too** (frame kind 5 — the ghost blob lives
+  in index.html's board fetch, which spectator.html deliberately lacks,
+  so the phone streams its ghost context: pilot name + recording, empty
+  = none; sent with every kind 1/3 and whenever the ghost / its name /
+  the Race-best-ghost setting changes — `encode/decode_sync_ghost`,
+  unit-tested). The TV feeds it through the existing
+  `replay_ghost_player` (params-equality + same-recording gates for
+  free) and steps it in lockstep with the spec player, replay-ghost
+  style; the name lands in the TV's `GHOST_NAME` so the Flying-mode
+  label path just works, and it hides during the armed-idle wait (the
+  followed recording has 0 ticks — `run_started` in spectator terms).
+  **TV framing & cosmetics are world-anchored** (field report 2026-08:
+  each AirPlay route — Apple TV vs direct mirroring — reports different
+  UIScreen geometry, so the phone/desktop `view_scale` heuristics picked
+  a different zoom per route, and px-fixed cosmetics shrank to specks):
+  in spectator mode `view_scale = min(sw,sh)/MOBILE_VIEW_M` (the phone's
+  landscape framing at any resolution) and the `cosm` factor
+  (`view_scale/20.5`, ≈1 on a phone by construction) scales stars, pad
+  beacons and particle radii with the world; particle emission counts
+  are normalized to 60 fps-equivalent (`emit_mul`) because the AirPlay
+  webview can render at 30 fps and emission is per-frame.
+  **Watching a replay mirrors it too**: in `Mode::Replay` the phone
+  streams the played recording once (frame kind 3) plus the playhead
+  tick as it moves (kind 4, published AFTER the transport block so seeks
+  are current) — the TV follows the playhead exactly, so pause/scrub/
+  speed mirror for free, racing the replay's OWN ghost (its kind 5 rides
+  along with kind 3); replay
+  exit re-arms a full live frame (kind 1), which always returns the
+  spectator to live follow and restores the live ghost context. Menus pause
+  the sim, so the TV simply holds the frozen scene — no idle-card handoff,
+  no webview reparenting, no touch forwarding: the phone's input paths are
+  untouched. Latency on the TV = relay (~a frame) + AirPlay's inherent
+  ~100–200 ms; the phone in the player's hands has zero added latency.
 - App icon: `icon.svg` rendered to an opaque 1024×1024 PNG in
   `Assets.xcassets` (no alpha — App Store validation rejects it);
   re-render if the SVG changes.

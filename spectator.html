@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <!-- The AirPlay TV page: a second instance of the game booted in
+       SPECTATOR mode (set_spectator export). It renders the phone's live
+       run — the iOS shell relays sync frames from the phone's page into
+       __pegSpecRecv below — and has NO interactive UI at all: no menu, no
+       analytics, no touch, no online layer. Everything the player touches
+       lives on the phone. Loaded only by the iOS shell's external-display
+       window (ios/Pegasus/AirPlay.swift); it ships in every bundle because
+       the web build is the single source all shells copy from. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Pegasus — TV</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: #05060f; height: 100%; overflow: hidden; }
+    canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; }
+    /* Idle chrome until the first sync frame lands: same neon identity as
+       the menu, compositor-only. */
+    #idle {
+      position: fixed; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 18px;
+      font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+      color: #6ef0ff; pointer-events: none; transition: opacity .6s;
+    }
+    #idle.off { opacity: 0; }
+    #idle .t { font-size: 88px; font-weight: 800; letter-spacing: .08em;
+      text-shadow: 0 0 18px rgba(110, 240, 255, .8), 0 0 60px rgba(110, 240, 255, .35); }
+    #idle .h { font-size: 22px; color: rgba(255, 255, 255, .45); }
+  </style>
+  <script>
+    // Sync intake, defined before the bundle so the shell can call it from
+    // the moment the page exists. Frames arrive as base64 (the shell relays
+    // opaque bytes between the two webviews); they queue until the wasm
+    // exports are live, then flow through the blob_in buffer into
+    // spec_feed. Everything try/caught: a bad frame must never kill the
+    // page — the resync path (spec_need_full → __pegSpecNeedFull) recovers.
+    (function () {
+      var queue = [];
+      var idleOff = false;
+      function push(b64) {
+        try {
+          var bin = atob(b64);
+          var bytes = new Uint8Array(bin.length);
+          for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          queue.push(bytes);
+          pump();
+        } catch (e) {}
+      }
+      function pump() {
+        try {
+          if (typeof wasm_exports === "undefined" || !wasm_exports ||
+              !wasm_exports.spec_feed) return;
+          while (queue.length) {
+            var bytes = queue.shift();
+            var ptr = wasm_exports.blob_in_ptr(bytes.length);
+            new Uint8Array(wasm_memory.buffer, ptr, bytes.length).set(bytes);
+            wasm_exports.spec_feed(bytes.length);
+            if (!idleOff) {
+              idleOff = true;
+              var el = document.getElementById("idle");
+              if (el) el.classList.add("off");
+            }
+          }
+        } catch (e) {}
+      }
+      window.__pegSpecRecv = push;
+      // The shell polls this: 1 = the spectator wants a full resync (missed
+      // frames, joined mid-run). Forwarded to the phone as sync_request_full.
+      window.__pegSpecNeedFull = function () {
+        try {
+          if (typeof wasm_exports !== "undefined" && wasm_exports &&
+              wasm_exports.spec_need_full) return wasm_exports.spec_need_full();
+        } catch (e) {}
+        return 0;
+      };
+      // Flip the wasm into spectator mode the moment the exports appear.
+      var arm = setInterval(function () {
+        try {
+          if (typeof wasm_exports !== "undefined" && wasm_exports &&
+              wasm_exports.set_spectator) {
+            wasm_exports.set_spectator(1);
+            clearInterval(arm);
+            pump();
+          }
+        } catch (e) {}
+      }, 100);
+    })();
+  </script>
+</head>
+<body>
+  <canvas id="glcanvas" tabindex="1"></canvas>
+  <div id="idle">
+    <div class="t">PEGASUS</div>
+    <div class="h">fly on your phone — the game appears here</div>
+  </div>
+  <script src="./mq_js_bundle.js"></script>
+  <script>
+    // Same boot the game page uses, minus the cache-buster (the shell
+    // serves the bundled wasm; its scheme handler strips queries anyway).
+    load("./pegasus.wasm");
+  </script>
+</body>
+</html>
