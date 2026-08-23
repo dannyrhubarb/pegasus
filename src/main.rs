@@ -335,6 +335,35 @@ fn rebuild_replay_particles(rec: &Recording, target: u32, particles: &mut Vec<Pa
     particles.retain(|pt| pt.life > 0.0);
 }
 
+// Content equality between two recordings (Recording keeps private recorder
+// state, so it has no derived PartialEq): compare their serialized bytes —
+// two decodes of the same stored blob, or a finalized live run and its
+// round-tripped submission coming back as the record ghost, serialize
+// identically. NOT a struct compare: the format drops fields the level's
+// version doesn't carry (v3 keyframes lose visited/run_ticks), so a live
+// recording and its decoded blob differ in memory while their blobs match.
+fn same_recording(a: &Recording, b: &Recording) -> bool {
+    a.level == b.level && a.serialize(0) == b.serialize(0)
+}
+
+// Ghost for replay playback: a record run races through a watched replay
+// too, on its own lockstep ResimPlayer riding the replay clock. The player
+// keeps its recording alongside (the replay ghost can ride a DIFFERENT
+// recording than the live ghost_rec — a board watch brings the watched
+// board's own record). None when the "Race best ghost" setting is off,
+// when the ghost was flown on another world (a random-seed level's rock
+// differs per attempt), or when the replay IS the record run — the
+// silhouette would sit exactly on top of the replayed ship.
+fn replay_ghost_player(g: Recording, play_rec: &Recording) -> Option<(ResimPlayer, Recording)> {
+    if GHOST_ON.load(Ordering::Relaxed) == 0
+        || g.level != play_rec.level
+        || same_recording(&g, play_rec)
+    {
+        return None;
+    }
+    ResimPlayer::new(&g).map(|p| (p, g))
+}
+
 // The attitude stick is now read directly from macroquad's touch API inside
 // the game (see the TouchStick gatherer in the loop) — no touch atoms/exports.
 // Gamepad state lives on its own atomics so a connected-but-idle controller
@@ -745,6 +774,33 @@ pub extern "C" fn load_ghost_blob(len: u32) -> i32 {
         }
         None => 0,
     }
+}
+
+// Ghost for the NEXT watched replay: the watched BOARD's own record run,
+// pushed by JS right before the watch blob — a board replay can be a
+// foreign level (scores browsing never reloads the game), whose record the
+// loaded level's ghost_rec isn't. OVERWRITE semantics, unlike the pending
+// stores above: a failed decode (or len 0, JS's explicit clear) REPLACES
+// the pending value with None, so a ghost left over from an aborted watch
+// can never attach to a later one. Consumed (take) by the watch entry.
+static PENDING_WATCH_GHOST: std::sync::Mutex<Option<Recording>> =
+    std::sync::Mutex::new(None);
+// Its pilot's callsign, pushed with the blob (the GHOST_NAME twin).
+static WATCH_GHOST_NAME: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+#[unsafe(no_mangle)]
+pub extern "C" fn watch_ghost_blob(len: u32) -> i32 {
+    let rec = decode_blob_in(len);
+    let ok = rec.is_some();
+    *PENDING_WATCH_GHOST.lock().unwrap() = rec;
+    ok as i32
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_watch_ghost_name(len: u32) {
+    let b = BLOB_IN.lock().unwrap();
+    let end = (len as usize).min(b.len());
+    *WATCH_GHOST_NAME.lock().unwrap() = String::from_utf8_lossy(&b[..end]).into_owned();
 }
 
 // --- HTML game-menu bridge (index.html owns the menu/pause/game-over UI) ---
@@ -1312,6 +1368,16 @@ async fn main() {
     // paused throughout, so the interrupted run resumes untouched).
     let mut watch_rec: Option<Recording> = None;
     let mut watch_return = Mode::Flying;
+    // Ghost racing through the CURRENT replay (see replay_ghost_player):
+    // player + the recording driving it, built at each replay entry point,
+    // stepped in lockstep with the replay clock, dropped when the replay
+    // ends. Distinct from ghost_player (the live-flight ghost, frozen while
+    // a replay plays over it) — a board watch races the watched board's own
+    // record, which need not be the loaded level's ghost_rec at all.
+    let mut replay_ghost: Option<(ResimPlayer, Recording)> = None;
+    // The replay ghost's callsign (WATCH_GHOST_NAME or GHOST_NAME depending
+    // on where the recording came from), drawn under the silhouette.
+    let mut replay_ghost_name = String::new();
 
     // Debris burst at (x, y) — fired at the real crash and again when the
     // replay reaches its end.
@@ -1393,6 +1459,7 @@ async fn main() {
             ghost_rec = None;
             ghost_player = None;
             replay_player = None;
+            replay_ghost = None;
             watch_rec = None;
             glow = 0.0;
         }
@@ -1425,6 +1492,23 @@ async fn main() {
             watch_return = if sim.crashed || run_over { Mode::CrashDialog } else { Mode::Flying };
             crash_timer = 0.0;    // skip any remaining wreck pause
             complete_timer = 0.0; // …and any remaining completion grace
+            // Ghost for this watch: the watched board's own record (pushed
+            // by JS right before the blob — the right world even when the
+            // board is a foreign level's), falling back to the loaded
+            // level's ghost (covers a cold record cache on the own level's
+            // board). Either way replay_ghost_player's params /
+            // same-recording gates decide whether it actually races.
+            replay_ghost = None;
+            if let Some(g) = PENDING_WATCH_GHOST.lock().unwrap().take() {
+                replay_ghost = replay_ghost_player(g, &rec);
+                replay_ghost_name = WATCH_GHOST_NAME.lock().unwrap().clone();
+            }
+            if replay_ghost.is_none()
+                && let Some(g) = ghost_rec.clone()
+            {
+                replay_ghost = replay_ghost_player(g, &rec);
+                replay_ghost_name = GHOST_NAME.lock().unwrap().clone();
+            }
             watch_rec = Some(rec);
             replay_player = Some(p);
             mode = Mode::Replay;
@@ -1444,6 +1528,10 @@ async fn main() {
             2 if mode == Mode::CrashDialog => {
                 if let Some(p) = ResimPlayer::new(&recorder) {
                     adopt_live_record_for_replay(&sim.level);
+                    replay_ghost = ghost_rec
+                        .clone()
+                        .and_then(|g| replay_ghost_player(g, &recorder));
+                    replay_ghost_name = GHOST_NAME.lock().unwrap().clone();
                     replay_player = Some(p);
                     mode = Mode::Replay;
                     REPLAY_PAUSED.store(0, Ordering::Relaxed);
@@ -1458,6 +1546,7 @@ async fn main() {
                 // of exiting, so leaving the replay is always this explicit
                 // command (or the R-key respawn).
                 replay_player = None;
+                replay_ghost = None;
                 particles.clear();
                 replay_boom_timer = 0.0;
                 mode = if watch_rec.take().is_some() { watch_return } else { Mode::CrashDialog };
@@ -1898,6 +1987,11 @@ async fn main() {
             // one is active, else the live recorder (crash-dialog replay).
             let play_rec = watch_rec.as_ref().unwrap_or(&recorder);
             if let Some(p) = replay_player.as_mut() {
+                // Transport commands teleport the playhead; the replay ghost
+                // sync below then re-seeks through the ghost's own keyframes
+                // instead of catching up tick-by-tick (a long forward jump
+                // re-simmed one tick at a time would stall the frame).
+                let mut replay_jumped = false;
                 // Hitting play on the last frame restarts from the top. The
                 // finish auto-pauses (below), so entering a frame finished
                 // AND unpaused can only mean the user pressed play/space on
@@ -1909,6 +2003,7 @@ async fn main() {
                     p.seek_to_tick(play_rec, p.first_tick);
                     particles.clear();
                     replay_boom_timer = 0.0;
+                    replay_jumped = true;
                 }
                 // Captured BEFORE the transport commands so a seek/step that
                 // lands exactly on the final tick counts as the transition
@@ -1953,6 +2048,7 @@ async fn main() {
                     if p.tick != before {
                         rebuild_replay_particles(play_rec, p.tick, &mut particles);
                         replay_boom_timer = 0.0;
+                        replay_jumped = true;
                     }
                 } else if step_ticks != 0 {
                     // Steps (⏮/⏭ buttons, ←/→ keys) auto-pause: a 0.1 s
@@ -1964,6 +2060,7 @@ async fn main() {
                     if p.tick != before {
                         rebuild_replay_particles(play_rec, p.tick, &mut particles);
                         replay_boom_timer = 0.0;
+                        replay_jumped = true;
                     }
                 }
                 // Paused playback still renders: advance(0) re-simulates
@@ -1975,6 +2072,20 @@ async fn main() {
                 let speed = f32::from_bits(REPLAY_SPEED.load(Ordering::Relaxed));
                 let dt = if paused { 0.0 } else { get_frame_time().min(0.05) * speed };
                 let f = p.advance(play_rec, dt);
+                // The record ghost rides the replay clock in LOCKSTEP, like
+                // live flight — one ghost tick per replayed tick, so both
+                // ships share the spawn clock (the `while` absorbs a normal
+                // frame's few-tick catch-up; transport jumps re-seek through
+                // the ghost's own keyframes instead).
+                if let Some((g, gr)) = replay_ghost.as_mut() {
+                    if replay_jumped || p.tick < g.tick {
+                        g.seek_to_tick(gr, p.tick);
+                    } else {
+                        while !g.finished && g.tick < p.tick {
+                            g.step_one(gr);
+                        }
+                    }
+                }
                 REPLAY_POS.store(p.progress().to_bits(), Ordering::Relaxed);
                 REPLAY_LEN.store(
                     (((p.end_tick - p.first_tick) as f32) * PHYSICS_DT).to_bits(),
@@ -2003,6 +2114,7 @@ async fn main() {
             } else {
                 // No player (every entry point builds one, so this is just a
                 // safety net): fall back out of the mode.
+                replay_ghost = None;
                 mode = if watch_rec.take().is_some() { watch_return } else { Mode::CrashDialog };
             }
         }
@@ -2017,20 +2129,39 @@ async fn main() {
         // Ghost of the last run: the lockstep re-sim's pose, lerped with the
         // SAME alpha as the live ship so both move in sync. None once the
         // ghost reaches its crash (it "dies" there), before a trimmed
-        // recording's first keyframe, outside live flight, or during the
-        // armed-but-idle wait (`run_started` — both ships would sit
-        // overlapped on the spawn until the first control command).
-        let ghost_pose: Option<(f32, f32, f32)> = match (&ghost_player, mode) {
-            (Some(p), Mode::Flying)
-                if GHOST_ON.load(Ordering::Relaxed) != 0
-                    && run_started
-                    && !crashed
-                    && !p.finished
-                    && recorder.ticks() >= p.first_tick =>
-            {
-                Some(p.lerped_pose((phys_accum / PHYSICS_DT).clamp(0.0, 1.0)))
-            }
-            _ => None,
+        // recording's first keyframe, or during the armed-but-idle wait
+        // (`run_started` — both ships would sit overlapped on the spawn
+        // until the first control command). During replay playback the
+        // replay's OWN ghost (replay_ghost — None when the replay IS the
+        // record run, was flown on another world, or the setting is off)
+        // takes over, lerped with the replay player's accumulator so both
+        // ships move in sync; it stays up through the replayed crash's
+        // freeze-frame — where the record run was when this one ended is
+        // part of the comparison.
+        let ghost_pose: Option<(f32, f32, f32)> = match mode {
+            Mode::Flying => match &ghost_player {
+                Some(p)
+                    if GHOST_ON.load(Ordering::Relaxed) != 0
+                        && run_started
+                        && !crashed
+                        && !p.finished
+                        && recorder.ticks() >= p.first_tick =>
+                {
+                    Some(p.lerped_pose((phys_accum / PHYSICS_DT).clamp(0.0, 1.0)))
+                }
+                _ => None,
+            },
+            Mode::Replay => match (&replay_ghost, &replay_player) {
+                (Some((g, _)), Some(p))
+                    if GHOST_ON.load(Ordering::Relaxed) != 0
+                        && !g.finished
+                        && p.tick >= g.first_tick =>
+                {
+                    Some(g.lerped_pose((p.accum / PHYSICS_DT).clamp(0.0, 1.0)))
+                }
+                _ => None,
+            },
+            Mode::CrashDialog => None,
         };
 
         // Local-to-world helpers (position and direction)
@@ -2718,7 +2849,14 @@ async fn main() {
                 }
                 // The ghost pilot's callsign floats just under the
                 // silhouette (unrotated; empty = no label, e.g. offline).
-                let name = GHOST_NAME.lock().unwrap();
+                // During a replay the ghost can be another board's record,
+                // so its name rides the replay-ghost context, not the
+                // loaded level's GHOST_NAME.
+                let name = if mode == Mode::Replay {
+                    replay_ghost_name.clone()
+                } else {
+                    GHOST_NAME.lock().unwrap().clone()
+                };
                 if !name.is_empty() {
                     // Names render uppercase everywhere (boards, picker, HUD).
                     let label = name.to_uppercase();
@@ -2922,6 +3060,10 @@ async fn main() {
                 // Re-simulate the hybrid recording from its first keyframe.
                 if let Some(p) = ResimPlayer::new(&recorder) {
                     adopt_live_record_for_replay(&sim.level);
+                    replay_ghost = ghost_rec
+                        .clone()
+                        .and_then(|g| replay_ghost_player(g, &recorder));
+                    replay_ghost_name = GHOST_NAME.lock().unwrap().clone();
                     replay_player = Some(p);
                     mode = Mode::Replay;
                     REPLAY_PAUSED.store(0, Ordering::Relaxed);
@@ -3224,6 +3366,7 @@ async fn main() {
                 None
             };
             replay_player = None;
+            replay_ghost = None;
             watch_rec = None;
             glow = 0.0;
             recorder.push_keyframe(sim.keyframe(0, 0.0));
@@ -3750,6 +3893,54 @@ mod tests {
             with_rolled_seed(fixed.clone()).to_params()
                 == with_rolled_seed(fixed).to_params()
         );
+    }
+
+    // Fly a short scripted run and record it, with the live loop's exact
+    // tick → record → keyframe ordering — the fixture for the replay-ghost
+    // gating test below.
+    fn short_recorded_run(level: Level, ticks: u32, throttle: f32) -> Recording {
+        let mut sim = Sim::new(level.clone());
+        let mut rec = Recording::new(sim_params(), level.to_params(), u32::MAX);
+        rec.push_keyframe(sim.keyframe(0, 0.0));
+        let input = InputState::from_controls(throttle, 0, 0.0, 0.0, false);
+        for _ in 0..ticks {
+            sim.tick(input);
+            if rec.record_tick(input) {
+                rec.push_keyframe(sim.keyframe(rec.ticks(), 0.0));
+            }
+        }
+        rec
+    }
+
+    #[test]
+    fn replay_ghost_races_other_runs_but_never_the_record_run_itself() {
+        let level = Level::demo();
+        let record = short_recorded_run(level.clone(), 300, 0.8);
+        // The serialize → deserialize round trip (both the ghost and a
+        // watched replay arrive as decoded blobs) preserves content
+        // equality — that's what lets the game recognize "this replay IS
+        // the record run".
+        let (decoded, _) = Recording::deserialize(&record.serialize(0)).unwrap();
+        assert!(same_recording(&record, &decoded));
+        // Watching the record run itself: no ghost — the silhouette would
+        // sit exactly on top of the replayed ship.
+        assert!(replay_ghost_player(decoded, &record).is_none());
+        // Watching a DIFFERENT run on the same level: the record races it —
+        // whichever record was handed in (the loaded level's ghost or a
+        // watched board's own record; the fn only checks the worlds match).
+        let other = short_recorded_run(level, 300, 0.6);
+        assert!(!same_recording(&record, &other));
+        assert!(replay_ghost_player(record.clone(), &other).is_some());
+        // A ghost from another world never races — the record run wasn't
+        // flown on the replayed level.
+        let foreign = short_recorded_run(
+            Level::parse("name = F\nscoring = distance\nseed = 7"), 300, 0.8);
+        assert!(replay_ghost_player(record.clone(), &foreign).is_none());
+        // The "Race best ghost" setting gates the replay ghost like the
+        // live one.
+        GHOST_ON.store(0, Ordering::Relaxed);
+        assert!(replay_ghost_player(record.clone(), &other).is_none());
+        GHOST_ON.store(1, Ordering::Relaxed);
     }
 
     #[test]

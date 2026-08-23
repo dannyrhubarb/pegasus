@@ -1596,6 +1596,40 @@ Cost: one extra `Sim::tick` per physics step during flight (~2× physics,
 still tiny next to rendering; the ghost sim maintains its own collider
 windows around the ghost's position).
 
+**Replays race the ghost too (2026-08)**: replay playback keeps its own
+lockstep player (`replay_ghost` — a `(ResimPlayer, Recording)` pair, built
+at every `Mode::Replay` entry point via `replay_ghost_player`) riding the
+replay clock — one ghost tick per replayed tick, lerped with the replay
+player's accumulator; transport seeks/steps/restart re-seek it through the
+ghost's OWN keyframes (`replay_jumped` — a long forward jump caught up
+tick-by-tick would stall the frame). Silhouette, callsign and minimap dot
+all render through the same `ghost_pose`, and it stays up through the
+replayed crash's freeze-frame (where the record run was when this one
+ended is part of the comparison). **The ghost recording is per-replay, not
+the live `ghost_rec`**: a board's ▶ watch races **the watched board's own
+record** — `watchGlobalReplay` fetches the board's best entry with a
+replay alongside the watch blob and pushes it via `watch_ghost_blob` +
+`set_watch_ghost_name` (the callsign rides `replay_ghost_name`, never the
+loaded level's `GHOST_NAME`), which is what makes the ghost work when
+browsing a FOREIGN level's board (field bug 2026-08: the Hollows-loaded
+session saw ghosts only on the Hollows board — the loaded level's ghost is
+the wrong world for every other board). `watch_ghost_blob` has **overwrite
+semantics** (a failed decode or len 0 — JS's explicit clear when the fetch
+is skipped/fails — replaces the pending value with None) so a ghost from
+an aborted watch can never attach to a later one; with no watch ghost
+pending, the entry falls back to the loaded level's `ghost_rec` (covers
+the crash-dialog replay and a cold record cache on the own level's board;
+`Recording` derives Clone for this). Skipped — `replay_ghost` stays
+None — when the "Race best ghost" setting is off (same `GHOST_ON` gate as
+live), when the candidate ghost was flown on another world (a random-seed
+level's other rolls; params equality), or when the replay **IS the record
+run itself** (it would sit exactly on top of the replayed ship): detected
+by `same_recording`, which compares **serialized bytes**, not structs —
+the format drops fields the level's version doesn't carry (v3 keyframes
+lose visited/run_ticks), so a finalized live recording and its decoded
+round-tripped blob differ in memory while their blobs match
+(unit-tested: `replay_ghost_races_other_runs_but_never_the_record_run_itself`).
+
 ### High scores & watching stored replays
 Scores, replays and the racing ghost are **global-only** — the local
 localStorage layer (`pegasus_scores_<file>` top-5, `pegasus_best_<file>`
