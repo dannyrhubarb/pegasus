@@ -1,8 +1,8 @@
 [
  {
-  "rev": "ebd016c",
-  "date": "2026-08-23T22:18:46Z",
-  "note": "Game controllers: the analog stick now points the nose (like the touch stick) with boost on its own button — and pads keep working while AirPlaying to a TV"
+  "rev": "b3ec7b0",
+  "date": "2026-08-23T22:30:57Z",
+  "note": "Game controllers now fly like the split touch scheme — left hand burns (L1/L2), right stick points the nose — and pads keep working while AirPlaying to a TV"
  },
  {
   "rev": "61d1487",
