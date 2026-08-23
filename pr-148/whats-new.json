@@ -1,17 +1,17 @@
 [
  {
-  "rev": "9571623",
-  "date": "2026-08-23T19:40:17Z",
+  "rev": "1df2297",
+  "date": "2026-08-23T19:48:48Z",
   "note": "New: Multiplayer rooms now last until you leave — crash or finish, and you respawn right back in with your rival"
  },
  {
-  "rev": "e333e79",
-  "date": "2026-08-23T19:40:17Z",
+  "rev": "55646ca",
+  "date": "2026-08-23T19:48:48Z",
   "note": "Multiplayer invite links: hosts can share a tap-to-join link instead of reading the room code aloud"
  },
  {
-  "rev": "c737fe4",
-  "date": "2026-08-23T19:40:17Z",
+  "rev": "1767893",
+  "date": "2026-08-23T19:48:48Z",
   "note": "Multiplayer: race a friend through the same cave — host a room code, they join from their phone, 3-2-1-GO"
  },
  {
