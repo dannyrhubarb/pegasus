@@ -543,6 +543,46 @@ pub extern "C" fn set_best_name(len: u32) {
     *BEST_NAME.lock().unwrap() = String::from_utf8_lossy(&b[..end]).into_owned();
 }
 
+// Record context for the CURRENT replay — the REPLAYED level's own record,
+// drawn under the readout during playback in place of the live BEST/NAME
+// globals (those follow the LOADED level, which a watched replay need not
+// be). The wasm can't look it up itself (a recording header carries physics
+// params, not the level's board identity), so JS pushes it right before each
+// watched blob (watchGlobalReplay: the board's cached all-time #1 — always
+// pushed, blank on a cold cache, so a previous watch's record never leaks),
+// and the own-run replay entry points copy the live globals instead (an
+// own-run replay is the loaded level by construction). Meters on distance
+// levels, seconds on time levels — the HUD formats by the replayed level's
+// scoring. 0 / empty = unknown: the BEST / "by" lines stay hidden for that
+// replay.
+static REPLAY_BEST: AtomicU32 = AtomicU32::new(0);
+static REPLAY_BEST_NAME: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_watch_best(v: f32) {
+    REPLAY_BEST.store(v.max(0.0).to_bits(), Ordering::Relaxed);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_watch_best_name(len: u32) {
+    let b = BLOB_IN.lock().unwrap();
+    let end = (len as usize).min(b.len());
+    *REPLAY_BEST_NAME.lock().unwrap() = String::from_utf8_lossy(&b[..end]).into_owned();
+}
+
+// An own-run replay replays the LOADED level, so its record context is the
+// live BEST/NAME globals; called at the crash-dialog replay entry points
+// (a watched foreign replay gets its context pushed by JS instead).
+fn adopt_live_record_for_replay(level: &Level) {
+    let best = match level.scoring {
+        Scoring::Distance => get_best_dist(),
+        Scoring::Time => get_best_time(),
+        Scoring::Pads => 0.0,
+    };
+    REPLAY_BEST.store(best.max(0.0).to_bits(), Ordering::Relaxed);
+    *REPLAY_BEST_NAME.lock().unwrap() = BEST_NAME.lock().unwrap().clone();
+}
+
 // The ghost pilot's callsign, floated under the racing silhouette. Pushed by
 // JS right after a successful load_ghost_blob — it can differ from BEST_NAME
 // (the ghost is the best run WITH a replay, which may not be the #1 score,
@@ -1403,6 +1443,7 @@ async fn main() {
             1 => ui_do_reset = true,
             2 if mode == Mode::CrashDialog => {
                 if let Some(p) = ResimPlayer::new(&recorder) {
+                    adopt_live_record_for_replay(&sim.level);
                     replay_player = Some(p);
                     mode = Mode::Replay;
                     REPLAY_PAUSED.store(0, Ordering::Relaxed);
@@ -2880,6 +2921,7 @@ async fn main() {
             if is_key_pressed(KeyCode::Enter) {
                 // Re-simulate the hybrid recording from its first keyframe.
                 if let Some(p) = ResimPlayer::new(&recorder) {
+                    adopt_live_record_for_replay(&sim.level);
                     replay_player = Some(p);
                     mode = Mode::Replay;
                     REPLAY_PAUSED.store(0, Ordering::Relaxed);
@@ -3432,6 +3474,26 @@ async fn main() {
         // level's clock (the BEST line moves down a slot, below).
         let limit_ticks = world_sim.level.time_limit_ticks;
         let time_limited = limit_ticks > 0 && world_sim.level.scoring == Scoring::Distance;
+        // Record readout source: the live BEST/NAME globals for the live
+        // world; during playback the per-replay record context (REPLAY_BEST
+        // — the REPLAYED level's own record) instead, so a foreign level's
+        // replay never shows the loaded level's record (the globals follow
+        // the LOADED level, and scores-mode board browsing never reloads
+        // the game). 0 / empty = unknown → the lines stay hidden.
+        let in_replay = replay_player.is_some();
+        let (hud_best, hud_best_name) = if in_replay {
+            (
+                f32::from_bits(REPLAY_BEST.load(Ordering::Relaxed)),
+                REPLAY_BEST_NAME.lock().unwrap().clone(),
+            )
+        } else {
+            let best = match world_sim.level.scoring {
+                Scoring::Distance => get_best_dist(),
+                Scoring::Time => get_best_time(),
+                Scoring::Pads => 0.0,
+            };
+            (best, BEST_NAME.lock().unwrap().clone())
+        };
         let (big, small) = match world_sim.level.scoring {
             Scoring::Distance if time_limited => (
                 format!("{:.0} m", world_sim.max_dist),
@@ -3442,7 +3504,13 @@ async fn main() {
             ),
             Scoring::Distance => (
                 format!("{:.0} m", world_sim.max_dist),
-                format!("BEST {:.0} m", get_best_dist()),
+                // In a replay the record can be unknown (cold board cache)
+                // — no line beats "BEST 0 m" over someone else's run.
+                if in_replay && hud_best <= 0.0 {
+                    String::new()
+                } else {
+                    format!("BEST {:.0} m", hud_best)
+                },
             ),
             Scoring::Pads => (format!("{}", world_sim.score), "SCORE".to_string()),
             // Time level: pads visited over the total (or, on a goal time
@@ -3606,19 +3674,22 @@ async fn main() {
         draw_text(&small, ro_x, ro_y + small_draw_fs + 4.0 * ui,
             small_draw_fs, small_col);
         // Record attribution under the BEST line ("by <pilot>" — or "by you"
-        // once the record falls); empty name = no line (offline, pads).
+        // once the record falls); empty name = no line (offline, pads, a
+        // replay whose record is unknown). Values come from hud_best /
+        // hud_best_name above — the replayed level's own record during
+        // playback, the live globals otherwise.
         if world_sim.level.scoring == Scoring::Distance {
             // On a time-limited sprint the secondary line above is the
             // countdown, so the BEST readout takes the attribution slot's
             // first line (same layout as time levels) with "by <pilot>"
             // beneath.
             let mut by_base = ro_y + small_draw_fs + 4.0 * ui;
-            if time_limited {
-                let bt = format!("BEST {:.0} m", get_best_dist());
+            if time_limited && !(in_replay && hud_best <= 0.0) {
+                let bt = format!("BEST {:.0} m", hud_best);
                 by_base += small_fs + 4.0 * ui;
                 draw_text(&bt, ro_x, by_base, small_fs, Color::from_rgba(130, 155, 190, 200));
             }
-            let name = BEST_NAME.lock().unwrap();
+            let name = hud_best_name;
             if !name.is_empty() {
                 // Names render uppercase everywhere (boards, picker, ghost).
                 let by = format!("by {}", name.to_uppercase());
@@ -3634,13 +3705,13 @@ async fn main() {
             // Best completion time (the global record once seeded, else the
             // session best) in the attribution line's slot, with the record
             // holder beneath — the same "by <pilot>" treatment as distance.
-            let best = get_best_time();
+            let best = hud_best;
             if best > 0.0 {
                 let bt = format!("BEST {}", fmt_run_time((best / PHYSICS_DT).round() as u32));
                 let bt_fs = small_fs;
                 let bt_y = ro_y + small_draw_fs + 4.0 * ui + bt_fs + 4.0 * ui;
                 draw_text(&bt, ro_x, bt_y, bt_fs, Color::from_rgba(130, 155, 190, 200));
-                let name = BEST_NAME.lock().unwrap();
+                let name = hud_best_name;
                 if !name.is_empty() {
                     // Names render uppercase everywhere (boards, picker, ghost).
                     let by = format!("by {}", name.to_uppercase());

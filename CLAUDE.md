@@ -1194,7 +1194,22 @@ icons; see "Fuel"), then the **primary readout** — the run **distance**
 (`{max_dist} m`, or the **score** on pads levels), **big** (`100*ui`, the
 best `0.36×` beneath, and under that the record attribution "by <pilot>"
 at `0.78×` of the BEST size — `BEST_NAME`, see "Online high scores";
-hidden when empty; pilot names render UPPERCASE everywhere they appear), **left-aligned** to the column's left edge (`mm_ox`,
+hidden when empty; pilot names render UPPERCASE everywhere they appear).
+**During replay playback the record readouts — every BEST line + the
+"by <pilot>" attribution — draw from a per-replay record context**
+(`REPLAY_BEST`/`REPLAY_BEST_NAME`), never the live BEST/name globals:
+those follow the LOADED level, and a watched replay can be a foreign
+level (scores-mode board browsing never reloads the game), so reading
+them under a replay showed another level's record (field bug 2026-08:
+The Hollows' best under other levels' replays). The context is the
+REPLAYED level's own record: `watchGlobalReplay` pushes the board's
+cached all-time #1 (`set_watch_best` + `set_watch_best_name`, always —
+blank on a cold cache, so a stale context never leaks) right before the
+blob, and the two own-run crash-replay entry points copy the live
+globals (`adopt_live_record_for_replay` — an own-run replay IS the
+loaded level). Unknown (0/empty) ⇒ the BEST/"by" lines are hidden for
+that replay. The rest of the readout is replay-correct by construction —
+it reads `world_sim`, the replay's scratch sim. The readout is **left-aligned** to the column's left edge (`mm_ox`,
 plus a `20*ui` margin) and **shrunk to the minimap width** so long numbers
 stay inside the column. (It's drawn in the gauge block, after the bars are
 laid out, so it can sit below them.) All HUD text/icon sizes are `× ui`, and
