@@ -3394,12 +3394,16 @@ async fn main() {
                 let name = MP_NAME.lock().unwrap();
                 if !name.is_empty() {
                     // Names render uppercase everywhere (boards, picker, HUD).
+                    // Same size/backing treatment as the record ghost's label
+                    // (see above), in the opponent's magenta.
                     let label = name.to_uppercase();
-                    let fs = 20.0 * ui;
+                    let fs = 28.0 * ui;
                     let dim = measure_text(&label, None, fs as u16, 1.0);
-                    draw_text(&label, ms.x - dim.width / 2.0,
-                        ms.y + 1.05 * view_scale + fs,
-                        fs, Color::from_rgba(255, 110, 225, 170));
+                    let lx = ms.x - dim.width / 2.0;
+                    let ly = ms.y + 1.05 * view_scale + fs;
+                    draw_text(&label, lx + 1.5 * ui, ly + 1.5 * ui,
+                        fs, Color::from_rgba(24, 10, 22, 200));
+                    draw_text(&label, lx, ly, fs, Color::from_rgba(255, 150, 235, 235));
                 }
             }
         }
