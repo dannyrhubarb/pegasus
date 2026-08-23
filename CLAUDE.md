@@ -1198,7 +1198,7 @@ Cleaned up 2026-07. The top-left column, top to bottom: the **minimap**
 icons; see "Fuel"), then the **primary readout** — the run **distance**
 (`{max_dist} m`, or the **score** on pads levels), **big** (`100*ui`, the
 best `0.36×` beneath, and under that the record attribution "by <pilot>"
-at `0.78×` of the BEST size — `BEST_NAME`, see "Online high scores";
+at the BEST line's own size — `BEST_NAME`, see "Online high scores";
 hidden when empty; pilot names render UPPERCASE everywhere they appear).
 **During replay playback the record readouts — every BEST line + the
 "by <pilot>" attribution — draw from a per-replay record context**
