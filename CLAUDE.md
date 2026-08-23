@@ -501,7 +501,12 @@ Two inputs, merged:
   `Dropped:` (removals)** — e.g. "New: Replay controls auto-hide like a
   video player" (owner convention 2026-08; every pre-existing entry was
   reworded to it via the backfill + overrides files, so the whole page
-  reads uniformly). When curating a branch before merge, keep the
+  reads uniformly). **Tone (owner convention 2026-08-23): keep the note
+  a little playful** — a light arcade wink where one fits ("New: The
+  record ghost now photobombs your replays — every playback is a race"),
+  still one line and still clear about what actually changed. Existing
+  entries were left as they are; the tone applies going forward. When
+  curating a branch before merge, keep the
   trailers on the commits that survive. **Gotcha (hit on the very first
   trailer)**: git parses only the LAST paragraph of a message as the
   trailer block — `Whats-new:` must sit in the same block as the
