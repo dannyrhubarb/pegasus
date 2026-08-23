@@ -1168,11 +1168,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">b3ec7b0-pr-146</div>
+        <div class="info-value" id="git-rev">38415d3-pr-146</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-08-23T22:32:00Z</div>
+        <div class="info-value" id="build-time">2026-08-23T22:40:13Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -1417,9 +1417,10 @@
     //   Heading : RIGHT stick both axes (set_pad_stick — commanded nose
     //             direction through the same PD as the touch stick;
     //             dead-zone applied game-side)
-    //   Rate    : D-pad left/right (14/15) — manual rotation, overrides the
-    //             heading PD while held
     //   Reset   : Start (9) or Y / Triangle (3)
+    // No pad rate-rotation: D-pad left/right was a keyboard-legacy override
+    // of the heading PD, dropped 2026-08 as redundant next to the stick
+    // (rate control remains on the keyboard arrows).
     // Standard mapping is assumed (the common layout for BT pads in browsers).
     // In the iOS app the SHELL reads the controller natively (GCController,
     // ios/Pegasus/PadForwarder.swift) and injects __pegNativePad so this
@@ -1468,10 +1469,6 @@
       } else if (Math.abs(sx) > 0.18) {
         rate = (sx - Math.sign(sx) * 0.18) / (1 - 0.18);
       }
-      // D-pad left/right: manual rate rotation (overrides the heading PD
-      // while held, like the keyboard keys).
-      if (btn(14)) rate = -1;
-      else if (btn(15)) rate = 1;
       call("set_pad_torque", Math.max(-1, Math.min(1, rate)));
 
       // Reset: edge-triggered so a held button fires once.
@@ -2212,7 +2209,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "b3ec7b0-pr-146";
+    const wasmRev = "38415d3-pr-146";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
