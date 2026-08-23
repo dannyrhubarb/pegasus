@@ -3130,15 +3130,37 @@
       // record is unknown; the game hides the BEST/"by" lines when blank.
       // The cache is warm in practice — prefetchGlobalBests runs on every
       // picker open, and reaching a board goes through the picker.
-      const best = (getBoard(levelStem(scoresFile || currentLevelFile), "alltime") || [])[0];
+      const board = getBoard(levelStem(scoresFile || currentLevelFile), "alltime") || [];
+      const best = board[0];
       call("set_watch_best", best ? best.score : 0);
       pushTextToWasm(best ? best.name : "", "set_watch_best_name");
-      fetch(backendCfg.replayBaseUrl + "/" + path)
+      // Ghost for the replay: THIS board's record run (its best entry with
+      // a replay), fetched alongside the watch blob — the loaded level's
+      // ghost is the wrong world when browsing another level's board. The
+      // fetch is skipped when the watched entry IS the record (the game
+      // would drop the overlap anyway); a skipped or failed fetch pushes
+      // len 0, which CLEARS any ghost left pending by an aborted watch.
+      // The game still gates it (setting off / world mismatch), and falls
+      // back to the loaded level's ghost when none arrives.
+      const g = board.find(s => s.replayPath);
+      const ghostFetch = g && g.replayPath !== path
+        ? fetch(backendCfg.replayBaseUrl + "/" + g.replayPath)
+            .then(r => (r.ok ? r.arrayBuffer() : null))
+            .catch(() => null)
+        : Promise.resolve(null);
+      const watchFetch = fetch(backendCfg.replayBaseUrl + "/" + path)
         .then(r => {
           if (!r.ok) throw new Error("HTTP " + r.status);
           return r.arrayBuffer();
-        })
-        .then(buf => {
+        });
+      Promise.all([ghostFetch, watchFetch])
+        .then(([gbuf, buf]) => {
+          if (gbuf) {
+            pushTextToWasm(g.name, "set_watch_ghost_name");
+            pushBytesToWasm(new Uint8Array(gbuf), "watch_ghost_blob");
+          } else if (typeof wasm_exports !== "undefined" && wasm_exports.watch_ghost_blob) {
+            wasm_exports.watch_ghost_blob(0); // clear a stale pending ghost
+          }
           if (!pushBytesToWasm(new Uint8Array(buf), "watch_replay_blob")) {
             throw new Error("replay rejected by the game (build mismatch?)");
           }

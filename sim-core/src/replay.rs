@@ -257,6 +257,7 @@ impl SimParams {
     }
 }
 
+#[derive(Clone)]
 pub struct Recording {
     pub params: SimParams,
     pub level: LevelParams,
