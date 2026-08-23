@@ -1,5 +1,10 @@
 [
  {
+  "rev": "412b89d",
+  "date": "2026-08-23T22:31:05+02:00",
+  "note": "New: Even the record replay gets raced — the runner-up flies along as its ghost"
+ },
+ {
   "rev": "96e762a",
   "date": "2026-08-23T19:39:28+02:00",
   "note": "New: The record ghost now photobombs your replays — every playback is a race"
