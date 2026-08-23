@@ -116,7 +116,10 @@ Two workflows, both on free public-repo macOS runners:
   **Release apps** wrapper workflow; automatic publishing on `main` pushes
   is paused since 2026-08 — the push trigger and its deliberately inverted
   `paths-ignore` filter are kept commented out in the workflow for when
-  it resumes): archives with
+  it resumes). The `distribution` input picks **public-beta** (default:
+  the hands-free review + public-group path below) or **internal-only**
+  (upload and stop — internal App Store Connect testers get the build
+  after processing, nobody else; for testing branch builds). Archives with
   xcodebuild **cloud signing** (the App Store Connect API key creates and
   fetches the distribution certificate + profile on the fly — nothing
   signing-related lives in the repo) and uploads to TestFlight.

@@ -2008,7 +2008,10 @@ re-acquired on the `visibilitychange` back while still wanted).
   nothing — the gate exists, honor it) and `ios-testflight.yml` (**manual dispatch
   ONLY** — automatic publish on `main` pushes is PAUSED since 2026-08,
   owner request; see the paused-trigger note under Android CI —
-  cloud-signed archive → TestFlight;
+  cloud-signed archive → TestFlight; the `distribution` dispatch input
+  picks `public-beta` (default: hands-free Beta App Review + the public
+  group) or `internal-only` (upload and stop — the build reaches internal
+  App Store Connect testers only, for branch builds under test);
   needs the four `APP_STORE_CONNECT_API_*`/`APPLE_TEAM_ID` repo secrets
   and the ASC app record; build number = workflow run number). Both run on
   **`macos-26` and select the newest stable Xcode** — App Store Connect

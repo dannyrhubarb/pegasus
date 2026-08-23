@@ -29,6 +29,19 @@ name: iOS TestFlight
 
 on:
   workflow_dispatch:
+    inputs:
+      distribution:
+        description: >-
+          Where the build goes after Apple's processing. public-beta =
+          hands-free Beta App Review + the public beta group (the normal
+          release path). internal-only = upload and STOP: the build reaches
+          internal testers (App Store Connect users) only — no review, no
+          external group — for testing a work-in-progress branch build.
+        type: choice
+        options:
+          - public-beta
+          - internal-only
+        default: public-beta
   # Push trigger PAUSED — restore by uncommenting this block verbatim.
   # push:
   #   branches: [main]
@@ -183,7 +196,14 @@ jobs:
       # (incl. the public link) get it with zero console clicks. The group
       # name comes from the TESTFLIGHT_GROUP_NAME repo variable (default
       # "Public beta"); a group that doesn't exist yet is a soft no-op.
+      # SKIPPED for internal-only dispatches: the plain upload already
+      # reaches internal testers once Apple finishes processing — no Beta
+      # App Review, no external group, nothing to clean up (the next
+      # public-beta build simply supersedes it). The condition reads as
+      # "not explicitly internal-only" so a future re-enabled push trigger
+      # (no inputs) keeps the public path.
       - name: Assign build to TestFlight group
+        if: ${{ inputs.distribution != 'internal-only' }}
         env:
           BUNDLE_ID: se.danielfalk.pegasus
           BUILD_VERSION: ${{ github.run_number }}
