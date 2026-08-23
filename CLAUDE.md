@@ -1851,10 +1851,22 @@ re-acquired on the `visibilitychange` back while still wanted).
   `env(safe-area-inset-*)` itself via `viewport-fit=cover`); the **status
   bar stays visible** (light content), drawn over the game's starfield —
   the HUD/menu already lay out below the top safe-area inset; scrolling/
-  bounce off; **back-forward gestures ON** (edge-swipe = the game's own
+  bounce **toggled per page** (`syncScrollLock` in `didCommit`): OFF on
+  index.html — a scrollable canvas would fight the touch stick — and ON
+  for any other committed URL (the bundled licenses/LICENSE/privacy
+  document pages; with it left globally off, the licenses page rendered
+  as a frozen first screen — fixed 2026-08, the game's pushState entries
+  carry no URL so in-game history never flips it); **back-forward
+  gestures ON** (edge-swipe = the game's own
   one-screen-back history stack, same as Safari); http(s) links open in
   Safari, `target="_blank"` bundle pages (third-party licenses) load in
-  place with swipe-back. A document-start `WKUserScript` injects
+  place with swipe-back. The bundled document pages
+  (`third-party-licenses.html` — via its generator's template —
+  and `privacy.html`) carry `viewport-fit=cover` + their own `--inset-*`
+  safe-area padding (same max(env, `--app-inset-*`) rule as index.html;
+  the shells fill the whole screen, so without it they tucked under the
+  notch/status bar — fixed 2026-08, covers Android's edge-to-edge shell
+  too). A document-start `WKUserScript` injects
   `window.__pegAppBuild` ("1.0 (42)" — CFBundleShortVersionString +
   CFBundleVersion, the latter stamped with the CI run number) for the
   About screen's App build row. WebRoot ships as an Xcode **folder

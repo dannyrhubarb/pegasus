@@ -59,6 +59,12 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
         webView.uiDelegate = self
         webView.isOpaque = false
         webView.backgroundColor = UIColor(red: 5 / 255, green: 6 / 255, blue: 15 / 255, alpha: 1)
+        // Scrolling is toggled per page in didCommit (syncScrollLock): OFF
+        // for the game (a scrollable canvas would fight the touch stick),
+        // ON for the bundled document pages (third-party licenses, LICENSE,
+        // privacy) that load in place — with it left off they rendered as a
+        // frozen first screen. Inset adjustment stays .never everywhere;
+        // the pages pad themselves via safe-area insets.
         webView.scrollView.isScrollEnabled = false
         webView.scrollView.bounces = false
         webView.scrollView.contentInsetAdjustmentBehavior = .never
@@ -118,6 +124,21 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
         if didStartLoad { pushSafeAreaInsets() }
+    }
+
+    // The game page must not scroll (the canvas IS the touch surface), but
+    // the bundled document pages that navigate in place — the third-party
+    // licenses page, the LICENSE text it links, privacy.html — are ordinary
+    // long documents and need the scroll view live. Keyed on the committed
+    // URL so the swipe-back to the game re-freezes it.
+    private func syncScrollLock() {
+        let isGame = webView.url?.path.hasSuffix("index.html") ?? true
+        webView.scrollView.isScrollEnabled = !isGame
+        webView.scrollView.bounces = !isGame
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        syncScrollLock()
     }
 
     // http/https navigations (external links) leave the app for Safari;

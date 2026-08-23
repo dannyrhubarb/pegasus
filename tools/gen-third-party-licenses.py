@@ -191,8 +191,23 @@ def apache_text(index, deps):
 
 def build_page(entries, texts):
     e = html.escape
+    # Safe-area handling matches index.html's convention: consume --inset-*
+    # (max of env() and the app shells' injected --app-inset-* vars), never
+    # env() directly — in the iOS/Android app shells the webview fills the
+    # whole screen, so without this padding the page tucks under the notch
+    # and status bar.
     css = """
-  body { margin: 0; padding: 24px 16px 64px; background: #060913; color: #cdd6e4;
+  :root {
+    --inset-top: max(env(safe-area-inset-top), var(--app-inset-top, 0px));
+    --inset-right: max(env(safe-area-inset-right), var(--app-inset-right, 0px));
+    --inset-bottom: max(env(safe-area-inset-bottom), var(--app-inset-bottom, 0px));
+    --inset-left: max(env(safe-area-inset-left), var(--app-inset-left, 0px));
+    color-scheme: dark;
+  }
+  body { margin: 0;
+         padding: calc(24px + var(--inset-top)) calc(16px + var(--inset-right))
+                  calc(64px + var(--inset-bottom)) calc(16px + var(--inset-left));
+         background: #060913; color: #cdd6e4;
          font: 14px/1.55 "Courier New", monospace; }
   main { max-width: 860px; margin: 0 auto; }
   h1 { color: #7df9ff; letter-spacing: 3px; text-shadow: 0 0 12px rgba(125,249,255,.55);
@@ -209,7 +224,7 @@ def build_page(entries, texts):
         padding: 14px; background: rgba(10,16,32,.7); font-size: 12px; color: #aab6c8; }
   .note { color: #8b98ad; }
 """
-    parts = [f"<meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>",
+    parts = [f"<meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1, viewport-fit=cover'>",
              f"<title>Pegasus — third-party licenses</title><style>{css}</style><main>",
              "<h1>THIRD-PARTY LICENSES</h1>",
              "<p class='note'>Pegasus itself is free software, licensed under the "
