@@ -3123,6 +3123,16 @@
     function watchGlobalReplay(path) {
       setLoading(true);
       scoresStatus.style.display = "none";
+      // Record context for the replay HUD: THIS board's level's all-time #1
+      // (the wasm can't look it up — the blob header carries physics params,
+      // not the level's board identity). Always pushed, blank on a cold
+      // cache, so a previous watch's record never leaks into a replay whose
+      // record is unknown; the game hides the BEST/"by" lines when blank.
+      // The cache is warm in practice — prefetchGlobalBests runs on every
+      // picker open, and reaching a board goes through the picker.
+      const best = (getBoard(levelStem(scoresFile || currentLevelFile), "alltime") || [])[0];
+      call("set_watch_best", best ? best.score : 0);
+      pushTextToWasm(best ? best.name : "", "set_watch_best_name");
       fetch(backendCfg.replayBaseUrl + "/" + path)
         .then(r => {
           if (!r.ok) throw new Error("HTTP " + r.status);
