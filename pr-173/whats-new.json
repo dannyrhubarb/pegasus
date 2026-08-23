@@ -1,8 +1,8 @@
 [
  {
-  "rev": "6fe126b",
-  "date": "2026-08-23T07:54:54Z",
-  "note": "Fixed: Replays no longer show the loaded level's best score and record holder under another level's run"
+  "rev": "11c57a5",
+  "date": "2026-08-23T08:14:46Z",
+  "note": "Fixed: Replays now show the replayed level's own best score and record holder, not the loaded level's"
  },
  {
   "rev": "6956d42",
