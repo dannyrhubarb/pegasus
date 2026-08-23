@@ -11,6 +11,10 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Pegasus">
   <link rel="apple-touch-icon" href="./icon-180.png">
+  <!-- Bundled menu font (see the @font-face below). Preloaded because the
+       menu is the first paint; crossorigin is required on font preloads
+       even same-origin or the browser fetches it twice. -->
+  <link rel="preload" href="./fonts/jetbrains-mono.woff2" as="font" type="font/woff2" crossorigin>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { overflow: hidden; background: #05060f; }
@@ -23,9 +27,24 @@
 
     /* ---------------------------------------------------------------------
        Retro vector-arcade look: neon glow on a dark CRT, chunky monospace
-       lettering, scanlines. All self-contained (no external fonts/CDNs —
-       glow comes from layered text-shadow, not a webfont).
+       lettering, scanlines. Self-contained: the one webfont is VENDORED in
+       the repo (fonts/, served same-origin and bundled into both app
+       shells) — still no CDNs at runtime.
        --------------------------------------------------------------------- */
+    /* JetBrains Mono (SIL OFL 1.1 — attribution on the third-party licenses
+       page, license text in fonts/OFL.txt): one latin-subset VARIABLE file
+       covers every weight the menu uses (400/700/800), ~31 KB. Bundled so
+       all platforms render the same face — before this, each platform
+       resolved the stack differently (iOS SF Mono, Android Droid Sans Mono,
+       and before PR #164 Android's slab-serif Courier New alias). The stack
+       below stays as fallback for load failure / non-latin glyphs. */
+    @font-face {
+      font-family: "JetBrains Mono";
+      font-style: normal;
+      font-weight: 400 800;
+      font-display: swap;
+      src: url("./fonts/jetbrains-mono.woff2") format("woff2");
+    }
     :root {
       --text: #cfe7ff;
       --dim: #7fb4dd;
@@ -36,7 +55,11 @@
       --green: #46ff9c;
       --red: #ff5a3c;
       --panel: rgba(12, 22, 44, 0.55);
-      --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Courier New", monospace;
+      /* Bundled JetBrains Mono first (identical on every device), then the
+         platform monos as fallback. No "Courier New" in the fallbacks:
+         Android aliases it to its slab-serif typewriter face (Cutive Mono),
+         which broke the arcade look in the app shell. */
+      --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, "Roboto Mono", "Droid Sans Mono", monospace;
       --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       /* Safe-area insets, ONE source of truth: every consumer below reads
          --inset-*, never env() directly. env() alone is 0 at the iOS app
@@ -285,23 +308,37 @@
       pointer-events: all;
     }
     #menu.open { display: flex; }
-    /* Faint perspective grid drifting toward a low horizon. */
-    #menu::before {
-      content: "";
+    /* Faint perspective grid drifting toward a low horizon. Two elements on
+       purpose (perf, 2026-08): the outer .grid div holds the STATIC
+       perspective transform + mask, and the drift animates a transform on
+       its ::before — compositor-only, no repaints. The original one-element
+       version animated background-position, which repaints the huge
+       transformed surface every frame and was a big part of menus running
+       at 2-3 fps on weak Android phones (WebView shell). The pattern
+       repeats every 46px, so translating 0 → 46px loops seamlessly; the
+       ::before overscans 46px above so the sweep never exposes an edge. */
+    .grid {
       position: absolute;
       inset: -20% -20% -20% -20%;
-      background:
-        repeating-linear-gradient(0deg,  rgba(52, 231, 255, 0.09) 0 1px, transparent 1px 46px),
-        repeating-linear-gradient(90deg, rgba(52, 231, 255, 0.09) 0 1px, transparent 1px 46px);
-      background-position: center;
       transform: perspective(420px) rotateX(62deg) translateY(12%);
       transform-origin: center 70%;
       mask-image: linear-gradient(180deg, transparent 40%, #000 100%);
       -webkit-mask-image: linear-gradient(180deg, transparent 40%, #000 100%);
-      animation: gridflow 6s linear infinite;
+      overflow: hidden;
       pointer-events: none;
     }
-    @keyframes gridflow { to { background-position: center 46px; } }
+    .grid::before {
+      content: "";
+      position: absolute;
+      left: 0; right: 0; top: -46px; bottom: 0;
+      background:
+        repeating-linear-gradient(0deg,  rgba(52, 231, 255, 0.09) 0 1px, transparent 1px 46px),
+        repeating-linear-gradient(90deg, rgba(52, 231, 255, 0.09) 0 1px, transparent 1px 46px);
+      background-position: center;
+      animation: gridflow 6s linear infinite;
+      will-change: transform;
+    }
+    @keyframes gridflow { to { transform: translateY(46px); } }
 
     /* CRT overlay: scanlines + vignette + a slow bright sweep. Sits on top
        of the screens visually but never eats a tap (pointer-events:none). */
@@ -318,11 +355,15 @@
     .crt::after {
       content: "";
       position: absolute;
-      left: 0; right: 0; height: 40%;
+      left: 0; right: 0; top: -40%; height: 40%;
       background: linear-gradient(180deg, transparent, rgba(120, 220, 255, 0.05), transparent);
+      /* Sweep via transform, not top: animating top re-layouts + repaints
+         every frame; translateY runs on the compositor. 400% of own height
+         (40% of parent) = the old -40% → 120% travel. */
       animation: sweep 7s linear infinite;
+      will-change: transform;
     }
-    @keyframes sweep { 0% { top: -40%; } 100% { top: 120%; } }
+    @keyframes sweep { to { transform: translateY(400%); } }
 
     .screen {
       position: relative;
@@ -404,8 +445,17 @@
       width: clamp(150px, 40vw, 260px);
       height: auto;
       margin: 2px 0 6px;
-      filter: drop-shadow(0 0 18px rgba(120, 190, 255, 0.45));
       animation: bob 3.4s ease-in-out infinite;
+    }
+    /* The blue glow lives on the STATIC hull group, not on .ship-hero
+       (perf, 2026-08): with the drop-shadow on the whole SVG, every flame
+       flicker tick (9/s) re-ran the big blur over the full element — a
+       chunk of the 2-3 fps menu on weak Android phones. The CSS filter
+       property overrides the group's filter attribute, so the chain must
+       repeat the sh-glow url. The flame loses its faint blue halo, but it
+       has its own orange halos anyway. */
+    .ship-hero .hull {
+      filter: url(#sh-glow) drop-shadow(0 0 18px rgba(120, 190, 255, 0.45));
     }
     @keyframes bob {
       0%, 100% { transform: translateY(0); }
@@ -415,13 +465,14 @@
       transform-box: fill-box;
       transform-origin: 50% 0%;
       animation: flame 0.11s steps(2, jump-none) infinite;
+      will-change: transform, opacity;
     }
     @keyframes flame {
       0%   { opacity: 0.8;  transform: scaleY(0.86); }
       100% { opacity: 1;    transform: scaleY(1.08); }
     }
     @media (prefers-reduced-motion: reduce) {
-      .ship-hero, .ship-hero .flame, .title, #menu::before, .crt::after { animation: none; }
+      .ship-hero, .ship-hero .flame, .title, .grid::before, .crt::after { animation: none; }
     }
     /* Short screens (landscape phones): drop the hero so the buttons — the
        Fly button especially — stay above the fold. */
@@ -891,6 +942,7 @@
 
   <!-- Game menu: open at boot (markup, not JS, so it shows while wasm loads) -->
   <div id="menu" class="open" role="dialog" aria-modal="true">
+    <div class="grid" aria-hidden="true"></div>
 
     <!-- DORMANT load-time announcement kept for future messages. To show
          one: put the text in .announce-msg, move the `on` class from
@@ -930,17 +982,32 @@
             <feGaussianBlur stdDeviation="6" result="blur"/>
             <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
           </filter>
-          <filter id="sh-softglow" x="-100%" y="-100%" width="300%" height="300%">
-            <feGaussianBlur stdDeviation="18"/>
-          </filter>
+          <!-- Halo gradients approximating the old feGaussianBlur(18) on
+               flat ellipses (perf, 2026-08): the flame flickers 9x/s, and
+               re-running two Gaussian blurs per tick helped drag the menu
+               to 2-3 fps on weak Android phones. Radii grew by ~30 (the
+               blur's spread) so the visible blob size matches. -->
+          <radialGradient id="sh-halo1" cx="50%" cy="50%" r="50%">
+            <stop offset="0%"  stop-color="#ff5500" stop-opacity="1"/>
+            <stop offset="30%" stop-color="#ff5500" stop-opacity="0.85"/>
+            <stop offset="55%" stop-color="#ff5500" stop-opacity="0.45"/>
+            <stop offset="78%" stop-color="#ff5500" stop-opacity="0.15"/>
+            <stop offset="100%" stop-color="#ff5500" stop-opacity="0"/>
+          </radialGradient>
+          <radialGradient id="sh-halo2" cx="50%" cy="50%" r="50%">
+            <stop offset="0%"  stop-color="#ffaa00" stop-opacity="0.8"/>
+            <stop offset="35%" stop-color="#ffaa00" stop-opacity="0.55"/>
+            <stop offset="65%" stop-color="#ffaa00" stop-opacity="0.22"/>
+            <stop offset="100%" stop-color="#ffaa00" stop-opacity="0"/>
+          </radialGradient>
         </defs>
         <g class="flame">
-          <ellipse cx="256.0" cy="417.7" rx="65" ry="100" fill="#ff5500" opacity="0.35" filter="url(#sh-softglow)"/>
-          <ellipse cx="256.0" cy="402.7" rx="34" ry="70" fill="#ffaa00" opacity="0.45" filter="url(#sh-softglow)"/>
+          <ellipse cx="256.0" cy="417.7" rx="98" ry="112" fill="url(#sh-halo1)" opacity="0.35"/>
+          <ellipse cx="256.0" cy="402.7" rx="66" ry="100" fill="url(#sh-halo2)" opacity="0.45"/>
           <polygon points="256.0,472.8 213.2,372.0 298.8,372.0" fill="url(#sh-thrustOuter)"/>
           <polygon points="256.0,431.5 234.6,372.0 277.4,372.0" fill="url(#sh-thrustInner)"/>
         </g>
-        <g filter="url(#sh-glow)">
+        <g class="hull" filter="url(#sh-glow)">
           <polygon points="256.0,96.9 249.4,96.9 241.9,100.5" fill="rgb(247,59,53)"/>
           <polygon points="256.0,96.9 241.9,100.5 230.8,112.2" fill="rgb(246,59,53)"/>
           <polygon points="256.0,96.9 230.8,112.2 221.8,127.8" fill="rgb(244,58,52)"/>
@@ -1071,6 +1138,10 @@
         <span>Invert stick</span>
         <input type="checkbox" id="inv-toggle"><span class="tgl"></span>
       </label>
+      <label class="setrow" id="split-toggle-row">
+        <span>Split controls (throttle left)</span>
+        <input type="checkbox" id="split-toggle"><span class="tgl"></span>
+      </label>
       <label class="setrow" id="ghost-toggle-row">
         <span>Race best ghost</span>
         <input type="checkbox" id="ghost-toggle"><span class="tgl"></span>
@@ -1097,11 +1168,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">4765e79-pr-146</div>
+        <div class="info-value" id="git-rev">a528e30-pr-146</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-08-16T12:20:17Z</div>
+        <div class="info-value" id="build-time">2026-08-23T21:37:50Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -2138,7 +2209,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "4765e79-pr-146";
+    const wasmRev = "a528e30-pr-146";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -2255,6 +2326,27 @@
       if (typeof wasm_exports !== "undefined" && wasm_exports.set_invert_stick) {
         applyInvSetting();
         clearInterval(invTimer);
+      }
+    }, 200);
+
+    // Split-controls toggle (on by default): a separate floating throttle
+    // button on the LEFT half of the screen (hold = full throttle, rides the
+    // finger); the right-half stick then steers only. Forwarded to the WASM
+    // `set_split_controls` export and persisted per device (same pattern as
+    // the invert toggle).
+    const splitToggle = document.getElementById("split-toggle");
+    splitToggle.checked = localStorage.getItem("pegasus_split_controls") !== "0";
+    function applySplitSetting() {
+      call("set_split_controls", splitToggle.checked ? 1 : 0);
+    }
+    splitToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_split_controls", splitToggle.checked ? "1" : "0");
+      applySplitSetting();
+    });
+    const splitTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_split_controls) {
+        applySplitSetting();
+        clearInterval(splitTimer);
       }
     }, 200);
 
@@ -2956,7 +3048,7 @@
           watch.textContent = "▶ watch";
           watch.addEventListener("click", e => {
             e.stopPropagation();
-            watchGlobalReplay(s.replayPath); // blob fetched only now, on tap
+            watchGlobalReplay(s.replayPath, s.name); // blob fetched only now, on tap
           });
           li.appendChild(watch);
         }
@@ -3051,15 +3143,57 @@
     // SURFACED on the status line ("HTTP 403" = CDN/permissions, "Failed to
     // fetch" = network/CORS, "rejected" = format/build mismatch) — a silent
     // watch button is undebuggable in the field.
-    function watchGlobalReplay(path) {
+    function watchGlobalReplay(path, pilotName) {
       setLoading(true);
       scoresStatus.style.display = "none";
-      fetch(backendCfg.replayBaseUrl + "/" + path)
+      // The watched pilot's callsign floats under the replayed ship
+      // in-game. Always pushed (empty clears), so a previous watch's
+      // pilot can't leak into the next replay.
+      pushTextToWasm(pilotName || "", "set_watch_pilot_name");
+      // Record context for the replay HUD: THIS board's level's all-time #1
+      // (the wasm can't look it up — the blob header carries physics params,
+      // not the level's board identity). Always pushed, blank on a cold
+      // cache, so a previous watch's record never leaks into a replay whose
+      // record is unknown; the game hides the BEST/"by" lines when blank.
+      // The cache is warm in practice — prefetchGlobalBests runs on every
+      // picker open, and reaching a board goes through the picker.
+      const board = getBoard(levelStem(scoresFile || currentLevelFile), "alltime") || [];
+      const best = board[0];
+      call("set_watch_best", best ? best.score : 0);
+      pushTextToWasm(best ? best.name : "", "set_watch_best_name");
+      // Ghost for the replay: THIS board's record run (its best entry with
+      // a replay), fetched alongside the watch blob — the loaded level's
+      // ghost is the wrong world when browsing another level's board.
+      // Watching the RECORD itself gets the runner-up as its ghost instead
+      // (the record can't race itself — but the best replay still deserves
+      // a race): the next-ranked entry with a replay, if the board has one.
+      // No candidate ⇒ the push below sends len 0, which CLEARS any ghost
+      // left pending by an aborted watch; a failed fetch clears the same
+      // way. The game still gates whatever arrives (setting off / world
+      // mismatch), and falls back to the loaded level's ghost when none
+      // arrives.
+      // Same-path guard, not rank: paths are unique per submission, so this
+      // picks the record for every ordinary watch and the runner-up exactly
+      // when the watched entry IS the record.
+      const g = board.find(s => s.replayPath && s.replayPath !== path);
+      const ghostFetch = g
+        ? fetch(backendCfg.replayBaseUrl + "/" + g.replayPath)
+            .then(r => (r.ok ? r.arrayBuffer() : null))
+            .catch(() => null)
+        : Promise.resolve(null);
+      const watchFetch = fetch(backendCfg.replayBaseUrl + "/" + path)
         .then(r => {
           if (!r.ok) throw new Error("HTTP " + r.status);
           return r.arrayBuffer();
-        })
-        .then(buf => {
+        });
+      Promise.all([ghostFetch, watchFetch])
+        .then(([gbuf, buf]) => {
+          if (gbuf) {
+            pushTextToWasm(g.name, "set_watch_ghost_name");
+            pushBytesToWasm(new Uint8Array(gbuf), "watch_ghost_blob");
+          } else if (typeof wasm_exports !== "undefined" && wasm_exports.watch_ghost_blob) {
+            wasm_exports.watch_ghost_blob(0); // clear a stale pending ghost
+          }
           if (!pushBytesToWasm(new Uint8Array(buf), "watch_replay_blob")) {
             throw new Error("replay rejected by the game (build mismatch?)");
           }
