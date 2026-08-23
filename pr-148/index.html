@@ -1254,11 +1254,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">7e9efe3-pr-148</div>
+        <div class="info-value" id="git-rev">c1b1b78-pr-148</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-08-23T19:50:00Z</div>
+        <div class="info-value" id="build-time">2026-08-23T22:29:52Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -2358,7 +2358,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "7e9efe3-pr-148";
+    const wasmRev = "c1b1b78-pr-148";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -3330,14 +3330,20 @@
       pushTextToWasm(best ? best.name : "", "set_watch_best_name");
       // Ghost for the replay: THIS board's record run (its best entry with
       // a replay), fetched alongside the watch blob — the loaded level's
-      // ghost is the wrong world when browsing another level's board. The
-      // fetch is skipped when the watched entry IS the record (the game
-      // would drop the overlap anyway); a skipped or failed fetch pushes
-      // len 0, which CLEARS any ghost left pending by an aborted watch.
-      // The game still gates it (setting off / world mismatch), and falls
-      // back to the loaded level's ghost when none arrives.
-      const g = board.find(s => s.replayPath);
-      const ghostFetch = g && g.replayPath !== path
+      // ghost is the wrong world when browsing another level's board.
+      // Watching the RECORD itself gets the runner-up as its ghost instead
+      // (the record can't race itself — but the best replay still deserves
+      // a race): the next-ranked entry with a replay, if the board has one.
+      // No candidate ⇒ the push below sends len 0, which CLEARS any ghost
+      // left pending by an aborted watch; a failed fetch clears the same
+      // way. The game still gates whatever arrives (setting off / world
+      // mismatch), and falls back to the loaded level's ghost when none
+      // arrives.
+      // Same-path guard, not rank: paths are unique per submission, so this
+      // picks the record for every ordinary watch and the runner-up exactly
+      // when the watched entry IS the record.
+      const g = board.find(s => s.replayPath && s.replayPath !== path);
+      const ghostFetch = g
         ? fetch(backendCfg.replayBaseUrl + "/" + g.replayPath)
             .then(r => (r.ok ? r.arrayBuffer() : null))
             .catch(() => null)
