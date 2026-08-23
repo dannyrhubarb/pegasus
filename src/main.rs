@@ -2860,11 +2860,15 @@ async fn main() {
                 if !name.is_empty() {
                     // Names render uppercase everywhere (boards, picker, HUD).
                     let label = name.to_uppercase();
-                    let fs = 20.0 * ui;
+                    let fs = 28.0 * ui;
                     let dim = measure_text(&label, None, fs as u16, 1.0);
-                    draw_text(&label, gs.x - dim.width / 2.0,
-                        gs.y + 1.05 * view_scale + fs,
-                        fs, Color::from_rgba(150, 190, 255, 150));
+                    let lx = gs.x - dim.width / 2.0;
+                    let ly = gs.y + 1.05 * view_scale + fs;
+                    // Dark backing pass: the label floats over the world, so
+                    // it needs contrast against lit rock, not just the void.
+                    draw_text(&label, lx + 1.5 * ui, ly + 1.5 * ui,
+                        fs, Color::from_rgba(10, 16, 28, 200));
+                    draw_text(&label, lx, ly, fs, Color::from_rgba(195, 220, 255, 235));
                 }
             }
         }
@@ -3798,6 +3802,10 @@ async fn main() {
         } else {
             small_fs
         };
+        // Two-tone hierarchy (owner direction): the score section — the big
+        // line and the clock that IS the score — reads full white; the
+        // record section beneath (BEST + "by <pilot>") shares one softer
+        // tone (170,195,230), so the two groups stand apart at a glance.
         let small_col = if time_limited {
             // The countdown turns urgent as the horn approaches.
             let remain =
@@ -3807,12 +3815,12 @@ async fn main() {
             } else if remain <= 10.0 {
                 Color::from_rgba(255, 210, 70, 255)
             } else {
-                Color::from_rgba(190, 215, 245, 245)
+                WHITE
             }
         } else if world_sim.level.scoring == Scoring::Time {
-            Color::from_rgba(190, 215, 245, 245)
+            WHITE
         } else {
-            Color::from_rgba(150, 180, 220, 220)
+            Color::from_rgba(170, 195, 230, 235)
         };
         draw_text(&small, ro_x, ro_y + small_draw_fs + 4.0 * ui,
             small_draw_fs, small_col);
@@ -3830,19 +3838,19 @@ async fn main() {
             if time_limited && !(in_replay && hud_best <= 0.0) {
                 let bt = format!("BEST {:.0} m", hud_best);
                 by_base += small_fs + 4.0 * ui;
-                draw_text(&bt, ro_x, by_base, small_fs, Color::from_rgba(130, 155, 190, 200));
+                draw_text(&bt, ro_x, by_base, small_fs, Color::from_rgba(170, 195, 230, 235));
             }
             let name = hud_best_name;
             if !name.is_empty() {
                 // Names render uppercase everywhere (boards, picker, ghost).
                 let by = format!("by {}", name.to_uppercase());
-                let mut by_fs = small_fs * 0.78;
+                let mut by_fs = small_fs;
                 let by_dim = measure_text(&by, None, by_fs as u16, 1.0);
                 if by_dim.width > mm_w - ro_margin {
                     by_fs *= (mm_w - ro_margin) / by_dim.width;
                 }
                 draw_text(&by, ro_x, by_base + by_fs + 4.0 * ui,
-                    by_fs, Color::from_rgba(130, 155, 190, 200));
+                    by_fs, Color::from_rgba(170, 195, 230, 235));
             }
         } else if world_sim.level.scoring == Scoring::Time {
             // Best completion time (the global record once seeded, else the
@@ -3853,18 +3861,18 @@ async fn main() {
                 let bt = format!("BEST {}", fmt_run_time((best / PHYSICS_DT).round() as u32));
                 let bt_fs = small_fs;
                 let bt_y = ro_y + small_draw_fs + 4.0 * ui + bt_fs + 4.0 * ui;
-                draw_text(&bt, ro_x, bt_y, bt_fs, Color::from_rgba(130, 155, 190, 200));
+                draw_text(&bt, ro_x, bt_y, bt_fs, Color::from_rgba(170, 195, 230, 235));
                 let name = hud_best_name;
                 if !name.is_empty() {
                     // Names render uppercase everywhere (boards, picker, ghost).
                     let by = format!("by {}", name.to_uppercase());
-                    let mut by_fs = bt_fs * 0.78;
+                    let mut by_fs = bt_fs;
                     let by_dim = measure_text(&by, None, by_fs as u16, 1.0);
                     if by_dim.width > mm_w - ro_margin {
                         by_fs *= (mm_w - ro_margin) / by_dim.width;
                     }
                     draw_text(&by, ro_x, bt_y + by_fs + 4.0 * ui,
-                        by_fs, Color::from_rgba(130, 155, 190, 200));
+                        by_fs, Color::from_rgba(170, 195, 230, 235));
                 }
             }
         }
