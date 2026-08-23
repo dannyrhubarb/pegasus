@@ -1168,11 +1168,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">c81905d</div>
+        <div class="info-value" id="git-rev">dda8bff</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-08-22T12:01:06Z</div>
+        <div class="info-value" id="build-time">2026-08-23T09:58:33Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -2186,7 +2186,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "c81905d";
+    const wasmRev = "dda8bff";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -3123,6 +3123,16 @@
     function watchGlobalReplay(path) {
       setLoading(true);
       scoresStatus.style.display = "none";
+      // Record context for the replay HUD: THIS board's level's all-time #1
+      // (the wasm can't look it up — the blob header carries physics params,
+      // not the level's board identity). Always pushed, blank on a cold
+      // cache, so a previous watch's record never leaks into a replay whose
+      // record is unknown; the game hides the BEST/"by" lines when blank.
+      // The cache is warm in practice — prefetchGlobalBests runs on every
+      // picker open, and reaching a board goes through the picker.
+      const best = (getBoard(levelStem(scoresFile || currentLevelFile), "alltime") || [])[0];
+      call("set_watch_best", best ? best.score : 0);
+      pushTextToWasm(best ? best.name : "", "set_watch_best_name");
       fetch(backendCfg.replayBaseUrl + "/" + path)
         .then(r => {
           if (!r.ok) throw new Error("HTTP " + r.status);

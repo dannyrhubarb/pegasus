@@ -1,5 +1,10 @@
 [
  {
+  "rev": "dda8bff",
+  "date": "2026-08-23T11:57:26+02:00",
+  "note": "Fixed: Replays now show the replayed level's own best score and record holder, not the loaded level's"
+ },
+ {
   "rev": "6956d42",
   "date": "2026-08-21T21:42:13+02:00",
   "note": "New: Split controls (left throttle, right stick) are now the default touch scheme - the one-handed stick lives on as a Settings toggle"
