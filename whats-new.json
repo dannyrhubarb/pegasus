@@ -1,5 +1,10 @@
 [
  {
+  "rev": "96e762a",
+  "date": "2026-08-23T19:39:28+02:00",
+  "note": "New: The record ghost now photobombs your replays — every playback is a race"
+ },
+ {
   "rev": "dda8bff",
   "date": "2026-08-23T11:57:26+02:00",
   "note": "Fixed: Replays now show the replayed level's own best score and record holder, not the loaded level's"
