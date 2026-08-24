@@ -10,7 +10,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-PAGES_URL="https://dannyrhubarb.github.io/pegasus"
+PAGES_URL="https://pegasusmoonlander.com"
+# Old origin, kept as a fallback until the custom domain has soaked (#171).
+# -L matters on it: once the custom domain is set, github.io 301-redirects.
+PAGES_URL_LEGACY="https://dannyrhubarb.github.io/pegasus"
 DEST="android/app/src/main/assets/webroot"
 
 rustup target add wasm32-unknown-unknown >/dev/null
@@ -44,7 +47,8 @@ python3 tools/gen-whats-new.py > "$DEST/whats-new.json" || {
   rm -f "$DEST/whats-new.json"
 }
 
-if curl -fsS --max-time 10 "$PAGES_URL/config.json" -o "$DEST/config.json"; then
+if curl -fsS --max-time 10 "$PAGES_URL/config.json" -o "$DEST/config.json" ||
+   curl -fsSL --max-time 10 "$PAGES_URL_LEGACY/config.json" -o "$DEST/config.json"; then
   echo "config.json fetched — online high scores enabled"
 else
   rm -f "$DEST/config.json"

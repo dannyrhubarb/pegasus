@@ -86,7 +86,7 @@ required. [`preview-deploy.yml`](.github/workflows/preview-deploy.yml) builds
 each PR push and publishes it at
 
 ```
-https://<owner>.github.io/pegasus/pr-<n>/
+https://pegasusmoonlander.com/pr-<n>/
 ```
 
 posting a sticky comment with the link on the PR.

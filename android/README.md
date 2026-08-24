@@ -38,14 +38,14 @@ changes.
   inverted `paths-ignore` filter are kept commented out in the workflow
   for when it resumes): builds a **signed AAB + universal APK**
   (artifacts), **publishes the APK to GitHub Pages** at
-  `https://dannyrhubarb.github.io/pegasus/app/pegasus.apk` (a public
+  `https://pegasusmoonlander.com/app/pegasus.apk` (a public
   direct-download sideload link, refreshed every release run), and uploads
   the AAB to the **Play internal testing track** once
   `PLAY_SERVICE_ACCOUNT_JSON` is configured (the step is skipped until
   then). `versionCode` = the workflow run number.
 - **`android-test-apk.yml`** — **opt-in per PR**: add the **`test-apk`
   label** to a pull request and it builds an installable APK, published at
-  `https://dannyrhubarb.github.io/pegasus/pr-<n>/app/pegasus.apk` and
+  `https://pegasusmoonlander.com/pr-<n>/app/pegasus.apk` and
   linked from a sticky PR comment. While the label stays on, every push to
   the PR refreshes it; a manual dispatch takes a PR number instead. Most
   PRs never need a device build, which is why it isn't automatic.
