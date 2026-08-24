@@ -1,13 +1,13 @@
 [
  {
-  "rev": "35fbc3a",
-  "date": "2026-08-24T07:34:51Z",
+  "rev": "063b10c",
+  "date": "2026-08-24T10:37:28Z",
   "note": "AirPlay the game to your TV — full-screen on the big screen, live, while your phone stays exactly the phone you know"
  },
  {
-  "rev": "4614c1d",
-  "date": "2026-08-24T07:34:51Z",
-  "note": "Game controllers now fly like the split touch scheme — left hand burns, right stick points the nose — and the L2 trigger is a real analog throttle: squeeze gently for a feather burn"
+  "rev": "64e5bd9",
+  "date": "2026-08-24T10:37:14Z",
+  "note": "Game controllers now fly like the split touch scheme — right stick points the nose, and the left trigger or left stick is a real analog throttle: squeeze or push gently for a feather burn"
  },
  {
   "rev": "16e0d98",

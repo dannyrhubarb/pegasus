@@ -1168,11 +1168,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">abf4889-pr-146</div>
+        <div class="info-value" id="git-rev">ecd7041-pr-146</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-08-24T07:37:24Z</div>
+        <div class="info-value" id="build-time">2026-08-24T10:38:41Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -1455,11 +1455,16 @@
       const val = i => (pad.buttons[i] ? pad.buttons[i].value : 0);
 
       // Throttle, left side only (the right hand owns steering): L1 and
-      // D-pad up are digital full burn; the L2 trigger passes through
-      // ANALOG — partial travel is partial burn (the game floors resting
-      // noise and every throttle consumer already scales). Fallback for a
-      // stale-cached wasm without the analog export: binary thrust.
-      const throttle = (btn(4) || btn(12)) ? 1 : val(6);
+      // D-pad up are digital full burn; ANALOG throttle is the max of the
+      // L2 trigger's travel and the otherwise-unused LEFT stick pushed up
+      // (HOTAS-style — some pads' triggers are digital click switches
+      // behind an analog-shaped API, a stick axis is analog on every
+      // controller; stick dead-zone 0.15 rescaled, the game curves and
+      // floors on top). Fallback for a stale-cached wasm without the
+      // analog export: binary thrust.
+      const lyUp = -(pad.axes[1] || 0); // Gamepad API: up = -1
+      const stickThr = Math.max(0, (lyUp - 0.15) / 0.85);
+      const throttle = (btn(4) || btn(12)) ? 1 : Math.max(val(6), stickThr);
       if (typeof wasm_exports !== "undefined" && wasm_exports.set_pad_throttle) {
         call("set_pad_throttle", throttle);
       } else {
@@ -2271,7 +2276,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "abf4889-pr-146";
+    const wasmRev = "ecd7041-pr-146";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
