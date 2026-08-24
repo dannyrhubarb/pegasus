@@ -2,7 +2,7 @@
   "name": "Pegasus — Moon Lander",
   "short_name": "Pegasus",
   "description": "Moon lander game built with Rapier physics and WebAssembly",
-  "start_url": "/pegasus/",
+  "start_url": "./",
   "display": "fullscreen",
   "orientation": "landscape",
   "background_color": "#14141e",

@@ -12,10 +12,24 @@ cargo test --workspace    # unit tests; --workspace is required or the sim-core 
 Deploy is automatic: any push to `main` triggers `.github/workflows/deploy.yml` which builds the WASM target and publishes to GitHub Pages. Build takes ~5–10 minutes.
 
 ### Deploy pipeline & PR previews
-The published site lives on the **`gh-pages` state branch**: the `main` build at
-the root, one **per-PR preview** in `pr-<n>/` (served at
-`https://<owner>.github.io/pegasus/pr-<n>/` — works because every asset URL
-in `index.html`/`manifest.json` is relative). Five workflows, sharing two
+The site lives at **`https://pegasusmoonlander.com`** (custom domain on this
+repo's GitHub Pages, issue #171 — the old
+`dannyrhubarb.github.io/pegasus` origin 301-redirects there, which also
+means the old origin can never serve a page again: players' old-origin
+`localStorage` — settings, callsign, consent, editor drafts — is orphaned
+by design, an accepted one-time loss; the WebAuthn RP ID for the planned
+accounts work (#157) will be `pegasusmoonlander.com` and is PERMANENT once
+passkeys ship). The custom domain lives in **Settings → Pages**, NOT a
+CNAME file (Source = "GitHub Actions" ignores CNAME files); DNS is apex
+A/AAAA records to the GitHub Pages fleet + `www` CNAME at the registrar.
+`manifest.json`'s `start_url` must stay RELATIVE (`"./"`) — it was
+`/pegasus/` once, which would 404 every PWA install on the domain root.
+The published build lives on the **`gh-pages` state branch**: the `main`
+build at the root, one **per-PR preview** in `pr-<n>/` (served at
+`https://pegasusmoonlander.com/pr-<n>/` — works because every asset URL
+in `index.html`/`manifest.json` is relative; the preview/test-APK sticky
+comments ask the Pages API for `html_url`, so their links follow the
+custom domain automatically). Five workflows, sharing two
 composite actions (`.github/actions/build-site` = wasm build + icons + overlay
 injection; `.github/actions/sync-pages-branch` = commit into `gh-pages` with a
 push-retry loop for concurrent deploys):
@@ -1933,7 +1947,10 @@ re-acquired on the `visibilitychange` back while still wanted).
   `version.json`** (the stale-cache toast is meaningless in-app; the page
   treats the 404 as feature-off), **`config.json` fetched from the live
   Pages deployment** (the `BACKEND_CONFIG_JSON` variable isn't available
-  locally; unreachable ⇒ online scores off), and the injected revision
+  locally; unreachable ⇒ online scores off; both sync scripts try
+  `pegasusmoonlander.com` first and fall back to the legacy github.io
+  origin with `-L` — it 301s once the custom domain is live — until the
+  domain has soaked, #171), and the injected revision
   suffixed **`-ios`** (About screen / analytics / replay build id — the
   page still env-tags these builds `prod`, so app sessions show up in
   analytics as iOS webview device-mix).

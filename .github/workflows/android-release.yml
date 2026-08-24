@@ -139,7 +139,7 @@ jobs:
           retention-days: 30
 
       # Publish the signed APK for direct download at
-      # https://<owner>.github.io/pegasus/app/pegasus.apk — the app/ subdir
+      # https://pegasusmoonlander.com/app/pegasus.apk — the app/ subdir
       # of the gh-pages state branch survives main deploys (sync-pages-branch
       # keeps it like pr-*), and publish-pages.yml lists this workflow so the
       # push actually deploys.
