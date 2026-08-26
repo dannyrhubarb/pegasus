@@ -47,7 +47,11 @@ jobs:
         uses: ./.github/actions/build-site
         with:
           revision: ${{ steps.rev.outputs.label }}
-          backend-config: ${{ vars.BACKEND_CONFIG_JSON }}
+          # Previews talk to the STAGING backend once it exists
+          # (pegasus#171 account split) so PR traffic can never touch prod
+          # boards; falls back to the prod config until the staging
+          # variable is configured.
+          backend-config: ${{ vars.BACKEND_CONFIG_JSON_STAGING || vars.BACKEND_CONFIG_JSON }}
 
       - name: Sync preview into gh-pages branch
         uses: ./.github/actions/sync-pages-branch

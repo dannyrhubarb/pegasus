@@ -1768,8 +1768,10 @@ The deployed site can carry a **`config.json`** next to `index.html`:
 `FrontendConfigJson` output, pasted once into Settings → Actions →
 Variables; validated at build time). No variable → no config.json → the
 whole online layer is invisible (local dev, forks — no boards, no ghost,
-session-only BEST). Previews get the same config, so a PR preview talks to
-the real backend. All JS-side in `index.html`:
+session-only BEST). Previews read **`BACKEND_CONFIG_JSON_STAGING`**
+instead (falling back to the prod variable until it's configured —
+pegasus#171 account split), so a PR preview exercises the STAGING backend
+and can never touch prod boards. All JS-side in `index.html`:
 - **Submit is always an explicit choice**: `maybeSubmitOnline` hooks
   `collectEndedRun` — every publishable run that ended in a game over
   (destroying crash, out-of-fuel, or a completed time level; score ≥ 1 —
