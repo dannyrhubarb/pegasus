@@ -2806,18 +2806,41 @@
       // The replay is mandatory: the server re-simulates it to verify the
       // claimed score before the run reaches any board (maybeSubmitOnline
       // guarantees entry.b exists and fits the 512 KiB decoded cap).
-      const body = {
+      const body = JSON.stringify({
         level: levelStem(file), name: playerName(), score: entry.d,
         replay: entry.b,
+      });
+      // A record run is unrepeatable, so one flaky mobile request must not
+      // lose it: transient failures (network error / 5xx) retry with
+      // backoff before giving up. The rare double-accept this can cause (a
+      // 201 whose response was lost in transit) just writes the same score
+      // twice under two runIds — cosmetic, and far better than a lost run.
+      const attempt = (triesLeft, delayMs) => {
+        fetch(backendCfg.apiBaseUrl + "/v1/scores", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+        }).then(r => {
+          if (!r.ok) {
+            console.warn("score submit failed:", r.status);
+            if (r.status >= 500 && triesLeft > 0)
+              setTimeout(() => attempt(triesLeft - 1, delayMs * 2), delayMs);
+            return;
+          }
+          // Verification is asynchronous backend-side (the 201 predates
+          // the verdict by seconds): refresh the record now — usually a
+          // no-op — and once more after the resim has had time to land,
+          // so a fresh record becomes BEST + the racing ghost without a
+          // reload.
+          applyGlobalRecord(file); // a new record should race the next spawn
+          setTimeout(() => applyGlobalRecord(file), 20000);
+        }).catch(e => {
+          console.warn("score submit failed:", e);
+          if (triesLeft > 0)
+            setTimeout(() => attempt(triesLeft - 1, delayMs * 2), delayMs);
+        });
       };
-      fetch(backendCfg.apiBaseUrl + "/v1/scores", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      }).then(r => {
-        if (!r.ok) { console.warn("score submit failed:", r.status); return; }
-        applyGlobalRecord(file); // a new record should race the next spawn
-      }).catch(e => console.warn("score submit failed:", e));
+      attempt(3, 2000);
     }
 
     function maybeSubmitOnline(file, entry) {
