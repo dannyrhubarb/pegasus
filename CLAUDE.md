@@ -1721,7 +1721,19 @@ the real backend. All JS-side in `index.html`:
   a lost 201 response just writes the same score twice, cosmetic — and
   after a 201 it re-runs `applyGlobalRecord` once immediately and once
   ~20 s later, so a fresh record becomes BEST + the racing ghost after
-  the async verdict lands. The
+  the async verdict lands. **Own-row "verifying…"** (`pendingVerify` /
+  `mergePendingRow`): the 201's runId is remembered and the board screen
+  merges the submitter's own entry in at its rank — dimmed, amber
+  "verifying…" instead of the date, no ▶ (the blob isn't served until
+  verified) — refetching every 6 s (`schedulePendingPoll`) until the
+  real row lands (matched by runId) or a 3-min window expires. STRICTLY
+  LOCAL AND STRICTLY VISUAL, by design: merged into the rendered rows
+  only — never `boardCache`, never the picker bests, never BEST/ghost —
+  so only the submitter sees it, the shared board stays verified-only,
+  and a rejected run just quietly never materialises, preserving the
+  backend's silent-discard no-rejection-oracle property (don't "improve"
+  this into an optimistic server-side write — that would hand forgers
+  the board as a verifier oracle and show fake scores to everyone). The
   same
   screen doubles as the Settings "Pilot name" editor
   (`openNameDialog(returnTo)`). Its input `stopPropagation()`s keydown so
