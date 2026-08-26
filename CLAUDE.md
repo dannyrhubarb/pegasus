@@ -314,7 +314,11 @@ while the wasm loads):
   `PegasusApp.appBuild()`, iOS the `window.__pegAppBuild` document-start
   user script; hidden on the plain website), the
   **What's new** button (`#btn-whatsnew` → **scr-whatsnew**, the changelog
-  screen — see "What's new page") and the
+  screen — see "What's new page"), the **Report a bug** button
+  (`#btn-bugreport` → **scr-bugreport**: message textarea + "Save report",
+  bundling the message with the last hour of the client log into a
+  downloadable/shareable text file — see "Client log & bug reports" under
+  "Analytics") and the
   **⟳ Reload latest build** button (`#force-reload`, same `?fresh=<ts>`
   bypass as the toast below).
 - **scr-pause**: Resume / Exit to menu. **scr-gameover**: CRASHED + run
@@ -628,6 +632,38 @@ degrades to silence.
   "fix" this to a Blob typed `application/json`**: that forces a preflight
   sendBeacon handles inconsistently; the lambda parses the raw body and
   ignores content-type by design.
+
+### Client log & bug reports (2026-08)
+`window.pegLog` — a standalone `<script>` between the boot guard and the
+launch gate (own tag for the same isolation reason; it must load BEFORE
+the bundle so its console wrappers see everything the wasm logs) — keeps
+a rolling ring buffer of the LAST HOUR of client activity: chain-wrapped
+`console.log/info/warn/error` (the boot guard's console.error wrap stays
+intact underneath), window `error`/`unhandledrejection`, a boot line,
+and every analytics event (`pegAnalytics.enqueue` mirrors into it — that
+runs even when analytics is off/dev/webdriver, so the timeline is always
+there) plus explicit lines at the submit POST/response and level loads.
+Caps: 500 entries, 300 chars/line; persisted THROTTLED (10 s + pagehide/
+tab-hide) to `localStorage.pegasus_log` and restored at boot, so a
+report filed after a reload still carries the crash before it. Every
+path try/caught — logging must never break the game (same philosophy as
+analytics).
+
+The About screen's **Report a bug** (`scr-bugreport`, histPath
+`[home, about, bugreport]` — the `.mbtn.back` gives it hardware back for
+free) takes a free-text message and builds a plain-text report: build
+rev, app build (shells), URL, user agent, viewport, loaded level, open
+screen, the `pegasus_*` settings keys (EXCLUDING `pegasus_device_id` —
+the anonymous id stays on the device — and the bulky keys: log, board
+cache, editor doc, custom level, date locale), the message, then the
+hour of log lines. **Delivery is user-driven, never uploaded** — ladder:
+Web Share API with the file (mobile share sheet; AbortError = user
+closed it, not a failure) → `<a download>` blob (desktop/Android
+browsers) → clipboard (FIRST choice under the Android app shell, which
+has no share API and a WebView that silently ignores `<a download>`
+without a download manager); `#bug-status` reports which path ran.
+Covered by a scratch Playwright e2e (download content, console capture,
+event mirror, device-id exclusion, back navigation, reload persistence).
 
 **Hard-won caveat (2026-07): query strings do NOT reliably bust the cache.**
 An intermediary on the owner's phone served one broken `pr-59/index.html` for
