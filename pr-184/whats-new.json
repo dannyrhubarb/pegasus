@@ -1,18 +1,18 @@
 [
  {
-  "rev": "5cd8949",
-  "date": "2026-08-26T20:26:52Z",
+  "rev": "571915f",
+  "date": "2026-08-26T20:28:18Z",
   "note": "New: Found a bug? About -> Report a bug packs your last hour of flight logs into a file for mission control"
  },
  {
-  "rev": "2eb3b40",
-  "date": "2026-08-26T20:26:52Z",
+  "rev": "c7ce82c",
+  "date": "2026-08-26T20:28:18Z",
   "note": "New: Your freshly submitted run shows on the board right away, wearing a little \"verifying...\" badge while mission control checks the tapes"
  },
  {
-  "rev": "c814037",
-  "date": "2026-08-26T20:26:42Z",
-  "note": "Fixed: Marathon record runs no longer vanish on their way to the global board — salute to Janakiraman for the sharp-eyed bug report"
+  "rev": "cb82518",
+  "date": "2026-08-26T20:28:18Z",
+  "note": "Fixed: Marathon record runs no longer vanish on their way to the global board — salute to Janaki for the sharp-eyed bug report"
  },
  {
   "rev": "16e0d98",
