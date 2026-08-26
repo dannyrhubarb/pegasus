@@ -1,5 +1,10 @@
 [
  {
+  "rev": "0763f72",
+  "date": "2026-08-26T20:20:19Z",
+  "note": "New: Found a bug? About -> Report a bug packs your last hour of flight logs into a file for mission control"
+ },
+ {
   "rev": "d4e71f5",
   "date": "2026-08-26T19:58:12Z",
   "note": "New: Your freshly submitted run shows on the board right away, wearing a little \"verifying...\" badge while mission control checks the tapes"

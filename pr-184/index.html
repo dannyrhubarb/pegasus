@@ -762,6 +762,27 @@
       box-shadow: 0 0 12px rgba(210, 222, 240, 0.3), inset 0 0 10px rgba(210, 222, 240, 0.1);
     }
     .name-input::placeholder { color: var(--faint); text-shadow: none; }
+    /* Bug report message box: the name-input look, textarea-shaped */
+    .bug-input {
+      width: min(420px, 88vw);
+      min-height: 7em;
+      resize: vertical;
+      background: rgba(4, 10, 24, 0.9);
+      border: 1.5px solid rgba(200, 210, 226, 0.45);
+      border-radius: 8px;
+      padding: 12px 13px;
+      font: 500 clamp(14px, 3.4vw, 16px)/1.4 var(--mono);
+      letter-spacing: 0.03em;
+      text-align: left;
+      color: var(--cyan);
+      caret-color: var(--cyan);
+      outline: none;
+    }
+    .bug-input:focus {
+      border-color: rgba(235, 241, 250, 0.9);
+      box-shadow: 0 0 12px rgba(210, 222, 240, 0.3), inset 0 0 10px rgba(210, 222, 240, 0.1);
+    }
+    .bug-input::placeholder { color: var(--faint); }
 
     /* Settings rows: custom neon toggle switches, no native checkboxes */
     .setrow {
@@ -1173,11 +1194,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">d4e71f5-pr-184</div>
+        <div class="info-value" id="git-rev">0763f72-pr-184</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-08-26T19:59:22Z</div>
+        <div class="info-value" id="build-time">2026-08-26T20:21:29Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -1196,6 +1217,7 @@
         the id.
       </div>
       <div class="mbtn" id="btn-whatsnew">What's new</div>
+      <div class="mbtn" id="btn-bugreport">Report a bug</div>
       <a class="mbtn" href="third-party-licenses.html" target="_blank" rel="noopener">Third-party licenses</a>
       <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
       <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
@@ -1208,6 +1230,24 @@
       <div class="h2">WHAT'S NEW</div>
       <ul class="rowlist" id="wn-list"></ul>
       <div class="hint" id="wn-status" style="display:none"></div>
+      <div class="mbtn back" data-goto="scr-about">&#8249; Back</div>
+    </div>
+
+    <!-- Bug report: the player's message + the last hour of pegLog,
+         bundled into a text file they download/share themselves — nothing
+         is uploaded (see "Bug reports" in CLAUDE.md). -->
+    <div class="screen" id="scr-bugreport">
+      <div class="h2">REPORT A BUG</div>
+      <div class="hint">
+        Describe what happened. The report bundles your message with this
+        device's game log from the last hour &mdash; you download the file
+        and send it to the developer yourself; nothing is uploaded.
+      </div>
+      <textarea class="bug-input" id="bug-input" maxlength="2000"
+                spellcheck="false"
+                placeholder="What went wrong? What did you expect?"></textarea>
+      <div class="mbtn primary" id="btn-bug-save">Save report</div>
+      <div class="hint" id="bug-status" style="display:none"></div>
       <div class="mbtn back" data-goto="scr-about">&#8249; Back</div>
     </div>
 
@@ -1352,6 +1392,77 @@
           show("Game failed to start (wasm not running after 8 s).");
         }
       }, 8000);
+    })();
+  </script>
+  <script>
+    // Client-side rolling log (window.pegLog) — its OWN tag, after the boot
+    // guard (so a bug here can never kill it) and before the bundle (so the
+    // console wrappers see everything the wasm logs). Feeds the About
+    // screen's bug report: a ring buffer of console output, script errors
+    // and game events (the analytics module mirrors its events in), kept to
+    // the LAST HOUR and persisted to localStorage (throttled) so a report
+    // filed after a reload still carries the crash that preceded it.
+    // Strictly local — nothing here ever leaves the device unless the
+    // player downloads/shares a bug report themselves. Every path is
+    // try/caught: logging must never break the game.
+    (function () {
+      var KEY = "pegasus_log", MAX = 500, HOUR = 3600e3;
+      var buf = [];
+      try {
+        var prev = JSON.parse(localStorage.getItem(KEY) || "[]");
+        if (Array.isArray(prev)) {
+          buf = prev.filter(function (e) {
+            return e && typeof e.t === "number" && Date.now() - e.t < HOUR;
+          });
+        }
+      } catch (_) { buf = []; }
+      var dirty = false;
+      function add(lvl, msg) {
+        try {
+          buf.push({ t: Date.now(), l: lvl, m: String(msg).slice(0, 300) });
+          if (buf.length > MAX) buf.splice(0, buf.length - MAX);
+          dirty = true;
+        } catch (_) { /* never let logging break the game */ }
+      }
+      function flush() {
+        if (!dirty) return;
+        dirty = false;
+        try { localStorage.setItem(KEY, JSON.stringify(buf)); }
+        catch (_) { /* quota — the log is best-effort */ }
+      }
+      setInterval(flush, 10000);
+      addEventListener("pagehide", flush);
+      document.addEventListener("visibilitychange", function () {
+        if (document.visibilityState === "hidden") flush();
+      });
+      // Chain-wrap the console: the boot guard already wrapped
+      // console.error (for the panic banner), so wrapping whatever is
+      // installed NOW keeps its behavior intact underneath ours.
+      ["log", "info", "warn", "error"].forEach(function (lvl) {
+        var orig = console[lvl];
+        console[lvl] = function () {
+          try {
+            add(lvl, Array.prototype.map.call(arguments, String).join(" "));
+          } catch (_) {}
+          return orig.apply(console, arguments);
+        };
+      });
+      addEventListener("error", function (e) {
+        add("error", (e.message || "error") +
+          (e.filename ? " @" + e.filename.split("/").pop() + ":" + e.lineno : ""));
+      });
+      addEventListener("unhandledrejection", function (e) {
+        if (e.reason != null) add("error", "unhandled rejection: " + String(e.reason));
+      });
+      add("log", "boot " + location.pathname + location.search);
+      window.pegLog = {
+        add: add,
+        // Entries from the last hour, oldest first (for the bug report).
+        snapshot: function () {
+          var cut = Date.now() - HOUR;
+          return buf.filter(function (e) { return e.t >= cut; });
+        },
+      };
     })();
   </script>
   <script>
@@ -1772,6 +1883,7 @@
         case "scr-settings": return ["scr-home", "scr-settings"];
         case "scr-about":    return ["scr-home", "scr-about"];
         case "scr-whatsnew": return ["scr-home", "scr-about", "scr-whatsnew"];
+        case "scr-bugreport": return ["scr-home", "scr-about", "scr-bugreport"];
         case "game":         return ["scr-home", "game"];
         case "scr-pause":    return ["scr-home", "game", "scr-pause"];
         case "scr-gameover": return levelFiles.length
@@ -2188,10 +2300,110 @@
         });
     });
 
+    // --- Bug report (About) ---
+    // The player's message + the last hour of the pegLog ring buffer (the
+    // standalone logger script near the boot guard) bundled into one plain
+    // text file. Delivery is explicitly user-driven — share sheet where
+    // file sharing exists (mobile), else a download, else the clipboard
+    // (the Android app shell has neither share nor a download manager) —
+    // the game itself never uploads a report.
+    const bugInput = document.getElementById("bug-input");
+    const bugStatus = document.getElementById("bug-status");
+    // Typing must never reach the game (same rule as the callsign input).
+    bugInput.addEventListener("keydown", e => e.stopPropagation());
+    document.getElementById("btn-bugreport").addEventListener("click", () => {
+      bugStatus.style.display = "none";
+      showScreen("scr-bugreport");
+    });
+    function buildBugReport(message) {
+      const lines = ["PEGASUS BUG REPORT"];
+      const push = (k, v) => lines.push(k + ": " + v);
+      push("reported", new Date().toISOString());
+      push("build", wasmRev.startsWith("__") ? "dev (local build)" : wasmRev);
+      try {
+        if (window.PegasusApp && PegasusApp.appBuild) push("app-build", String(PegasusApp.appBuild()));
+        else if (window.__pegAppBuild) push("app-build", String(window.__pegAppBuild));
+      } catch (e) { /* a shell bridge must never break the game */ }
+      push("url", location.href);
+      push("user-agent", navigator.userAgent || "");
+      push("viewport", innerWidth + "x" + innerHeight + " @" + (devicePixelRatio || 1) + "x");
+      push("level", currentLevelFile || "(none)");
+      push("screen", overlay || "game");
+      // Settings & state: every pegasus_* localStorage key except the
+      // bulky ones and the anonymous device id (that stays on the device).
+      const skip = ["pegasus_device_id", "pegasus_log", "pegasus_board_cache",
+                    "pegasus_editor_doc", "pegasus_custom_level", "pegasus_date_locale"];
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (!k || !k.startsWith("pegasus_") || skip.includes(k)) continue;
+          push(k, String(localStorage.getItem(k)).slice(0, 60));
+        }
+      } catch (e) { /* storage blocked — report without settings */ }
+      lines.push("", "--- MESSAGE ---", message || "(none)",
+                 "", "--- LOG (last hour, oldest first) ---");
+      try {
+        const snap = (window.pegLog && window.pegLog.snapshot()) || [];
+        if (!snap.length) lines.push("(empty)");
+        for (const e of snap) {
+          lines.push(new Date(e.t).toISOString() + " [" + e.l + "] " + e.m);
+        }
+      } catch (e) { lines.push("(log unavailable: " + e + ")"); }
+      return lines.join("\n") + "\n";
+    }
+    async function deliverBugReport(name, text) {
+      // Mobile first: the share sheet sends the file anywhere (mail, chat)
+      // in one step. AbortError = the player closed the sheet, not a
+      // failure; anything else falls through to the next path.
+      try {
+        const file = new File([text], name, { type: "text/plain" });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: name });
+          return "Shared — thanks, pilot!";
+        }
+      } catch (e) {
+        if (e && e.name === "AbortError") return "Sharing cancelled";
+      }
+      // The Android app shell: no share API, and a WebView without a
+      // download manager silently ignores <a download> — the clipboard is
+      // the one delivery path that works there.
+      if (window.PegasusApp && navigator.clipboard) {
+        try {
+          await navigator.clipboard.writeText(text);
+          return "Copied to clipboard — paste it into a message to the developer";
+        } catch (e) { /* fall through */ }
+      }
+      try {
+        const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        return "Report downloaded — send the file to the developer";
+      } catch (e) { /* fall through */ }
+      try {
+        await navigator.clipboard.writeText(text);
+        return "Copied to clipboard — paste it into a message to the developer";
+      } catch (e) { /* nothing worked */ }
+      return "Couldn't save the report on this device";
+    }
+    document.getElementById("btn-bug-save").addEventListener("click", () => {
+      const stamp = new Date().toISOString().replace(/[-:]/g, "").slice(0, 15);
+      const text = buildBugReport(bugInput.value.trim());
+      if (window.pegLog) window.pegLog.add("evt", "bug report saved (" + text.length + " chars)");
+      deliverBugReport("pegasus-bug-report-" + stamp + ".txt", text).then(msg => {
+        bugStatus.textContent = msg;
+        bugStatus.style.display = "";
+      });
+    });
+
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "d4e71f5-pr-184";
+    const wasmRev = "0763f72-pr-184";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -2509,6 +2721,7 @@
         const ptr = wasm_exports.level_buf_ptr(bytes.length);
         new Uint8Array(wasm_memory.buffer, ptr, bytes.length).set(bytes);
         wasm_exports.load_level(bytes.length); // also clears the in-game best
+        if (window.pegLog) window.pegLog.add("level", file);
         currentLevelFile = file;
         scoresFile = file; // the board defaults to the loaded level
         ghostLoadedPath = null; // the fresh start dropped the old ghost
@@ -2821,6 +3034,10 @@
       // 201 whose response was lost in transit) just writes the same score
       // twice under two runIds — cosmetic, and far better than a lost run.
       const attempt = (triesLeft, delayMs) => {
+        if (window.pegLog) {
+          window.pegLog.add("submit",
+            "POST " + levelStem(file) + " score=" + entry.d + " triesLeft=" + triesLeft);
+        }
         fetch(backendCfg.apiBaseUrl + "/v1/scores", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -2840,6 +3057,10 @@
           // resim has had time to land, so a fresh record becomes BEST +
           // the racing ghost without a reload.
           r.json().catch(() => null).then(res => {
+            if (window.pegLog) {
+              window.pegLog.add("submit",
+                "accepted runId=" + (res && res.runId ? res.runId : "(none)"));
+            }
             if (res && res.runId) {
               pendingVerify = {
                 stem: levelStem(file), name: playerName(), score: entry.d,
@@ -3357,6 +3578,10 @@
         try {
           queue.push({ seq: seq++, t: Date.now(), name, props: props || {} });
           if (queue.length > MAX_QUEUE) queue.shift(); // drop oldest
+          // Mirror every event into the local bug-report log (pegLog is a
+          // ring buffer, content-free enums/numbers like the event itself)
+          // — this is what gives a bug report its gameplay timeline.
+          if (window.pegLog) window.pegLog.add("evt", name + " " + JSON.stringify(props || {}));
         } catch (_) { /* never throw into game code */ }
       }
 
