@@ -1220,11 +1220,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">3f92b4e-pr-187</div>
+        <div class="info-value" id="git-rev">0fa0970-pr-187</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-08-27T19:32:14Z</div>
+        <div class="info-value" id="build-time">2026-08-27T19:42:15Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -2652,7 +2652,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "3f92b4e-pr-187";
+    const wasmRev = "0fa0970-pr-187";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -3126,11 +3126,14 @@
       recordRecentRun(currentLevelFile, dist, bytes); // bug-report replay buffer
       if (!backendCfg) return; // offline: nowhere to submit
       // The wasm publishes EVERY armed run (the replay buffer above wants
-      // short and non-scoring attempts too); the old GHOST_MIN_SECS gate
-      // lives here now — blink-and-gone runs (< 2 s = 240 ticks) still
-      // never reach the submit dialog.
+      // short and non-scoring attempts too), so the submit gates live
+      // here now: blink-and-gone runs (< 2 s = 240 ticks, the old
+      // GHOST_MIN_SECS gate) and non-scorable runs (a time level's DNF or
+      // abandoned attempt — run_scorable()) never reach the submit dialog.
       const ticks = wasm_exports.run_len_ticks ? wasm_exports.run_len_ticks() : 240;
       if (ticks < 240) return;
+      const scorable = wasm_exports.run_scorable ? wasm_exports.run_scorable() !== 0 : true;
+      if (!scorable) return;
       maybeSubmitOnline(currentLevelFile, { d: dist, b: b64FromBytes(bytes) });
     }
 
