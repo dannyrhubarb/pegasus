@@ -644,9 +644,10 @@ every analytics event (`pegAnalytics.enqueue` mirrors into it — that
 runs even when analytics is off/dev/webdriver, so the timeline is always
 there), explicit lines at the submit POST/response and level loads, and
 **every fetch()** (the wrapper is installed before the bundle, so the
-wasm/level/config/board/blob requests are all covered): method + URL +
-status + duration, plus the first 120 chars of the response body on a
-NON-ok status only — happy-path bodies are never logged (a submit body
+wasm/level/config/board/blob requests are all covered): method + URL
+(**origin-stripped — path+query only, no domains**, whatever the
+request's host) + status + duration, plus the first 120 chars of the
+response body on a NON-ok status only — happy-path bodies are never logged (a submit body
 carries the whole replay blob). The wrapper returns the ORIGINAL
 promise and its observer branch swallows its own rejection, so it can
 neither alter request semantics nor spawn duplicate unhandled-rejection
@@ -659,19 +660,31 @@ analytics).
 
 The About screen's **Report a bug** (`scr-bugreport`, histPath
 `[home, about, bugreport]` — the `.mbtn.back` gives it hardware back for
-free) takes a free-text message and builds a plain-text report: build
-rev, app build (shells), URL, user agent, viewport, loaded level, open
-screen, the `pegasus_*` settings keys (EXCLUDING `pegasus_device_id` —
-the anonymous id stays on the device — and the bulky keys: log, board
-cache, editor doc, custom level, date locale), the message, then the
-hour of log lines. **Delivery is user-driven, never uploaded** — ladder:
-Web Share API with the file (mobile share sheet; AbortError = user
-closed it, not a failure) → `<a download>` blob (desktop/Android
-browsers) → clipboard (FIRST choice under the Android app shell, which
-has no share API and a WebView that silently ignores `<a download>`
-without a download manager); `#bug-status` reports which path ran.
-Covered by a scratch Playwright e2e (download content, console capture,
-event mirror, device-id exclusion, back navigation, reload persistence).
+free) takes a free-text message plus optional **attachments** (an
+"Attach files" row → hidden `<input type=file multiple>`) and builds a
+**ZIP archive**: `report.txt` (build rev, app build (shells), URL, user
+agent, viewport, loaded level, open screen, the `pegasus_*` settings
+keys — EXCLUDING `pegasus_device_id`, the anonymous id stays on the
+device, and the bulky keys: log, board cache, editor doc, custom level,
+date locale, recent runs — the message, a replay/attachment index, then
+the hour of log lines), `replays/<n>-<ts>-<stem>.pgrec` — the **last
+five finished runs** with played-at timestamps (`recentRuns`, captured
+in `collectEndedRun` BEFORE the offline gate so it works without a
+backend; persisted best-effort to `pegasus_recent_runs`, capped 5 runs /
+~1.5 MB base64, always keeping the newest) — and `attachments/<name>`
+(sanitized, collision-deduped). The zip comes from `buildZip`, a
+dependency-free STORE-only writer (deliberate: replay blobs are already
+deflated and images already compressed; CRC-32 + UTF-8-name flag,
+whole-archive cap 25 MB). **Delivery is user-driven, never uploaded** —
+ladder: Web Share API with the zip (mobile share sheet; AbortError =
+user closed it, not a failure) → `<a download>` blob (desktop/Android
+browsers) → clipboard, which can only carry `report.txt`'s text (FIRST
+choice under the Android app shell, which has no share API and a
+WebView that silently ignores `<a download>` without a download
+manager); `#bug-status` reports which path ran. Covered by a scratch
+Playwright e2e (zip structure + report content, attachments, seeded
+replays, console capture, event mirror, device-id exclusion, back
+navigation, reload persistence).
 
 **Hard-won caveat (2026-07): query strings do NOT reliably bust the cache.**
 An intermediary on the owner's phone served one broken `pr-59/index.html` for
