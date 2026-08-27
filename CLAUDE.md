@@ -640,9 +640,17 @@ the bundle so its console wrappers see everything the wasm logs) — keeps
 a rolling ring buffer of the LAST HOUR of client activity: chain-wrapped
 `console.log/info/warn/error` (the boot guard's console.error wrap stays
 intact underneath), window `error`/`unhandledrejection`, a boot line,
-and every analytics event (`pegAnalytics.enqueue` mirrors into it — that
+every analytics event (`pegAnalytics.enqueue` mirrors into it — that
 runs even when analytics is off/dev/webdriver, so the timeline is always
-there) plus explicit lines at the submit POST/response and level loads.
+there), explicit lines at the submit POST/response and level loads, and
+**every fetch()** (the wrapper is installed before the bundle, so the
+wasm/level/config/board/blob requests are all covered): method + URL +
+status + duration, plus the first 120 chars of the response body on a
+NON-ok status only — happy-path bodies are never logged (a submit body
+carries the whole replay blob). The wrapper returns the ORIGINAL
+promise and its observer branch swallows its own rejection, so it can
+neither alter request semantics nor spawn duplicate unhandled-rejection
+noise.
 Caps: 500 entries, 300 chars/line; persisted THROTTLED (10 s + pagehide/
 tab-hide) to `localStorage.pegasus_log` and restored at boot, so a
 report filed after a reload still carries the crash before it. Every

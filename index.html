@@ -1454,6 +1454,49 @@
       addEventListener("unhandledrejection", function (e) {
         if (e.reason != null) add("error", "unhandled rejection: " + String(e.reason));
       });
+      // Network lines: wrap fetch so every request logs method, URL, status
+      // and duration — plus the first bytes of the response body on a
+      // non-ok status (the API's error text is the diagnosis). Installed
+      // before the bundle, so the wasm/level/config fetches are covered
+      // too. Request/response BODIES are never logged on the happy path
+      // (a submit body carries the whole replay blob). The wrapper must be
+      // transparent: the caller gets the ORIGINAL promise, and our
+      // observer branch swallows its own rejection so it can't spawn
+      // duplicate unhandled-rejection noise.
+      if (window.fetch) {
+        var shortUrl = function (u) {
+          try {
+            u = String(u);
+            if (u.startsWith(location.origin)) u = u.slice(location.origin.length);
+            return u.length > 140 ? u.slice(0, 140) + "…" : u;
+          } catch (_) { return "?"; }
+        };
+        var origFetch = window.fetch;
+        window.fetch = function (input, init) {
+          var line = "?";
+          try {
+            var method = ((init && init.method) ||
+              (input && typeof input === "object" && input.method) || "GET").toUpperCase();
+            line = method + " " + shortUrl((input && typeof input === "object" && input.url) || input);
+          } catch (_) {}
+          var t0 = Date.now();
+          var p = origFetch.apply(this, arguments);
+          try {
+            p.then(function (res) {
+              var done = line + " → " + res.status + " (" + (Date.now() - t0) + "ms)";
+              if (res.ok) { add("net", done); return; }
+              // Failed response: the body text is the useful part.
+              res.clone().text().then(
+                function (t) { add("net", done + " body: " + String(t).slice(0, 120)); },
+                function () { add("net", done); }
+              );
+            }, function (err) {
+              add("net", line + " ✗ " + String(err).slice(0, 120) + " (" + (Date.now() - t0) + "ms)");
+            });
+          } catch (_) { /* observing must never break the request */ }
+          return p;
+        };
+      }
       add("log", "boot " + location.pathname + location.search);
       window.pegLog = {
         add: add,
