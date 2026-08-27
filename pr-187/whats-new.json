@@ -1,5 +1,10 @@
 [
  {
+  "rev": "a36f9e2",
+  "date": "2026-08-27T19:26:58Z",
+  "note": "Fixed: Sharing a bug report no longer sneaks a stray text.txt in beside the zip"
+ },
+ {
   "rev": "23a65ee",
   "date": "2026-08-27T19:07:40Z",
   "note": "New: Found a bug? About -> Report a bug shares a zip with your message, an hour of flight logs and network chatter, your last five replays (even the two-second ones) and any files you attach"
