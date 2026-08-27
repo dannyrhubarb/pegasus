@@ -1,5 +1,10 @@
 [
  {
+  "rev": "3f92b4e",
+  "date": "2026-08-27T19:30:47Z",
+  "note": "Fixed: The bug-report form wipes itself clean once a report is delivered - fresh sheet for the next gremlin"
+ },
+ {
   "rev": "a36f9e2",
   "date": "2026-08-27T19:26:58Z",
   "note": "Fixed: Sharing a bug report no longer sneaks a stray text.txt in beside the zip"
