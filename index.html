@@ -783,6 +783,32 @@
       box-shadow: 0 0 12px rgba(210, 222, 240, 0.3), inset 0 0 10px rgba(210, 222, 240, 0.1);
     }
     .bug-input::placeholder { color: var(--faint); }
+    /* Attached-file rows: name + a small neon ✕ to remove it */
+    #bug-files { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+    .bug-file {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      max-width: min(340px, 80vw);
+      padding: 4px 6px 4px 10px;
+      border: 1px solid rgba(200, 210, 226, 0.35);
+      border-radius: 6px;
+    }
+    .bug-file > span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .bug-file-x {
+      font: 700 12px/1 var(--mono);
+      color: var(--amber);
+      background: none;
+      border: 1px solid rgba(255, 193, 84, 0.5);
+      border-radius: 4px;
+      padding: 4px 6px;
+      cursor: pointer;
+    }
+    .bug-file-x:hover { background: rgba(255, 193, 84, 0.15); }
 
     /* Settings rows: custom neon toggle switches, no native checkboxes */
     .setrow {
@@ -1194,11 +1220,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">c60c14f</div>
+        <div class="info-value" id="git-rev">1784f15</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-08-27T18:34:10Z</div>
+        <div class="info-value" id="build-time">2026-08-27T19:54:57Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -1708,6 +1734,7 @@
     }, 200);
 
     function showScreen(id) {
+      if (overlay === "scr-bugreport" && id !== "scr-bugreport") bugReportLeft();
       overlay = id;
       menuEl.classList.add("open");
       hudBtns.classList.remove("on");
@@ -1724,6 +1751,7 @@
       syncHistory();
     }
     function closeMenu() {
+      if (overlay === "scr-bugreport") bugReportLeft();
       overlay = null;
       menuEl.classList.remove("open");
       hudBtns.classList.add("on");
@@ -2370,16 +2398,53 @@
       bugStatus.style.display = "none";
       showScreen("scr-bugreport");
     });
+    // Attachments ACCUMULATE across picker openings (a file input's own
+    // list replaces on every pick, so the files are collected into
+    // bugAttachments and the input is reset — that also lets the same
+    // file be re-added after a remove). Each row carries a ✕ to drop it.
+    let bugAttachments = [];
+    // A DELIVERED report clears the form when the player leaves the screen
+    // (showScreen/closeMenu call bugReportLeft) — the next report starts
+    // fresh. An unsent draft survives backing out on purpose: stepping
+    // away to check something mustn't eat a half-written message.
+    let bugShared = false;
+    function bugReportLeft() {
+      if (!bugShared) return;
+      bugShared = false;
+      bugInput.value = "";
+      bugAttachments = [];
+      renderBugAttachments();
+      bugStatus.textContent = "";
+      bugStatus.style.display = "none";
+    }
     document.getElementById("btn-bug-attach").addEventListener("click", () => {
       bugFileInput.click();
     });
     bugFileInput.addEventListener("change", () => {
-      const fs = Array.from(bugFileInput.files || []);
-      bugFilesEl.style.display = fs.length ? "" : "none";
-      bugFilesEl.textContent = fs.length
-        ? fs.length + " attached: " + fs.map(f => f.name).join(", ")
-        : "";
+      bugAttachments.push(...Array.from(bugFileInput.files || []));
+      bugFileInput.value = ""; // next pick fires change even for the same file
+      renderBugAttachments();
     });
+    function renderBugAttachments() {
+      bugFilesEl.textContent = "";
+      bugFilesEl.style.display = bugAttachments.length ? "" : "none";
+      bugAttachments.forEach((f, i) => {
+        const row = document.createElement("span");
+        row.className = "bug-file";
+        const name = document.createElement("span");
+        name.textContent = f.name;
+        const x = document.createElement("button");
+        x.className = "bug-file-x";
+        x.textContent = "✕";
+        x.setAttribute("aria-label", "Remove " + f.name);
+        x.addEventListener("click", () => {
+          bugAttachments.splice(i, 1);
+          renderBugAttachments();
+        });
+        row.append(name, x);
+        bugFilesEl.appendChild(row);
+      });
+    }
 
     // Minimal ZIP writer — STORE entries only, deliberately: the replay
     // blobs are already deflate-compressed and screenshots/photos are
@@ -2478,7 +2543,7 @@
                    "  score " + r.d);
       });
       lines.push("", "--- ATTACHMENTS (in this zip) ---");
-      const atts = Array.from(bugFileInput.files || []);
+      const atts = bugAttachments;
       if (!atts.length) lines.push("(none)");
       for (const f of atts) lines.push("attachments/" + safeFileName(f.name) + " (" + f.size + " bytes)");
       lines.push("", "--- LOG (last hour, oldest first) ---");
@@ -2508,7 +2573,7 @@
         } catch (e) { /* a corrupt stored blob must not sink the report */ }
       });
       const seen = new Set(entries.map(e => e.name));
-      for (const f of Array.from(bugFileInput.files || [])) {
+      for (const f of bugAttachments) {
         let name = "attachments/" + safeFileName(f.name);
         for (let i = 2; seen.has(name); i++) name = "attachments/" + i + "-" + safeFileName(f.name);
         seen.add(name);
@@ -2525,11 +2590,16 @@
       try {
         const file = new File([zipBytes], name, { type: "application/zip" });
         if (navigator.canShare && navigator.canShare({ files: [file] })) {
-          await navigator.share({ files: [file], title: name });
-          return "Shared — thanks, pilot!";
+          // The file ALONE — no title/text: Chrome on Android forwards
+          // those as separate shared text, and file-only share targets
+          // (Drive, Files, mail apps) materialize it as a stray text.txt
+          // next to the zip (seen in the field). The zip's filename
+          // already says what it is.
+          await navigator.share({ files: [file] });
+          return { ok: true, msg: "Shared — thanks, pilot!" };
         }
       } catch (e) {
-        if (e && e.name === "AbortError") return "Sharing cancelled";
+        if (e && e.name === "AbortError") return { ok: false, msg: "Sharing cancelled" };
       }
       // The Android app shell: no share API, and a WebView without a
       // download manager silently ignores <a download> — the clipboard is
@@ -2537,7 +2607,7 @@
       if (window.PegasusApp && navigator.clipboard) {
         try {
           await navigator.clipboard.writeText(text);
-          return "Copied report text to clipboard (replays/attachments can't ride it) — paste it into a message to the developer";
+          return { ok: true, msg: "Copied report text to clipboard (replays/attachments can't ride it) — paste it into a message to the developer" };
         } catch (e) { /* fall through */ }
       }
       try {
@@ -2549,13 +2619,13 @@
         a.click();
         a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 10000);
-        return "Report downloaded — send the file to the developer";
+        return { ok: true, msg: "Report downloaded — send the file to the developer" };
       } catch (e) { /* fall through */ }
       try {
         await navigator.clipboard.writeText(text);
-        return "Copied report text to clipboard (replays/attachments can't ride it) — paste it into a message to the developer";
+        return { ok: true, msg: "Copied report text to clipboard (replays/attachments can't ride it) — paste it into a message to the developer" };
       } catch (e) { /* nothing worked */ }
-      return "Couldn't save the report on this device";
+      return { ok: false, msg: "Couldn't save the report on this device" };
     }
     document.getElementById("btn-bug-save").addEventListener("click", async () => {
       try {
@@ -2570,8 +2640,9 @@
         if (window.pegLog) {
           window.pegLog.add("evt", "bug report shared (" + zip.length + " bytes zipped)");
         }
-        const msg = await deliverBugReport("pegasus-bug-report-" + stamp + ".zip", zip, text);
-        bugStatus.textContent = msg;
+        const res = await deliverBugReport("pegasus-bug-report-" + stamp + ".zip", zip, text);
+        if (res.ok) bugShared = true; // leaving the screen now clears the form
+        bugStatus.textContent = res.msg;
       } catch (e) {
         bugStatus.textContent = "Couldn't build the report: " + e;
       }
@@ -2581,7 +2652,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "c60c14f";
+    const wasmRev = "1784f15";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -3054,6 +3125,15 @@
       const dist = wasm_exports.run_dist();
       recordRecentRun(currentLevelFile, dist, bytes); // bug-report replay buffer
       if (!backendCfg) return; // offline: nowhere to submit
+      // The wasm publishes EVERY armed run (the replay buffer above wants
+      // short and non-scoring attempts too), so the submit gates live
+      // here now: blink-and-gone runs (< 2 s = 240 ticks, the old
+      // GHOST_MIN_SECS gate) and non-scorable runs (a time level's DNF or
+      // abandoned attempt — run_scorable()) never reach the submit dialog.
+      const ticks = wasm_exports.run_len_ticks ? wasm_exports.run_len_ticks() : 240;
+      if (ticks < 240) return;
+      const scorable = wasm_exports.run_scorable ? wasm_exports.run_scorable() !== 0 : true;
+      if (!scorable) return;
       maybeSubmitOnline(currentLevelFile, { d: dist, b: b64FromBytes(bytes) });
     }
 
