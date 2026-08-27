@@ -1,8 +1,8 @@
 [
  {
-  "rev": "ecf4df4",
-  "date": "2026-08-27T06:41:01+02:00",
-  "note": "New: Found a bug? About -> Report a bug packs your message, your last hour of flight logs and all the radio chatter with mission control into one file"
+  "rev": "c60c14f",
+  "date": "2026-08-27T20:33:13+02:00",
+  "note": "New: Found a bug? About -> Report a bug now shares a zip with your message, an hour of flight logs, your last five replays and any screenshots you attach"
  },
  {
   "rev": "3393151",
@@ -12,7 +12,7 @@
  {
   "rev": "afee382",
   "date": "2026-08-26T23:40:20+02:00",
-  "note": "Fixed: Marathon record runs no longer vanish on their way to the global board — salute to Janaki for the sharp-eyed bug report"
+  "note": "Fixed: Marathon record runs no longer vanish on their way to the global board — salute to Janaki and Kulan for the sharp-eyed bug reports"
  },
  {
   "rev": "16e0d98",
