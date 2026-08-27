@@ -1233,20 +1233,25 @@
       <div class="mbtn back" data-goto="scr-about">&#8249; Back</div>
     </div>
 
-    <!-- Bug report: the player's message + the last hour of pegLog,
-         bundled into a text file they download/share themselves — nothing
-         is uploaded (see "Bug reports" in CLAUDE.md). -->
+    <!-- Bug report: the player's message + the last hour of pegLog + the
+         last five run replays + any attached files, bundled into a ZIP they
+         share/download themselves — nothing is uploaded (see "Bug reports"
+         in CLAUDE.md). -->
     <div class="screen" id="scr-bugreport">
       <div class="h2">REPORT A BUG</div>
       <div class="hint">
-        Describe what happened. The report bundles your message with this
-        device's game log from the last hour &mdash; you download the file
-        and send it to the developer yourself; nothing is uploaded.
+        Describe what happened. The report zip bundles your message with
+        this device's game log from the last hour, your last five replays
+        and anything you attach &mdash; you share the file with the
+        developer yourself; nothing is uploaded.
       </div>
       <textarea class="bug-input" id="bug-input" maxlength="2000"
                 spellcheck="false"
                 placeholder="What went wrong? What did you expect?"></textarea>
-      <div class="mbtn primary" id="btn-bug-save">Save report</div>
+      <div class="mbtn" id="btn-bug-attach">Attach files</div>
+      <div class="hint" id="bug-files" style="display:none"></div>
+      <input type="file" id="bug-file-input" multiple style="display:none">
+      <div class="mbtn primary" id="btn-bug-save">Share report</div>
       <div class="hint" id="bug-status" style="display:none"></div>
       <div class="mbtn back" data-goto="scr-about">&#8249; Back</div>
     </div>
@@ -1466,8 +1471,11 @@
       if (window.fetch) {
         var shortUrl = function (u) {
           try {
-            u = String(u);
-            if (u.startsWith(location.origin)) u = u.slice(location.origin.length);
+            // Relative only — no domains in the log, whatever the origin
+            // (the log rides bug reports; paths identify every request the
+            // game makes without carrying host names along).
+            var parsed = new URL(String(u), location.href);
+            u = parsed.pathname + parsed.search;
             return u.length > 140 ? u.slice(0, 140) + "…" : u;
           } catch (_) { return "?"; }
         };
@@ -2344,20 +2352,97 @@
     });
 
     // --- Bug report (About) ---
-    // The player's message + the last hour of the pegLog ring buffer (the
-    // standalone logger script near the boot guard) bundled into one plain
-    // text file. Delivery is explicitly user-driven — share sheet where
-    // file sharing exists (mobile), else a download, else the clipboard
-    // (the Android app shell has neither share nor a download manager) —
-    // the game itself never uploads a report.
+    // A ZIP archive — report.txt (the player's message + device context +
+    // the last hour of the pegLog ring buffer), the last five run replays
+    // (replays/<n>.pgrec, played-at timestamps in the filename and index)
+    // and any files the player attached (attachments/…). Delivery is
+    // explicitly user-driven — share sheet where file sharing exists
+    // (mobile), else a download, else the clipboard, which can only carry
+    // report.txt (the Android app shell has neither share nor a download
+    // manager) — the game itself never uploads a report.
     const bugInput = document.getElementById("bug-input");
     const bugStatus = document.getElementById("bug-status");
+    const bugFileInput = document.getElementById("bug-file-input");
+    const bugFilesEl = document.getElementById("bug-files");
     // Typing must never reach the game (same rule as the callsign input).
     bugInput.addEventListener("keydown", e => e.stopPropagation());
     document.getElementById("btn-bugreport").addEventListener("click", () => {
       bugStatus.style.display = "none";
       showScreen("scr-bugreport");
     });
+    document.getElementById("btn-bug-attach").addEventListener("click", () => {
+      bugFileInput.click();
+    });
+    bugFileInput.addEventListener("change", () => {
+      const fs = Array.from(bugFileInput.files || []);
+      bugFilesEl.style.display = fs.length ? "" : "none";
+      bugFilesEl.textContent = fs.length
+        ? fs.length + " attached: " + fs.map(f => f.name).join(", ")
+        : "";
+    });
+
+    // Minimal ZIP writer — STORE entries only, deliberately: the replay
+    // blobs are already deflate-compressed and screenshots/photos are
+    // already compressed formats, so a compressor would buy nothing.
+    // Local headers + central directory + EOCD + CRC-32, UTF-8 names
+    // (general-purpose flag bit 11). No dependencies, like everything
+    // else on this page.
+    const crc32 = (() => {
+      const table = new Uint32Array(256);
+      for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = (c & 1) ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+        table[n] = c >>> 0;
+      }
+      return bytes => {
+        let c = 0xFFFFFFFF;
+        for (let i = 0; i < bytes.length; i++) c = table[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+        return (c ^ 0xFFFFFFFF) >>> 0;
+      };
+    })();
+    function buildZip(entries) { // [{name, bytes, mtime}] → Uint8Array
+      const enc = new TextEncoder();
+      const parts = [], central = [];
+      let offset = 0;
+      const u16 = v => [v & 0xFF, (v >>> 8) & 0xFF];
+      const u32 = v => [v & 0xFF, (v >>> 8) & 0xFF, (v >>> 16) & 0xFF, (v >>> 24) & 0xFF];
+      for (const e of entries) {
+        const name = enc.encode(e.name);
+        const d = new Date(e.mtime || Date.now());
+        const dosTime = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+        const dosDate = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+        const crc = crc32(e.bytes);
+        const common = [
+          ...u16(20), ...u16(0x0800), ...u16(0), // version, UTF-8 flag, method STORE
+          ...u16(dosTime), ...u16(dosDate), ...u32(crc),
+          ...u32(e.bytes.length), ...u32(e.bytes.length), ...u16(name.length),
+        ];
+        parts.push(new Uint8Array([...u32(0x04034B50), ...common, ...u16(0)]), name, e.bytes);
+        central.push(new Uint8Array([
+          ...u32(0x02014B50), ...u16(20), ...common,
+          // extra len, comment len, disk start, internal attrs,
+          // external attrs, local-header offset
+          ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(offset),
+        ]), name);
+        offset += 30 + name.length + e.bytes.length;
+      }
+      const cdStart = offset;
+      let cdLen = 0;
+      for (const c of central) cdLen += c.length;
+      parts.push(...central, new Uint8Array([
+        ...u32(0x06054B50), ...u16(0), ...u16(0),
+        ...u16(entries.length), ...u16(entries.length),
+        ...u32(cdLen), ...u32(cdStart), ...u16(0),
+      ]));
+      const total = parts.reduce((n, p) => n + p.length, 0);
+      const out = new Uint8Array(total);
+      let at = 0;
+      for (const p of parts) { out.set(p, at); at += p.length; }
+      return out;
+    }
+    const bytesFromB64 = b64 => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    const compactTs = t => new Date(t).toISOString().replace(/[-:]/g, "").slice(0, 15);
+
     function buildBugReport(message) {
       const lines = ["PEGASUS BUG REPORT"];
       const push = (k, v) => lines.push(k + ": " + v);
@@ -2375,7 +2460,8 @@
       // Settings & state: every pegasus_* localStorage key except the
       // bulky ones and the anonymous device id (that stays on the device).
       const skip = ["pegasus_device_id", "pegasus_log", "pegasus_board_cache",
-                    "pegasus_editor_doc", "pegasus_custom_level", "pegasus_date_locale"];
+                    "pegasus_editor_doc", "pegasus_custom_level", "pegasus_date_locale",
+                    "pegasus_recent_runs"];
       try {
         for (let i = 0; i < localStorage.length; i++) {
           const k = localStorage.key(i);
@@ -2384,7 +2470,18 @@
         }
       } catch (e) { /* storage blocked — report without settings */ }
       lines.push("", "--- MESSAGE ---", message || "(none)",
-                 "", "--- LOG (last hour, oldest first) ---");
+                 "", "--- REPLAYS (in this zip, oldest first) ---");
+      if (!recentRuns.length) lines.push("(none recorded yet)");
+      recentRuns.forEach((r, i) => {
+        lines.push("replays/" + replayFileName(r, i) +
+                   "  played " + new Date(r.t).toISOString() +
+                   "  score " + r.d);
+      });
+      lines.push("", "--- ATTACHMENTS (in this zip) ---");
+      const atts = Array.from(bugFileInput.files || []);
+      if (!atts.length) lines.push("(none)");
+      for (const f of atts) lines.push("attachments/" + safeFileName(f.name) + " (" + f.size + " bytes)");
+      lines.push("", "--- LOG (last hour, oldest first) ---");
       try {
         const snap = (window.pegLog && window.pegLog.snapshot()) || [];
         if (!snap.length) lines.push("(empty)");
@@ -2394,12 +2491,39 @@
       } catch (e) { lines.push("(log unavailable: " + e + ")"); }
       return lines.join("\n") + "\n";
     }
-    async function deliverBugReport(name, text) {
+    const safeFileName = n =>
+      String(n || "file").replace(/[^\w.\- ]+/g, "_").slice(0, 80) || "file";
+    const replayFileName = (r, i) =>
+      (i + 1) + "-" + compactTs(r.t) + "-" + levelStem(r.file || "unknown") + ".pgrec";
+    // Assemble the zip: report.txt + the replay buffer + attachments.
+    // Attachment names are sanitized and deduped (a numeric prefix on
+    // collision); the total is capped so the share sheet gets something
+    // sendable rather than a phone video that dwarfs the report.
+    const BUG_ZIP_MAX_BYTES = 25 * 1024 * 1024;
+    async function buildBugZip(text) {
+      const entries = [{ name: "report.txt", bytes: new TextEncoder().encode(text), mtime: Date.now() }];
+      recentRuns.forEach((r, i) => {
+        try {
+          entries.push({ name: "replays/" + replayFileName(r, i), bytes: bytesFromB64(r.b), mtime: r.t });
+        } catch (e) { /* a corrupt stored blob must not sink the report */ }
+      });
+      const seen = new Set(entries.map(e => e.name));
+      for (const f of Array.from(bugFileInput.files || [])) {
+        let name = "attachments/" + safeFileName(f.name);
+        for (let i = 2; seen.has(name); i++) name = "attachments/" + i + "-" + safeFileName(f.name);
+        seen.add(name);
+        entries.push({ name, bytes: new Uint8Array(await f.arrayBuffer()), mtime: f.lastModified || Date.now() });
+      }
+      const total = entries.reduce((n, e) => n + e.bytes.length, 0);
+      if (total > BUG_ZIP_MAX_BYTES) return null; // caller reports the cap
+      return buildZip(entries);
+    }
+    async function deliverBugReport(name, zipBytes, text) {
       // Mobile first: the share sheet sends the file anywhere (mail, chat)
       // in one step. AbortError = the player closed the sheet, not a
       // failure; anything else falls through to the next path.
       try {
-        const file = new File([text], name, { type: "text/plain" });
+        const file = new File([zipBytes], name, { type: "application/zip" });
         if (navigator.canShare && navigator.canShare({ files: [file] })) {
           await navigator.share({ files: [file], title: name });
           return "Shared — thanks, pilot!";
@@ -2409,15 +2533,15 @@
       }
       // The Android app shell: no share API, and a WebView without a
       // download manager silently ignores <a download> — the clipboard is
-      // the one delivery path that works there.
+      // the one path that works there, and it can only carry report.txt.
       if (window.PegasusApp && navigator.clipboard) {
         try {
           await navigator.clipboard.writeText(text);
-          return "Copied to clipboard — paste it into a message to the developer";
+          return "Copied report text to clipboard (replays/attachments can't ride it) — paste it into a message to the developer";
         } catch (e) { /* fall through */ }
       }
       try {
-        const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+        const url = URL.createObjectURL(new Blob([zipBytes], { type: "application/zip" }));
         const a = document.createElement("a");
         a.href = url;
         a.download = name;
@@ -2429,18 +2553,29 @@
       } catch (e) { /* fall through */ }
       try {
         await navigator.clipboard.writeText(text);
-        return "Copied to clipboard — paste it into a message to the developer";
+        return "Copied report text to clipboard (replays/attachments can't ride it) — paste it into a message to the developer";
       } catch (e) { /* nothing worked */ }
       return "Couldn't save the report on this device";
     }
-    document.getElementById("btn-bug-save").addEventListener("click", () => {
-      const stamp = new Date().toISOString().replace(/[-:]/g, "").slice(0, 15);
-      const text = buildBugReport(bugInput.value.trim());
-      if (window.pegLog) window.pegLog.add("evt", "bug report saved (" + text.length + " chars)");
-      deliverBugReport("pegasus-bug-report-" + stamp + ".txt", text).then(msg => {
+    document.getElementById("btn-bug-save").addEventListener("click", async () => {
+      try {
+        const stamp = compactTs(Date.now());
+        const text = buildBugReport(bugInput.value.trim());
+        const zip = await buildBugZip(text);
+        if (!zip) {
+          bugStatus.textContent = "Attachments too large — keep the report under 25 MB";
+          bugStatus.style.display = "";
+          return;
+        }
+        if (window.pegLog) {
+          window.pegLog.add("evt", "bug report shared (" + zip.length + " bytes zipped)");
+        }
+        const msg = await deliverBugReport("pegasus-bug-report-" + stamp + ".zip", zip, text);
         bugStatus.textContent = msg;
-        bugStatus.style.display = "";
-      });
+      } catch (e) {
+        bugStatus.textContent = "Couldn't build the report: " + e;
+      }
+      bugStatus.style.display = "";
     });
 
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
@@ -2913,12 +3048,36 @@
       const seq = wasm_exports.run_seq();
       if (seq === lastRunSeq) return;
       lastRunSeq = seq;
-      if (!backendCfg) return; // offline: nowhere to submit
       const len = wasm_exports.run_blob_len();
       if (!len) return;
       const bytes = new Uint8Array(wasm_memory.buffer, wasm_exports.run_blob_ptr(), len).slice();
-      maybeSubmitOnline(currentLevelFile,
-        { d: wasm_exports.run_dist(), b: b64FromBytes(bytes) });
+      const dist = wasm_exports.run_dist();
+      recordRecentRun(currentLevelFile, dist, bytes); // bug-report replay buffer
+      if (!backendCfg) return; // offline: nowhere to submit
+      maybeSubmitOnline(currentLevelFile, { d: dist, b: b64FromBytes(bytes) });
+    }
+
+    // Last five finished runs, kept for bug reports (they ride the report
+    // zip as replays/<n>.pgrec with played-at timestamps). Persisted
+    // best-effort so a crash-then-reload report still carries the run that
+    // crashed; size-capped for localStorage quota, and always keeping at
+    // least the newest run even if it alone busts the byte cap.
+    const RECENT_RUNS_KEY = "pegasus_recent_runs";
+    const RECENT_RUNS_MAX = 5;
+    const RECENT_RUNS_MAX_B64 = 1_500_000; // ~1.1 MB of blobs
+    let recentRuns = [];
+    try { recentRuns = JSON.parse(localStorage.getItem(RECENT_RUNS_KEY) || "[]") || []; }
+    catch (e) { recentRuns = []; }
+    function recordRecentRun(file, dist, bytes) {
+      try {
+        recentRuns.push({ t: Date.now(), file, d: dist, b: b64FromBytes(bytes) });
+        while (recentRuns.length > RECENT_RUNS_MAX) recentRuns.shift();
+        while (recentRuns.length > 1 &&
+               recentRuns.reduce((n, r) => n + r.b.length, 0) > RECENT_RUNS_MAX_B64) {
+          recentRuns.shift();
+        }
+        localStorage.setItem(RECENT_RUNS_KEY, JSON.stringify(recentRuns));
+      } catch (e) { /* quota/blocked — the buffer is best-effort */ }
     }
     setInterval(() => {
       collectEndedRun();

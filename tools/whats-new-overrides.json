@@ -15,8 +15,10 @@
   "976faa9b6a40065c1e29c8be85ae86b2e037c159": null,
   "99c5eac80e940e384f7d6989f57bca909b19e172": "New: The menu font now ships with the game — the same crisp face on every platform",
   "9fb885133a428a6b6038996c46609ee99774c5c1": "New: The Android and iOS apps show their app version and build number on the About screen",
+  "afee3826c4cd6f745c269c3235479a458630b85d": "Fixed: Marathon record runs no longer vanish on their way to the global board — salute to Janaki and Kulan for the sharp-eyed bug reports",
   "d2955ef0ea69eebcc860a14a4f7b4e638e8aceba": null,
   "d56e10b7f2206e756a6fbee34946934e18668c28": null,
   "e05d4cdd1f637a6fbf9bbcf41d09ed81bbba0dba": "Fixed: The ghost ship no longer races through walls on the Flux levels after you take the record — hauntings reported by Marcus, ghost busted accordingly",
+  "ecf4df4a4291eb8f325a03a91c85035657b5ad8b": null,
   "ee87aa572a5fd62b5908f1a55b5bd60aa71c845b": "New: The Expanse and The Glide each get Sprint (60 seconds) and Dash (1,000 m race) variants — with the record ghost to race, since their worlds never change"
 }
