@@ -661,7 +661,13 @@ analytics).
 The About screen's **Report a bug** (`scr-bugreport`, histPath
 `[home, about, bugreport]` — the `.mbtn.back` gives it hardware back for
 free) takes a free-text message plus optional **attachments** (an
-"Attach files" row → hidden `<input type=file multiple>`) and builds a
+"Attach files" row → hidden `<input type=file multiple>`; picks
+ACCUMULATE into `bugAttachments` — the input resets after every pick,
+since a file input's own list replaces — and each listed file carries a
+✕ to remove it; a DELIVERED report clears the form — message,
+attachments, status — when the player leaves the screen
+(`bugReportLeft` in `showScreen`/`closeMenu`), while an unsent draft
+survives backing out on purpose) and builds a
 **ZIP archive**: `report.txt` (build rev, app build (shells), URL, user
 agent, viewport, loaded level, open screen, the `pegasus_*` settings
 keys — EXCLUDING `pegasus_device_id`, the anonymous id stays on the
@@ -669,8 +675,9 @@ device, and the bulky keys: log, board cache, editor doc, custom level,
 date locale, recent runs — the message, a replay/attachment index, then
 the hour of log lines), `replays/<n>-<ts>-<stem>.pgrec` — the **last
 five finished runs** with played-at timestamps (`recentRuns`, captured
-in `collectEndedRun` BEFORE the offline gate so it works without a
-backend; persisted best-effort to `pegasus_recent_runs`, capped 5 runs /
+in `collectEndedRun` BEFORE the offline and short-run gates so it works
+without a backend and keeps non-scoring attempts — the wasm publishes
+every armed run; persisted best-effort to `pegasus_recent_runs`, capped 5 runs /
 ~1.5 MB base64, always keeping the newest) — and `attachments/<name>`
 (sanitized, collision-deduped). The zip comes from `buildZip`, a
 dependency-free STORE-only writer (deliberate: replay blobs are already
@@ -1713,7 +1720,14 @@ builds get no boards/ghost and a session-only BEST). The wasm↔JS contract:
   (and once more right before a level switch, so the run banks under the
   level it was flown on) and hands the blob to the online submit flow
   (`collectEndedRun` → `maybeSubmitOnline` — its only consumer now).
-  Runs < `GHOST_MIN_SECS` aren't published.
+  EVERY armed run is published (2026-08 — the bug-report replay buffer
+  wants short and non-scoring attempts too; a time level's crash /
+  fuel-out DNF and abandoned reset used to skip publishing entirely,
+  which left Hollows/Dash sessions with empty report zips), with
+  `run_len_ticks()` and `run_scorable()` alongside — scorable = false
+  for a time level's DNF/abandon; JS applies BOTH submit gates in
+  `collectEndedRun` (< 240 ticks = the old `GHOST_MIN_SECS`, and
+  non-scorable), so the submit-dialog behavior is unchanged.
 - **Watch**: a board's ▶ button pushes the fetched blob into the wasm
   buffer (`blob_in_ptr` + `watch_replay_blob`), which `decompress` +
   `deserialize` into `PENDING_WATCH`. The main loop plays it through the
@@ -1745,8 +1759,9 @@ the real backend. All JS-side in `index.html`:
 - **Submit is always an explicit choice**: `maybeSubmitOnline` hooks
   `collectEndedRun` — every publishable run that ended in a game over
   (destroying crash, out-of-fuel, or a completed time level; score ≥ 1 —
-  metres, or seconds on a time level; the game
-  already drops runs < `GHOST_MIN_SECS`) is held in `pendingSubmit`, and
+  metres, or seconds on a time level; `collectEndedRun`
+  already drops runs < `GHOST_MIN_SECS` from the submit flow — the wasm
+  publishes them for the bug-report replay buffer) is held in `pendingSubmit`, and
   the accept gate is ui-state 1/2 OR analytics cause 3 — a completion
   publishes DURING the 1.6 s "LEVEL COMPLETE" grace at state 0 (flying),
   so the state gate alone dropped it (the 500 ms collect poll consumes
