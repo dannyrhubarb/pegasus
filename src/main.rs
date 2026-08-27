@@ -636,6 +636,8 @@ pub extern "C" fn set_ghost_name(len: u32) {
 // and its replay becomes the racing ghost (load_ghost_blob).
 static RUN_BLOB: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
 static RUN_DIST: AtomicU32 = AtomicU32::new(0);
+static RUN_TICKS: AtomicU32 = AtomicU32::new(0);
+static RUN_SCORABLE: AtomicU32 = AtomicU32::new(0);
 static RUN_SEQ: AtomicU32 = AtomicU32::new(0);
 
 #[unsafe(no_mangle)]
@@ -647,6 +649,14 @@ pub extern "C" fn run_dist() -> f32 {
     f32::from_bits(RUN_DIST.load(Ordering::Relaxed))
 }
 #[unsafe(no_mangle)]
+pub extern "C" fn run_len_ticks() -> u32 {
+    RUN_TICKS.load(Ordering::Relaxed)
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn run_scorable() -> i32 {
+    RUN_SCORABLE.load(Ordering::Relaxed) as i32
+}
+#[unsafe(no_mangle)]
 pub extern "C" fn run_blob_len() -> i32 {
     RUN_BLOB.lock().unwrap().len() as i32
 }
@@ -655,15 +665,26 @@ pub extern "C" fn run_blob_ptr() -> *const u8 {
     RUN_BLOB.lock().unwrap().as_ptr()
 }
 
-// Publish an ended run for the JS submit flow. Blink-and-gone attempts
-// (< GHOST_MIN_SECS) aren't worth a leaderboard slot.
-fn report_run_end(rec: &Recording, dist: f32) {
-    if rec.ticks() < (GHOST_MIN_SECS / PHYSICS_DT) as u32 {
-        return;
+// Publish an ended run for the JS side. EVERY armed run is published —
+// the bug-report replay buffer wants short and non-scoring attempts too
+// (a two-second spawn-crash is exactly what a bug report is about) — and
+// the run length rides along (run_len_ticks) so JS keeps applying the
+// GHOST_MIN_SECS gate to the SUBMIT flow alone: blink-and-gone attempts
+// still aren't worth a leaderboard slot, but they are worth a .pgrec in
+// the report zip.
+// `scorable` marks runs the online submit flow may offer to the boards
+// (a time level's DNF or abandoned attempt has no score — but its replay
+// still belongs in a bug report, so it publishes like every other run
+// and JS reads run_scorable() to keep it away from the submit dialog).
+fn report_run_end(rec: &Recording, score: f32, scorable: bool) {
+    if rec.ticks() == 0 {
+        return; // never armed — there is no run to keep
     }
     let packed = compress(&rec.serialize(BUILD_ID.load(Ordering::Relaxed)));
     *RUN_BLOB.lock().unwrap() = packed;
-    RUN_DIST.store(dist.to_bits(), Ordering::Relaxed);
+    RUN_DIST.store(score.to_bits(), Ordering::Relaxed);
+    RUN_TICKS.store(rec.ticks(), Ordering::Relaxed);
+    RUN_SCORABLE.store(scorable as u32, Ordering::Relaxed);
     RUN_SEQ.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -1045,8 +1066,11 @@ const CRASH_DIALOG_DELAY: f32 = 1.5;
 // its window is a memory safety net, not an expected limit — only a
 // parked-for-hours session ever hits it.
 const HYBRID_MAX_SECS: f32 = 3600.0;
-// A run shorter than this isn't published to the highscore channel —
-// R-spam shouldn't reach the submit dialog.
+// A run shorter than this never reaches the online submit dialog — R-spam
+// shouldn't offer leaderboard slots. Applied JS-side (collectEndedRun,
+// via run_len_ticks) since 2026-08: the wasm publishes every armed run so
+// short attempts still land in the bug-report replay buffer.
+#[allow(dead_code)]
 const GHOST_MIN_SECS: f32 = 2.0;
 // Stick-hold engine gating (one-handed scheme): a quick flick shorter than
 // DELAY never lights the engine, thrust then ramps to full over RAMP, and a
@@ -1821,11 +1845,11 @@ async fn main() {
                 if !run_over {
                     run_over = true;
                     raise_best_dist(&sim.level, sim.max_dist);
-                    // Time levels: a crash is a DNF — no board entry (the
-                    // completion time IS the score); analytics still counts.
-                    if sim.level.scoring != Scoring::Time {
-                        report_run_end(&recorder, sim.max_dist);
-                    }
+                    // Time levels: a crash is a DNF — not scorable (the
+                    // completion time IS the score), but the replay still
+                    // publishes for the bug-report buffer.
+                    report_run_end(&recorder, sim.max_dist,
+                        sim.level.scoring != Scoring::Time);
                     report_run_analytics(0, recorder.ticks(), sim.max_dist, sim.fuel, sim.hull);
                 }
             } else {
@@ -1860,10 +1884,10 @@ async fn main() {
             if sim.level.scoring == Scoring::Time {
                 let secs = sim.run_ticks as f32 * PHYSICS_DT;
                 raise_best_time(secs);
-                report_run_end(&recorder, secs);
+                report_run_end(&recorder, secs, true);
             } else {
                 raise_best_dist(&sim.level, sim.max_dist);
-                report_run_end(&recorder, sim.max_dist);
+                report_run_end(&recorder, sim.max_dist, true);
             }
             report_run_analytics(3, recorder.ticks(), sim.max_dist, sim.fuel, sim.hull);
             complete_timer = COMPLETE_DIALOG_DELAY;
@@ -1887,9 +1911,10 @@ async fn main() {
         {
             run_over = true;
             raise_best_dist(&sim.level, sim.max_dist);
-            if sim.level.scoring != Scoring::Time {
-                report_run_end(&recorder, sim.max_dist);
-            }
+            // Time levels: fuel-out is a DNF — not scorable, still kept
+            // for the bug-report buffer.
+            report_run_end(&recorder, sim.max_dist,
+                sim.level.scoring != Scoring::Time);
             report_run_analytics(2, recorder.ticks(), sim.max_dist, sim.fuel, sim.hull);
             mode = Mode::CrashDialog;
         }
@@ -3385,10 +3410,12 @@ async fn main() {
                 // (The fresh sim carries the same level, so its clone is
                 // fine for the best-raise check.)
                 raise_best_dist(&sim.level, ended_dist);
-                // Time levels: an abandoned attempt has no score to submit.
-                if sim.level.scoring != Scoring::Time {
-                    report_run_end(&ended, ended_dist);
-                }
+                // Time levels: an abandoned attempt has no score to submit
+                // — not scorable, still published for the bug-report
+                // buffer (reset-ended runs never pop the submit dialog on
+                // any level, so this changes nothing submit-side).
+                report_run_end(&ended, ended_dist,
+                    sim.level.scoring != Scoring::Time);
                 report_run_analytics(1, ended.ticks(), ended_dist, ended_fuel, ended_hull);
             }
             // A `seed = random` level just re-rolled its world — drop an
