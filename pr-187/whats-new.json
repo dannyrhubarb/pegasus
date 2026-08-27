@@ -1,22 +1,7 @@
 [
  {
-  "rev": "0fa0970",
-  "date": "2026-08-27T19:41:13Z",
-  "note": "Fixed: Bug reports now pack your recent replays from every kind of run - crashes, dry tanks and rage-quits on the clock levels included"
- },
- {
-  "rev": "3f92b4e",
-  "date": "2026-08-27T19:30:47Z",
-  "note": "Fixed: The bug-report form wipes itself clean once a report is delivered - fresh sheet for the next gremlin"
- },
- {
-  "rev": "a36f9e2",
-  "date": "2026-08-27T19:26:58Z",
-  "note": "Fixed: Sharing a bug report no longer sneaks a stray text.txt in beside the zip"
- },
- {
-  "rev": "23a65ee",
-  "date": "2026-08-27T19:07:40Z",
+  "rev": "5fb7605",
+  "date": "2026-08-27T19:51:39Z",
   "note": "New: Found a bug? About -> Report a bug shares a zip with your message, an hour of flight logs and network chatter, your last five replays (even the two-second ones) and any files you attach"
  },
  {
