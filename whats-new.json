@@ -1,8 +1,8 @@
 [
  {
-  "rev": "d2955ef",
-  "date": "2026-08-26T23:40:20+02:00",
-  "note": "New: Found a bug? About -> Report a bug packs your last hour of flight logs into a file for mission control"
+  "rev": "ecf4df4",
+  "date": "2026-08-27T06:41:01+02:00",
+  "note": "New: Found a bug? About -> Report a bug packs your message, your last hour of flight logs and all the radio chatter with mission control into one file"
  },
  {
   "rev": "3393151",
