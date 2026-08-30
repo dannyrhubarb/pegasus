@@ -1,5 +1,10 @@
 [
  {
+  "rev": "d618b09",
+  "date": "2026-08-30T09:39:59+02:00",
+  "note": "New: Pegasus has a new home — pegasusmoonlander.com (your old settings and callsign stayed behind on the launch pad; set them once more)"
+ },
+ {
   "rev": "1784f15",
   "date": "2026-08-27T21:54:04+02:00",
   "note": "New: Found a bug? About -> Report a bug shares a zip with your message, an hour of flight logs and network chatter, your last five replays (even the two-second ones) and any files you attach"
