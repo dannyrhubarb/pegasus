@@ -62,6 +62,7 @@ concurrency:
 
 permissions:
   contents: write # push the APK into the gh-pages state branch
+  actions: write # dispatch publish-pages.yml after the sync (see that step)
 
 jobs:
   release:
@@ -153,6 +154,19 @@ jobs:
           subdir: app
           source-dir: pages-app
           message: "Android APK build ${{ github.run_number }}"
+
+      # publish-pages.yml's workflow_run trigger does NOT fire when this run
+      # was itself dispatched with GITHUB_TOKEN (the release-apps wrapper) —
+      # the recursion-guard exemption covers the workflow_dispatch, not the
+      # dispatched run's downstream events — so the synced APK sat on the
+      # branch undeployed (seen on three Release-apps runs, 2026-08). An
+      # explicit dispatch is exempt again, so trigger the publish directly;
+      # on a human-dispatched run this doubles with the workflow_run path,
+      # which publish-pages' `pages` concurrency group collapses.
+      - name: Trigger Pages publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run publish-pages.yml --ref "$GITHUB_REF_NAME"
 
       - name: Upload to Play track
         if: ${{ env.HAS_PLAY_JSON == 'true' }}

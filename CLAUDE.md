@@ -62,6 +62,16 @@ push-retry loop for concurrent deploys):
   protection. Also: pushes made with `GITHUB_TOKEN` don't trigger `push`
   workflows (recursion guard), so an `on: push: branches: [gh-pages]` publisher
   would never fire — `workflow_run` is load-bearing, not a style choice.
+  **Second recursion-guard bite (found 2026-08-30)**: a run that was itself
+  dispatched WITH `GITHUB_TOKEN` (release-apps → android-release) never
+  emits a `workflow_run` completion event either — the guard's
+  workflow_dispatch exemption covers the dispatch, not the dispatched run's
+  downstream events — so three Release-apps APK syncs sat on `gh-pages`
+  undeployed until the next unrelated branch event. Fix: publish-pages also
+  has `workflow_dispatch` (job `if` passes it through) and android-release
+  dispatches it explicitly after its sync (an explicit dispatch is exempt
+  again; the doubled trigger on human-dispatched runs collapses in the
+  `pages` concurrency group).
   Keep **Settings → Pages → Source = "GitHub Actions"** (do *not* switch it to
   the `gh-pages` branch — that would bypass this pipeline and serve the branch
   with Jekyll defaults). The Pages API intermittently rejects deployments
