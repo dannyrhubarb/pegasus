@@ -15,6 +15,17 @@ name: Publish Pages
 # preview-deploy.yml, preview-teardown.yml, android-release.yml and
 # android-test-apk.yml exactly (the Android release pushes the APK into the
 # branch's app/ dir; the on-demand test APK into pr-<n>/app/).
+#
+# workflow_dispatch exists for the GITHUB_TOKEN gap: a run that was itself
+# dispatched with GITHUB_TOKEN (release-apps → android-release) never emits
+# a workflow_run completion event — the recursion guard's exemption covers
+# the dispatch, not the dispatched run's own downstream events. Observed on
+# three Release-apps releases (2026-08-26/27/30): the APK landed on the
+# gh-pages branch and sat undeployed until the next unrelated branch event.
+# android-release therefore dispatches this workflow explicitly after its
+# sync (GITHUB_TOKEN workflow_dispatch IS exempt, same trick release-apps
+# uses); a human-dispatched android-release fires both paths, which the
+# `pages` concurrency group collapses harmlessly.
 
 on:
   workflow_run:
@@ -25,6 +36,7 @@ on:
       - "Android release"
       - "Android test APK"
     types: [completed]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -39,7 +51,7 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
