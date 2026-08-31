@@ -1,5 +1,10 @@
 [
  {
+  "rev": "78e7efe",
+  "date": "2026-08-31T07:35:46+02:00",
+  "note": "Fixed: The level menu no longer wiggles sideways on smaller iPhones - menu screens stay on rails now"
+ },
+ {
   "rev": "d618b09",
   "date": "2026-08-30T09:39:59+02:00",
   "note": "New: Pegasus has a new home — pegasusmoonlander.com (your old settings and callsign stayed behind on the launch pad; set them once more)"
