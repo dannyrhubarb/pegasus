@@ -371,6 +371,17 @@ fn replay_ghost_player(g: Recording, play_rec: &Recording) -> Option<(ResimPlaye
 static PAD_THRUST: AtomicU32 = AtomicU32::new(0);
 static PAD_TORQUE: AtomicU32 = AtomicU32::new(0);
 static PAD_RESET: AtomicU32 = AtomicU32::new(0);
+// Gamepad LEFT ANALOG STICK as a commanded-nose-direction vector (f32 bits,
+// screen convention like the touch stick: push up = -y = nose up). Feeds the
+// same heading PD as the touch stick — but never the engine (pad boost is
+// its own button).
+static PAD_STICK_X: AtomicU32 = AtomicU32::new(0);
+static PAD_STICK_Y: AtomicU32 = AtomicU32::new(0);
+// Gamepad ANALOG throttle 0..1 (f32 bits): the L2 trigger's travel passes
+// through as partial burn (racing-game style); digital pad sources (L1,
+// D-pad up) arrive as 1.0 on the same channel. PAD_THRUST above stays the
+// legacy binary export for the web poll's stale-wasm fallback.
+static PAD_THROTTLE: AtomicU32 = AtomicU32::new(0);
 static SAFE_AREA_TOP: AtomicU32 = AtomicU32::new(0);
 static SAFE_AREA_LEFT: AtomicU32 = AtomicU32::new(0);
 // Bottom/right insets (CSS px). Bottom folds in the floating browser
@@ -988,6 +999,24 @@ pub extern "C" fn set_pad_torque(value: f32) {
     PAD_TORQUE.store(value.to_bits(), Ordering::Relaxed);
 }
 
+// Analog throttle (see PAD_THROTTLE): the forwarders send the L2 trigger's
+// raw travel, or 1.0 for the digital thrust buttons.
+#[unsafe(no_mangle)]
+pub extern "C" fn set_pad_throttle(value: f32) {
+    PAD_THROTTLE.store(value.to_bits(), Ordering::Relaxed);
+}
+
+// Left analog stick = commanded nose direction (heading control, like the
+// touch stick; dead-zoned game-side in pad_stick_steer). Raw −1..1 axes in
+// screen convention (up = −y): the Web Gamepad API's axes[0]/axes[1] pass
+// through unchanged; the iOS shell's native forwarder negates GCController's
+// up-positive y before calling.
+#[unsafe(no_mangle)]
+pub extern "C" fn set_pad_stick(x: f32, y: f32) {
+    PAD_STICK_X.store(x.to_bits(), Ordering::Relaxed);
+    PAD_STICK_Y.store(y.to_bits(), Ordering::Relaxed);
+}
+
 // Edge-triggered reset (Start / Y button). JS sets the flag on a fresh press;
 // the loop consumes it with a swap so it fires exactly once.
 #[unsafe(no_mangle)]
@@ -1023,6 +1052,317 @@ pub extern "C" fn set_debug_hud(on: i32) {
 // Deploy git revision (first 8 hex chars parsed to a u32 by index.html),
 // stamped into serialized replay blobs so a future re-sim/verifier knows
 // which build flew the run. 0 = local dev build.
+// --- AirPlay spectator sync (iOS shell; see ios/Pegasus/AirPlay.swift) ---
+// The phone runs the REAL game, completely normally; the TV runs a second
+// instance of this same binary in SPECTATOR mode, following the phone's
+// live recording in lockstep — the sim being a deterministic pure function
+// of the quantized input stream (the replay/ghost/verifier guarantee) is
+// what makes a bit-identical second render possible. The shell relays the
+// frames below between the two webviews as opaque bytes.
+//
+// Wire format (little-endian), app-level — NOT part of the stored replay
+// format (no version bump, no backend impact). A buffer holds one or more
+// frames of [u8 kind][u32 len][payload]:
+//   kind 1 = full serialized Recording (uncompressed; sent on run start,
+//            resync request, or spectator hello — it's a few KB)
+//   kind 2 = delta since the last frame: [u32 ticks]
+//            [u32 n_ev][(u32 tick, u8 throttle, u8 rot, u8 sx, u8 sy,
+//                        u8 held) × n_ev]
+//            [u32 n_kf][(u32 tick, 11×f32, u64 visited, u32 run_ticks)
+//                        × n_kf]  — keyframes always in the extended
+//            layout; this is a live wire, not a stored blob.
+//   kind 3 = replay blob: the FULL recording the phone is watching in
+//            Mode::Replay (crash replay or a board's ▶), sent once at
+//            replay entry and on resync — the TV mirrors replays too.
+//   kind 4 = replay playhead: [u32 tick]. The spectator follows the
+//            phone's transport exactly (pause freezes it, scrubs seek it,
+//            speed changes its rate) instead of free-running. Replay exit
+//            resends the live recording (kind 1) and the TV resumes
+//            following the run.
+//   kind 5 = ghost context: [u8 name_len][name utf-8][serialized ghost
+//            Recording…], recording absent = no ghost (setting off /
+//            none loaded). Sent alongside every kind 1/3 and whenever
+//            the phone's ghost or the Race-best-ghost setting changes —
+//            the TV races the same record the phone does (the phone's
+//            ghost blob comes from the board fetch in index.html, which
+//            spectator.html deliberately doesn't have).
+static SPECTATOR: AtomicU32 = AtomicU32::new(0);
+static SYNC_ON: AtomicU32 = AtomicU32::new(0);
+static SYNC_FULL_REQ: AtomicU32 = AtomicU32::new(0);
+static SYNC_OUT: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
+static PENDING_SPEC: std::sync::Mutex<Vec<(u8, Vec<u8>)>> =
+    std::sync::Mutex::new(Vec::new());
+static SPEC_NEED_FULL: AtomicU32 = AtomicU32::new(0);
+
+/// This instance is the TV spectator: render the streamed recording, ignore
+/// local input entirely. Set once at boot by spectator.html.
+#[unsafe(no_mangle)]
+pub extern "C" fn set_spectator(on: i32) {
+    SPECTATOR.store(on as u32, Ordering::Relaxed);
+}
+
+/// Phone side: start/stop publishing sync frames (the shell calls this when
+/// the TV spectator connects/disconnects). Starting always begins with a
+/// full frame so a late joiner has the whole run.
+#[unsafe(no_mangle)]
+pub extern "C" fn set_sync(on: i32) {
+    SYNC_ON.store(on as u32, Ordering::Relaxed);
+    if on != 0 {
+        SYNC_FULL_REQ.store(1, Ordering::Relaxed);
+    } else {
+        SYNC_OUT.lock().unwrap().clear();
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sync_request_full() {
+    SYNC_FULL_REQ.store(1, Ordering::Relaxed);
+}
+
+// Pending outbound sync frames (phone side) — same drain pattern as
+// RUN_BLOB: JS checks len, reads ptr..len from wasm memory, then clears.
+#[unsafe(no_mangle)]
+pub extern "C" fn sync_out_len() -> i32 {
+    SYNC_OUT.lock().unwrap().len() as i32
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sync_out_ptr() -> *const u8 {
+    SYNC_OUT.lock().unwrap().as_ptr()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn sync_out_clear() {
+    SYNC_OUT.lock().unwrap().clear();
+}
+
+/// Spectator side: feed a relayed buffer of sync frames (written into the
+/// blob_in_ptr buffer first, like every other inbound blob). Malformed
+/// framing is dropped — the resync path recovers.
+#[unsafe(no_mangle)]
+pub extern "C" fn spec_feed(len: u32) -> i32 {
+    let buf = BLOB_IN.lock().unwrap();
+    let Some(bytes) = buf.get(..len as usize) else { return 0 };
+    let mut queue = PENDING_SPEC.lock().unwrap();
+    let mut at = 0usize;
+    let mut n = 0;
+    while at + 5 <= bytes.len() {
+        let kind = bytes[at];
+        let flen = u32::from_le_bytes(bytes[at + 1..at + 5].try_into().unwrap()) as usize;
+        at += 5;
+        let Some(payload) = bytes.get(at..at + flen) else { break };
+        queue.push((kind, payload.to_vec()));
+        at += flen;
+        n += 1;
+    }
+    n
+}
+
+/// Spectator side: 1 = a delta didn't join (missed frames / mid-run join)
+/// and the phone should resend the full recording. Swap-to-consume.
+#[unsafe(no_mangle)]
+pub extern "C" fn spec_need_full() -> i32 {
+    SPEC_NEED_FULL.swap(0, Ordering::Relaxed) as i32
+}
+
+// Frame the phone's per-frame delta (see the wire format above).
+fn encode_sync_delta(rec: &Recording, ev_from: usize, kf_from: usize) -> Vec<u8> {
+    let events = &rec.events[ev_from..];
+    let kfs = &rec.keyframes[kf_from..];
+    let mut out = Vec::with_capacity(12 + events.len() * 9 + kfs.len() * 60);
+    out.extend_from_slice(&rec.ticks().to_le_bytes());
+    out.extend_from_slice(&(events.len() as u32).to_le_bytes());
+    for e in events {
+        out.extend_from_slice(&e.tick.to_le_bytes());
+        out.push(e.input.throttle);
+        out.push(e.input.rot as u8);
+        out.push(e.input.steer_x as u8);
+        out.push(e.input.steer_y as u8);
+        out.push(e.input.stick_held);
+    }
+    out.extend_from_slice(&(kfs.len() as u32).to_le_bytes());
+    for k in kfs {
+        out.extend_from_slice(&k.tick.to_le_bytes());
+        for f in [k.x, k.y, k.rot_re, k.rot_im, k.vx, k.vy, k.angvel,
+                  k.fuel, k.hull, k.glow, k.land_timer] {
+            out.extend_from_slice(&f.to_le_bytes());
+        }
+        out.extend_from_slice(&k.visited.to_le_bytes());
+        out.extend_from_slice(&k.run_ticks.to_le_bytes());
+    }
+    out
+}
+
+fn decode_sync_delta(bytes: &[u8]) -> Option<(u32, Vec<InputEvent>, Vec<Keyframe>)> {
+    let mut at = 0usize;
+    let u32_at = |at: &mut usize| -> Option<u32> {
+        let v = u32::from_le_bytes(bytes.get(*at..*at + 4)?.try_into().ok()?);
+        *at += 4;
+        Some(v)
+    };
+    let ticks = u32_at(&mut at)?;
+    let n_ev = u32_at(&mut at)? as usize;
+    let mut events = Vec::with_capacity(n_ev);
+    for _ in 0..n_ev {
+        let tick = u32_at(&mut at)?;
+        let b = bytes.get(at..at + 5)?;
+        at += 5;
+        events.push(InputEvent {
+            tick,
+            input: InputState {
+                throttle: b[0],
+                rot: b[1] as i8,
+                steer_x: b[2] as i8,
+                steer_y: b[3] as i8,
+                stick_held: b[4],
+            },
+        });
+    }
+    let n_kf = u32_at(&mut at)? as usize;
+    let mut kfs = Vec::with_capacity(n_kf);
+    for _ in 0..n_kf {
+        let tick = u32_at(&mut at)?;
+        let mut f = [0f32; 11];
+        for v in f.iter_mut() {
+            *v = f32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?);
+            at += 4;
+        }
+        let visited = u64::from_le_bytes(bytes.get(at..at + 8)?.try_into().ok()?);
+        at += 8;
+        let run_ticks = u32_at(&mut at)?;
+        kfs.push(Keyframe {
+            tick,
+            x: f[0], y: f[1], rot_re: f[2], rot_im: f[3], vx: f[4], vy: f[5],
+            angvel: f[6], fuel: f[7], hull: f[8], glow: f[9], land_timer: f[10],
+            visited,
+            run_ticks,
+        });
+    }
+    Some((ticks, events, kfs))
+}
+
+// Frame the phone's ghost context (wire kind 5): pilot name + the ghost
+// recording, or just an empty name and no recording when there is none.
+fn encode_sync_ghost(rec: Option<&Recording>, name: &str, build_id: u32) -> Vec<u8> {
+    let nb = name.as_bytes();
+    let n = nb.len().min(255);
+    let mut out = Vec::new();
+    out.push(n as u8);
+    out.extend_from_slice(&nb[..n]);
+    if let Some(r) = rec {
+        out.extend_from_slice(&r.serialize(build_id));
+    }
+    out
+}
+
+// Returns (pilot name, ghost recording); a malformed frame degrades to
+// "no ghost" rather than erroring — the next kind 5 replaces it anyway.
+fn decode_sync_ghost(bytes: &[u8]) -> (String, Option<Recording>) {
+    let n = bytes.first().map_or(0, |&b| b as usize);
+    if bytes.len() < 1 + n {
+        return (String::new(), None);
+    }
+    let name = String::from_utf8_lossy(&bytes[1..1 + n]).into_owned();
+    let rest = &bytes[1 + n..];
+    let rec = if rest.is_empty() {
+        None
+    } else {
+        Recording::deserialize(rest).ok().map(|(r, _)| r)
+    };
+    (name, rec)
+}
+
+// Push one framed message onto the outbound sync queue.
+fn sync_push(kind: u8, payload: &[u8]) {
+    let mut out = SYNC_OUT.lock().unwrap();
+    // A stalled drain must not grow without bound (TV webview hung): past
+    // 4 MB drop the queue and let the resync path recover.
+    if out.len() > 4 << 20 {
+        out.clear();
+        SYNC_FULL_REQ.store(1, Ordering::Relaxed);
+        return;
+    }
+    out.push(kind);
+    out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    out.extend_from_slice(payload);
+}
+
+// The sync publisher's view of what the spectator last received. The
+// restart test must be IDENTITY-aware, not just regression-based:
+// switching levels BEFORE arming a run leaves both recorders empty
+// (0 ticks, 1 spawn keyframe) — nothing regresses, but the LevelParams
+// differ, and without a fresh full frame the TV grafts the new level's
+// inputs onto the OLD level's world header and re-sims the wrong world
+// (field bug 2026-08: the TV showed the first level regardless of the
+// picker choice; same hole for a `seed = random` re-roll before arming).
+struct SyncWatermarks {
+    ticks: u32,
+    events: usize,
+    keyframes: usize,
+    kf0_tick: Option<u32>,
+    level: Option<LevelParams>,
+}
+
+impl SyncWatermarks {
+    fn new() -> Self {
+        SyncWatermarks { ticks: 0, events: 0, keyframes: 0, kf0_tick: None, level: None }
+    }
+
+    // The recorder is not a continuation of what the spectator holds —
+    // resend the whole recording.
+    fn needs_full(&self, rec: &Recording) -> bool {
+        rec.ticks() < self.ticks
+            || rec.events.len() < self.events
+            || rec.keyframes.len() < self.keyframes
+            || rec.keyframes.first().map(|k| k.tick) != self.kf0_tick
+            || self.level.as_ref() != Some(&rec.level)
+    }
+
+    // Anything new since the last send (delta-worthy growth).
+    fn progressed(&self, rec: &Recording) -> bool {
+        rec.ticks() != self.ticks
+            || rec.events.len() != self.events
+            || rec.keyframes.len() != self.keyframes
+    }
+
+    fn update(&mut self, rec: &Recording) {
+        self.ticks = rec.ticks();
+        self.events = rec.events.len();
+        self.keyframes = rec.keyframes.len();
+        self.kf0_tick = rec.keyframes.first().map(|k| k.tick);
+        // Terrain params make this clone non-trivial — only when changed.
+        if self.level.as_ref() != Some(&rec.level) {
+            self.level = Some(rec.level.clone());
+        }
+    }
+}
+
+// The spectator's player over a possibly still-empty recording: same as
+// ResimPlayer::new but allowed at 0 ticks (a fresh armed-idle run — the TV
+// shows the ship waiting on the spawn of the RIGHT world).
+fn spec_player_from(rec: &Recording) -> Option<ResimPlayer> {
+    let &k0 = rec.keyframes.first()?;
+    let mut s = sim::Sim::new(world::Level::from_params(&rec.level));
+    s.restore(&k0);
+    let prev_pose = s.ship_pose();
+    Some(ResimPlayer {
+        sim: s,
+        first_tick: k0.tick,
+        end_tick: rec.ticks().max(k0.tick),
+        tick: k0.tick,
+        event_idx: 0,
+        kf_idx: 0,
+        input: InputState::default(),
+        prev_pose,
+        accum: 0.0,
+        glow: k0.glow,
+        last_torque: 0.0,
+        drift: 0.0,
+        snapped: false,
+        finished: rec.ticks() <= k0.tick,
+    })
+}
+
 static BUILD_ID: AtomicU32 = AtomicU32::new(0);
 
 #[unsafe(no_mangle)]
@@ -1193,6 +1533,45 @@ impl TouchStick {
         } else {
             Vec2::ZERO
         };
+    }
+}
+
+// The gamepad analog stick's steer vector: same radial dead-zone + rescale
+// as TouchStick::apply (m is already 0..1 — the axes are normalized where a
+// touch measures px / STICK_TRAVEL), same invert semantics. Pure so it's
+// unit-testable.
+fn pad_stick_steer(x: f32, y: f32, invert: bool) -> (f32, f32) {
+    let x = x.clamp(-1.0, 1.0);
+    let y = y.clamp(-1.0, 1.0);
+    // True magnitude for the direction, clamped magnitude for the rescale —
+    // a pinned diagonal (both axes at 1.0) must still command magnitude 1,
+    // like the touch knob's radial clamp to STICK_TRAVEL.
+    let len = (x * x + y * y).sqrt();
+    let m = len.min(1.0);
+    if m < STICK_DZ {
+        return (0.0, 0.0);
+    }
+    let eff = (m - STICK_DZ) / (1.0 - STICK_DZ);
+    let s = eff / len * if invert { -1.0 } else { 1.0 };
+    (x * s, y * s)
+}
+
+// The gamepad throttle channel: trigger noise below the floor reads as
+// released; everything above passes through ANALOG — partial trigger
+// travel is partial burn — shaped by an expo curve. The curve exists
+// because the ship's TWR (~7.5) compresses the useful band into the
+// bottom of the trigger: hover is only ~13% throttle, so a LINEAR
+// trigger reads as near-binary (anything past half travel is already a
+// hard climb). Squaring the travel spends trigger range where the
+// resolution matters — hover sits at ~37% travel instead of 13% — while
+// full squeeze still commands 1.0. Pure so it's unit-testable.
+const PAD_THROTTLE_MIN: f32 = 0.05;
+const PAD_THROTTLE_EXPO: f32 = 2.0;
+fn pad_throttle_cmd(raw: f32) -> f32 {
+    if raw.is_nan() || raw < PAD_THROTTLE_MIN {
+        0.0
+    } else {
+        raw.min(1.0).powf(PAD_THROTTLE_EXPO)
     }
 }
 
@@ -1404,6 +1783,33 @@ async fn main() {
     // instead of the live recorder, and exiting returns to `watch_return`
     // (the dialog if a wreck is waiting, otherwise flight — physics was
     // paused throughout, so the interrupted run resumes untouched).
+    // AirPlay spectator state: the recording being followed live (TV side),
+    // and the phone side's send watermarks into ITS recorder.
+    let mut spec_rec: Option<Recording> = None;
+    let mut spec_boomed = false;
+    // TV side: following a mirrored REPLAY (kinds 3/4) rather than the live
+    // recording — the playhead the phone last sent is the target tick.
+    let mut spec_replay = false;
+    let mut spec_target = 0u32;
+    // TV side: the ghost context the phone streamed (kind 5) — the raw
+    // recording as pushed, and the lockstep player built against the
+    // CURRENT spec_rec via replay_ghost_player (which brings the params-
+    // equality and not-the-same-recording gates for free). Rebuilt
+    // whenever either side changes; the pilot name lands in GHOST_NAME,
+    // which the Flying-mode label path already reads.
+    let mut spec_ghost_raw: Option<Recording> = None;
+    let mut spec_ghost: Option<(ResimPlayer, Recording)> = None;
+    // Build-attempt latch: replay_ghost_player legitimately returns None
+    // (same recording, foreign world), and the attempt compares serialized
+    // bytes — too dear to retry every frame.
+    let mut spec_ghost_built = false;
+    // Phone side: replay-mirroring send state + the live-stream watermarks.
+    let mut sync_replay_sent = false;
+    let mut sync_replay_tick_sent = u32::MAX;
+    let mut sync_marks = SyncWatermarks::new();
+    // Phone side: the (pilot name, ghost setting) stamp of the last kind 5
+    // sent — None = dirty, resend. Cleared wherever ghost_rec changes.
+    let mut sync_ghost_sent: Option<(String, bool)> = None;
     let mut watch_rec: Option<Recording> = None;
     let mut watch_return = Mode::Flying;
     // Ghost racing through the CURRENT replay (see replay_ghost_player):
@@ -1499,6 +1905,7 @@ async fn main() {
             recorder.push_keyframe(sim.keyframe(0, 0.0));
             ghost_rec = None;
             ghost_player = None;
+            sync_ghost_sent = None;
             replay_player = None;
             replay_ghost = None;
             watch_rec = None;
@@ -1516,6 +1923,7 @@ async fn main() {
         {
             let young = recorder.ticks() <= (30.0 / PHYSICS_DT) as u32;
             ghost_rec = Some(g);
+            sync_ghost_sent = None;
             if GHOST_ON.load(Ordering::Relaxed) != 0 && young && mode == Mode::Flying {
                 ghost_player = ghost_rec.as_ref().and_then(ResimPlayer::new);
             }
@@ -1684,7 +2092,22 @@ async fn main() {
         );
 
         let stick_held = stick.held;
-        let (steer_x, steer_y) = (stick.steer.x, stick.steer.y);
+        // Gamepad analog stick: commanded nose direction — the same heading
+        // control as the touch stick (the sim's PD reads the steer vector;
+        // dead-zone applied in pad_stick_steer) — but NEVER the engine:
+        // `held` keeps driving the stick-hold thrust ramp below and stays
+        // touch-only, so pad boost remains its own button. An active touch
+        // outranks the pad; keyboard rate rotation still outranks the
+        // heading PD sim-side (rot != 0 gates it off).
+        let (steer_x, steer_y) = if stick_held {
+            (stick.steer.x, stick.steer.y)
+        } else {
+            pad_stick_steer(
+                f32::from_bits(PAD_STICK_X.load(Ordering::Relaxed)),
+                f32::from_bits(PAD_STICK_Y.load(Ordering::Relaxed)),
+                invert,
+            )
+        };
         let steer_mag = (steer_x * steer_x + steer_y * steer_y).sqrt().min(1.0);
         // Heading error to the commanded nose direction (0 when centred),
         // for the flip gate. Uses the true body angle.
@@ -1724,7 +2147,15 @@ async fn main() {
         {
             throttle_cmd = 1.0;
         }
-        // Manual rate rotation: keyboard keys and the gamepad's analog stick.
+        // Gamepad analog throttle: the L2 trigger's travel is a partial
+        // burn — every throttle consumer (engine force, fuel, glow,
+        // exhaust) is already analog, so it just maxes in with the binary
+        // sources above.
+        throttle_cmd = throttle_cmd
+            .max(pad_throttle_cmd(f32::from_bits(PAD_THROTTLE.load(Ordering::Relaxed))));
+        // Manual rate rotation: keyboard keys (PAD_TORQUE is only driven
+        // by the web poll's stale-wasm fallback these days — the pad's
+        // analog stick is heading control, above).
         let pad_torque = f32::from_bits(PAD_TORQUE.load(Ordering::Relaxed)).clamp(-1.0, 1.0);
         let rot: i8 = if is_key_down(KeyCode::Left) || pad_torque < -0.1 {
             -1
@@ -1960,11 +2391,29 @@ async fn main() {
         // Desktop keeps the fixed SCALE zoom; the cap stops a small desktop
         // window from zooming in past it.
         const MOBILE_VIEW_M: f32 = 19.0; // world metres across the smaller screen dimension
-        let view_scale = if sw.min(sh) / dpi < 600.0 {
+        // TV spectator framing is world-anchored, NOT resolution-derived:
+        // the reported canvas size/scale differs per AirPlay route (Apple
+        // TV vs direct mirroring report different UIScreen geometry), so
+        // the phone/desktop heuristics below picked a different zoom per
+        // route (field report 2026-08). Anchoring in metres makes every
+        // route show the identical 16:9 view — the same world height as
+        // the phone in landscape.
+        let spectate = SPECTATOR.load(Ordering::Relaxed) != 0;
+        let view_scale = if spectate {
+            sw.min(sh) / MOBILE_VIEW_M
+        } else if sw.min(sh) / dpi < 600.0 {
             (sw.min(sh) / MOBILE_VIEW_M).min(SCALE * dpi)
         } else {
             SCALE * dpi
         };
+        // Cosmetic px sizes (stars, pad beacons, particles) were tuned on
+        // a phone canvas (~20.5 logical px/m); on a couch-distance TV
+        // canvas fixed px read as specks, and differently per AirPlay
+        // route — so in spectator mode they scale with the world instead,
+        // keeping the phone's proportions at any resolution. 1.0 (no-op)
+        // everywhere else; the 20.5 is the phone view_scale the sizes
+        // were tuned at, making cosm ≈ 1 there by construction.
+        let cosm = if spectate { view_scale / 20.5 } else { 1.0 };
         // Shadow the module-level w2s so all render calls below use view_scale automatically.
         let w2s = |x: f32, y: f32, sh: f32, cam_x: f32, cam_y: f32| -> Vec2 {
             vec2(
@@ -2027,6 +2476,193 @@ async fn main() {
         // are genuinely recomputed, not played back. Ends by re-simulating
         // the destroying impact, then returns to the dialog.
         let mut replay_frame: Option<ReplayFrame> = None;
+        // --- AirPlay sync publisher (phone side) ---
+        // While a TV spectator is connected, publish this frame's recorder
+        // growth. A FULL frame goes out on connect, on a spectator resync
+        // request, and whenever the recorder restarted (reset / level load
+        // / trim — all visible as watermark regressions or a moved first
+        // keyframe); otherwise a small delta with the new events/keyframes
+        // and the tick watermark. JS drains SYNC_OUT once per rAF.
+        // Gated off during Mode::Replay: the replay half below (after the
+        // transport block, so the playhead is this frame's) publishes kinds
+        // 3/4 instead, and owns SYNC_FULL_REQ while it runs.
+        if SYNC_ON.load(Ordering::Relaxed) != 0
+            && SPECTATOR.load(Ordering::Relaxed) == 0
+            && mode != Mode::Replay
+        {
+            let sent_full = sync_marks.needs_full(&recorder)
+                || SYNC_FULL_REQ.swap(0, Ordering::Relaxed) != 0;
+            if sent_full {
+                sync_push(1, &recorder.serialize(BUILD_ID.load(Ordering::Relaxed)));
+            } else if sync_marks.progressed(&recorder) {
+                sync_push(2, &encode_sync_delta(&recorder, sync_marks.events, sync_marks.keyframes));
+            }
+            sync_marks.update(&recorder);
+            // Ghost context (kind 5): with every full (a fresh TV needs it),
+            // and whenever the ghost blob, its pilot name, or the Race-best-
+            // ghost setting changed. The setting rides the stamp so the TV
+            // ghost honors the phone's toggle.
+            let ghost_on = GHOST_ON.load(Ordering::Relaxed) != 0;
+            let name = GHOST_NAME.lock().unwrap().clone();
+            let stamp = (name, ghost_on);
+            if sent_full || sync_ghost_sent.as_ref() != Some(&stamp) {
+                let g = if ghost_on { ghost_rec.as_ref() } else { None };
+                sync_push(5, &encode_sync_ghost(g, &stamp.0, BUILD_ID.load(Ordering::Relaxed)));
+                sync_ghost_sent = Some(stamp);
+            }
+        }
+
+        // --- AirPlay spectator: follow the phone's live recording ---
+        // This instance never takes input or runs its own sim (the local
+        // `sim` sits armed-idle forever); it re-simulates the streamed
+        // recording in lockstep and renders it through the SAME bindings
+        // replay playback uses (replay_player/replay_frame → world_sim,
+        // camera, glow, HUD). Mode stays Flying — none of the replay
+        // transport, exits or dialogs apply to a spectator.
+        if spectate {
+            for (kind, bytes) in std::mem::take(&mut *PENDING_SPEC.lock().unwrap()) {
+                match kind {
+                    1 => {
+                        if let Ok((rec, _)) = Recording::deserialize(&bytes) {
+                            // Fresh scratch sim per run (the determinism
+                            // rule); a full frame is also the resync path,
+                            // and it always returns the TV to LIVE follow
+                            // (a mirrored replay ends with one of these).
+                            replay_player = spec_player_from(&rec);
+                            spec_rec = Some(rec);
+                            spec_replay = false;
+                            spec_boomed = false;
+                            spec_ghost = None; // rebuilt vs the new recording
+                            spec_ghost_built = false;
+                            particles.clear();
+                        }
+                    }
+                    2 => {
+                        let ok = !spec_replay
+                            && match (spec_rec.as_mut(), decode_sync_delta(&bytes)) {
+                                (Some(r), Some((ticks, ev, kf))) => {
+                                    r.extend_live(ticks, &ev, &kf)
+                                }
+                                _ => false,
+                            };
+                        if !ok {
+                            // Missed frames or a join mid-stream: ask the
+                            // phone for the whole recording again.
+                            SPEC_NEED_FULL.store(1, Ordering::Relaxed);
+                        }
+                    }
+                    // The phone entered replay playback: mirror it. The
+                    // blob is the whole recording being watched; the
+                    // playhead frames below drive the clock.
+                    3 => {
+                        if let Ok((rec, _)) = Recording::deserialize(&bytes) {
+                            replay_player = spec_player_from(&rec);
+                            spec_target = rec.keyframes.first().map_or(0, |k| k.tick);
+                            spec_rec = Some(rec);
+                            spec_replay = true;
+                            spec_boomed = false;
+                            spec_ghost = None; // rebuilt vs the new recording
+                            spec_ghost_built = false;
+                            particles.clear();
+                        }
+                    }
+                    4 if spec_replay && bytes.len() >= 4 => {
+                        spec_target = u32::from_le_bytes(bytes[..4].try_into().unwrap());
+                    }
+                    // Ghost context: the record the phone is racing (live)
+                    // or the replay's own ghost. The name lands in
+                    // GHOST_NAME so the Flying-mode label path just works.
+                    5 => {
+                        let (name, rec) = decode_sync_ghost(&bytes);
+                        *GHOST_NAME.lock().unwrap() = name;
+                        spec_ghost_raw = rec;
+                        spec_ghost = None;
+                        spec_ghost_built = false;
+                    }
+                    _ => {}
+                }
+            }
+            // (Re)build the lockstep ghost once both sides are present —
+            // replay_ghost_player's params-equality and same-recording
+            // gates decide whether it actually races (a kind 5 can land
+            // before or after the kind 1/3 of a level switch; whichever
+            // arrives last re-attempts the build against current state).
+            if !spec_ghost_built
+                && let (Some(g), Some(rec)) = (spec_ghost_raw.as_ref(), spec_rec.as_ref())
+            {
+                spec_ghost = replay_ghost_player(g.clone(), rec);
+                spec_ghost_built = true;
+            }
+            // The recording only becomes playable once it has a keyframe
+            // (spawn state) — pick the player up then.
+            if replay_player.is_none()
+                && let Some(r) = spec_rec.as_ref()
+            {
+                replay_player = spec_player_from(r);
+            }
+            if let (Some(rec), Some(p)) = (spec_rec.as_ref(), replay_player.as_mut()) {
+                const SPEC_MAX_LAG_TICKS: u32 = 240; // 2 s
+                let f = if spec_replay {
+                    // Mirrored replay: follow the phone's PLAYHEAD exactly —
+                    // its transport is the clock (pause freezes the target,
+                    // a scrub moves it backwards, speed changes its rate).
+                    let target = spec_target.clamp(p.first_tick, p.end_tick);
+                    if target < p.tick || target > p.tick + SPEC_MAX_LAG_TICKS {
+                        p.seek_to_tick(rec, target);
+                        rebuild_replay_particles(rec, p.tick, &mut particles);
+                    } else {
+                        while p.tick < target && !p.finished {
+                            p.step_one(rec);
+                        }
+                    }
+                    p.advance(rec, 0.0)
+                } else {
+                    // Live follow: the tip moves — un-finish and extend as
+                    // new ticks arrive, advance on the wall clock (the
+                    // phone produces ticks at the same rate, so the player
+                    // hovers a few ticks behind the tip). A big lag — late
+                    // join, page hiccup — jumps through the recording's own
+                    // keyframes instead of grinding tick-by-tick.
+                    p.end_tick = rec.ticks();
+                    if p.tick < p.end_tick {
+                        p.finished = false;
+                    }
+                    if p.end_tick.saturating_sub(p.tick) > SPEC_MAX_LAG_TICKS {
+                        p.seek_to_tick(rec, p.end_tick);
+                        particles.clear();
+                    }
+                    p.advance(rec, get_frame_time().min(0.05))
+                };
+                // The record ghost rides the spectated clock in lockstep,
+                // exactly like the replay ghost rides a replay's — the
+                // seek covers mirrored-replay scrubs and live catch-up
+                // jumps alike (through the ghost's own keyframes).
+                if let Some((g, gr)) = spec_ghost.as_mut() {
+                    if p.tick < g.tick || p.tick > g.tick + SPEC_MAX_LAG_TICKS {
+                        g.seek_to_tick(gr, p.tick);
+                    } else {
+                        while !g.finished && g.tick < p.tick {
+                            g.step_one(gr);
+                        }
+                    }
+                }
+                // The destroying impact bursts its debris once per finale,
+                // like replay playback — re-armed whenever the sim is
+                // uncrashed again (new run, or a mirrored scrub back).
+                if !p.sim.crashed {
+                    spec_boomed = false;
+                } else if !spec_boomed {
+                    spec_boomed = true;
+                    boom_burst(f.x, f.y, &mut particles);
+                    if SOUND_ON.load(Ordering::Relaxed) != 0
+                        && let Some(s) = &boom_snd
+                    {
+                        play_sound(s, PlaySoundParams { looped: false, volume: 0.9 });
+                    }
+                }
+                replay_frame = Some(f);
+            }
+        }
         if mode == Mode::Replay {
             // Playback source: an externally-loaded highscore replay when
             // one is active, else the live recorder (crash-dialog replay).
@@ -2163,6 +2799,43 @@ async fn main() {
                 mode = if watch_rec.take().is_some() { watch_return } else { Mode::CrashDialog };
             }
         }
+        // --- AirPlay sync publisher, replay half (phone side) ---
+        // Watching a replay mirrors it to the TV: the whole recording being
+        // played goes out once (kind 3 — also the resync answer while in
+        // replay), then the playhead tick whenever it moves (kind 4), AFTER
+        // the transport block above so seeks/steps publish this frame's
+        // position. Leaving replay re-arms a full live frame so the TV
+        // returns to following the run.
+        if SYNC_ON.load(Ordering::Relaxed) != 0 && SPECTATOR.load(Ordering::Relaxed) == 0 {
+            if let (Mode::Replay, Some(p)) = (mode, replay_player.as_ref()) {
+                let full_req = SYNC_FULL_REQ.swap(0, Ordering::Relaxed) != 0;
+                if !sync_replay_sent || full_req {
+                    let play_rec = watch_rec.as_ref().unwrap_or(&recorder);
+                    sync_push(3, &play_rec.serialize(BUILD_ID.load(Ordering::Relaxed)));
+                    // The replay's OWN ghost rides along (kind 5) — a board
+                    // watch races the watched board's record, not the loaded
+                    // level's; None (setting off / same-recording / foreign
+                    // world) clears the TV's ghost for this replay too.
+                    sync_push(5, &encode_sync_ghost(
+                        replay_ghost.as_ref().map(|(_, gr)| gr),
+                        &replay_ghost_name,
+                        BUILD_ID.load(Ordering::Relaxed),
+                    ));
+                    sync_replay_sent = true;
+                    sync_replay_tick_sent = u32::MAX; // force a position frame
+                }
+                if p.tick != sync_replay_tick_sent {
+                    sync_push(4, &p.tick.to_le_bytes());
+                    sync_replay_tick_sent = p.tick;
+                }
+            } else if sync_replay_sent {
+                sync_replay_sent = false;
+                SYNC_FULL_REQ.store(1, Ordering::Relaxed);
+                // The next live pass must restore the live ghost context
+                // over the replay's.
+                sync_ghost_sent = None;
+            }
+        }
         if let Some(f) = replay_frame {
             cam_x = f.x;
             cam_y = f.y;
@@ -2184,6 +2857,22 @@ async fn main() {
         // freeze-frame — where the record run was when this one ended is
         // part of the comparison.
         let ghost_pose: Option<(f32, f32, f32)> = match mode {
+            // TV spectator: the streamed ghost context (kind 5), lerped
+            // with the spec player's own accumulator. Hidden until the
+            // followed recording has ticks — the armed-idle wait, where
+            // both ships would sit overlapped on the spawn (the live
+            // game's run_started gate, in spectator terms).
+            Mode::Flying if spectate => match (&spec_ghost, &replay_player) {
+                (Some((g, _)), Some(p))
+                    if GHOST_ON.load(Ordering::Relaxed) != 0
+                        && !g.finished
+                        && p.end_tick > p.first_tick
+                        && p.tick >= g.first_tick =>
+                {
+                    Some(g.lerped_pose((p.accum / PHYSICS_DT).clamp(0.0, 1.0)))
+                }
+                _ => None,
+            },
             Mode::Flying => match &ghost_player {
                 Some(p)
                     if GHOST_ON.load(Ordering::Relaxed) != 0
@@ -2268,11 +2957,14 @@ async fn main() {
         // --- Draw ---
         clear_background(Color::from_rgba(8, 8, 18, 255));
 
-        // Stars
+        // Stars. TV: world-anchored size (1.5 = the phone's 0.5 × dpi 3,
+        // the look the cosm factor reproduces) — px-fixed stars were specks
+        // on a 1080p+ TV canvas.
+        let star_r = if spectate { 1.5 * cosm } else { (0.5 * dpi).max(1.0) };
         for &(sx, sy) in &stars {
             let px = (sx * sw - cam_x * view_scale * 0.05).rem_euclid(sw);
             let py = (sy * sh + cam_y * view_scale * 0.05).rem_euclid(sh);
-            draw_circle(px, py, (0.5 * dpi).max(1.0), Color::from_rgba(200, 200, 255, 150));
+            draw_circle(px, py, star_r, Color::from_rgba(200, 200, 255, 150));
         }
 
         // Cave walls. Cull pad: 4 m of world keeps jittered deep-row facets from
@@ -2741,15 +3433,18 @@ async fn main() {
                 Color::from_rgba(30, 90, 50, 255)
             };
             let br = if is_goal { 3.5 } else { 2.5 };
+            // TV: world-anchored beacon size (3.0 = the phone dpi the px
+            // size was tuned at) — br × dpi(1) was a speck on the TV.
+            let bpx = if spectate { 3.0 * cosm } else { dpi };
             for side in [-1.0f32, 1.0] {
                 let p = w2s(pad.cx + side * (PAD_HALF_W - 0.15), pad.y + 0.12, sh, cam_x, cam_y);
-                draw_circle(p.x, p.y, br * dpi, bc);
+                draw_circle(p.x, p.y, br * bpx, bc);
             }
             // …plus a centre beacon on the finish, so the trio is
             // unmistakable at speed.
             if is_goal {
                 let p = w2s(pad.cx, pad.y + 0.12, sh, cam_x, cam_y);
-                draw_circle(p.x, p.y, br * dpi, bc);
+                draw_circle(p.x, p.y, br * bpx, bc);
             }
         }
 
@@ -2849,11 +3544,12 @@ async fn main() {
             }
         }
 
-        // Particles
+        // Particles. The px sizes carry no dpi factor and were tuned on the
+        // phone's ~20.5 px/m canvas — cosm keeps that proportion on the TV.
         for p in &particles {
             let s = w2s(p.x, p.y, sh, cam_x, cam_y);
             let a = (p.life * 255.0) as u8;
-            let radius = p.life * match p.kind { 0 => 5.0, 3 => 9.0, _ => 3.0 };
+            let radius = p.life * cosm * match p.kind { 0 => 5.0, 3 => 9.0, _ => 3.0 };
             let color = match p.kind {
                 0 => Color::from_rgba(255, (120.0 + p.life * 100.0) as u8, 20, a), // orange flame
                 3 => Color::from_rgba(255, (60.0 + p.life * 180.0) as u8, (p.life * 80.0) as u8, a), // explosion
@@ -3062,7 +3758,17 @@ async fn main() {
             };
             draw_text(&hud, safe_left + 10.0 * ui, hud_y, hud_fs, WHITE);
             let hud_w = measure_text(&hud, None, hud_fs as u16, 1.0).width;
-            draw_text(format!("  v={speed:.1}"),
+            // Speed, then the RESOLVED throttle command (post-curve, what
+            // the sim burns) and the RAW pad throttle as it arrived from
+            // the forwarder (pre-curve) — together they separate "my
+            // trigger is a digital click switch" (padraw jumps 0 → 100)
+            // from any doubt about the shaping pipeline (thr = curved
+            // padraw). An analog source sweeps both smoothly.
+            let pad_raw = f32::from_bits(PAD_THROTTLE.load(Ordering::Relaxed))
+                .clamp(0.0, 1.0);
+            draw_text(
+                format!("  v={speed:.1}  thr={:.0}%  padraw={:.0}%",
+                    input.throttle_f32() * 100.0, pad_raw * 100.0),
                 safe_left + 10.0 * ui + hud_w, hud_y, hud_fs, speed_col);
         }
 
@@ -3085,7 +3791,7 @@ async fn main() {
             safe_left + THROTTLE_RADIUS + 24.0,
             sh - safe_bottom - THROTTLE_RADIUS - 28.0,
         );
-        if matches!(mode, Mode::Flying) && !crashed && !ui_paused {
+        if matches!(mode, Mode::Flying) && !crashed && !ui_paused && !spectate {
             if stick.id.is_some() {
                 draw_stick(stick.center, stick.knob, stick.held, 1.0);
             } else {
@@ -3209,6 +3915,34 @@ async fn main() {
                     draw_throttle(btn_park, inp.throttle > 0, 1.0);
                 }
             }
+        } else if spectate {
+            // TV spectator: the phone pilot's hands at the widgets' parked
+            // homes (recorded input, like the replay's GUI-hidden display),
+            // plus the run-state banners from the spectated sim. No local
+            // UI — everything interactive lives on the phone.
+            if let Some(p) = replay_player.as_ref() {
+                let inp = p.current_input();
+                let (isx, isy) = inp.steer_f32();
+                draw_stick(stick_park, vec2(isx, isy) * STICK_TRAVEL,
+                    inp.stick_held != 0, 1.0);
+                if spec_rec.as_ref().is_some_and(|r| r.scheme == SCHEME_SPLIT) {
+                    draw_throttle(btn_park, inp.throttle > 0, 1.0);
+                }
+                let banner = if p.sim.crashed {
+                    Some(("CRASHED", Color::from_rgba(255, 90, 60, 255)))
+                } else if p.sim.completed {
+                    Some((complete_msg(&p.sim.level), Color::from_rgba(120, 255, 160, 255)))
+                } else if p.sim.fuel <= 0.0 {
+                    Some(("OUT OF FUEL", Color::from_rgba(255, 180, 60, 255)))
+                } else {
+                    None
+                };
+                if let Some((msg, col)) = banner {
+                    let fs = 64.0 * ui;
+                    let dims = measure_text(msg, None, fs as u16, 1.0);
+                    draw_text(msg, (sw - dims.width) / 2.0, sh * 0.34, fs, col);
+                }
+            }
         } else if complete_timer > 0.0 {
             // The banner leads with what the run scored: the completion
             // clock on a time level, the frozen distance on a sprint.
@@ -3308,8 +4042,16 @@ async fn main() {
             Some(_) => 0.0,
             None => throttle_fx,
         };
+        // Emission is per-FRAME; the TV webview can render at 30 fps under
+        // AirPlay, which halves the plume density — normalize the spectator
+        // to 60 fps-equivalent counts (clamped: a hitch must not burst).
+        let emit_mul = if spectate {
+            (get_frame_time() * 60.0).clamp(1.0, 3.0)
+        } else {
+            1.0
+        };
         if emit_cosmetics && exhaust > 0.0 {
-            for _ in 0..(8.0 * exhaust).ceil() as i32 {
+            for _ in 0..(8.0 * exhaust * emit_mul).ceil() as i32 {
                 let spread = gen_range(-0.25f32, 0.25);
                 let (px, py) = lp(spread * 0.45, -0.72);
                 let speed = gen_range(4.0f32, 8.0) * (0.4 + 0.6 * exhaust);
@@ -3330,7 +4072,7 @@ async fn main() {
         // positive the RIGHT (threshold keeps small trim corrections silent).
         // Coords are in scaled world units — lp() does NOT apply SHIP_SCALE.
         if emit_cosmetics && puff_left {
-            for _ in 0..3 {
+            for _ in 0..(3.0 * emit_mul).round() as i32 {
                 let spread = gen_range(-0.15f32, 0.15);
                 let (px, py) = lp(-0.30, -0.71);   // left leg nozzle (gold accent, scaled)
                 let speed = gen_range(2.0f32, 4.0);
@@ -3343,7 +4085,7 @@ async fn main() {
             }
         }
         if emit_cosmetics && puff_right {
-            for _ in 0..3 {
+            for _ in 0..(3.0 * emit_mul).round() as i32 {
                 let spread = gen_range(-0.15f32, 0.15);
                 let (px, py) = lp(0.30, -0.71);    // right leg nozzle (gold accent, scaled)
                 let speed = gen_range(2.0f32, 4.0);
@@ -3428,6 +4170,7 @@ async fn main() {
             // levels keep their ghost — the params still match.
             if ghost_rec.as_ref().is_some_and(|g| g.level != sim.level.to_params()) {
                 ghost_rec = None;
+                sync_ghost_sent = None;
             }
             // The ghost re-simulates the BEST run (the global record,
             // pushed from JS) from its first keyframe, in lockstep with
@@ -3952,6 +4695,149 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pad_stick_steer_matches_touch_stick_deadzone_semantics() {
+        // Inside the radial dead-zone: no heading command at all.
+        assert_eq!(pad_stick_steer(STICK_DZ * 0.7, 0.0, false), (0.0, 0.0));
+        assert_eq!(pad_stick_steer(0.0, 0.0, false), (0.0, 0.0));
+        // Just past the edge: rescaled to start from ~0 (no command jump).
+        let (x, _) = pad_stick_steer(STICK_DZ + 0.01, 0.0, false);
+        assert!(x > 0.0 && x < 0.05, "rescale must be continuous, got {x}");
+        // Full deflection reaches magnitude 1, direction preserved.
+        let (x, y) = pad_stick_steer(0.0, -1.0, false);
+        assert!((x, y) == (0.0, -1.0));
+        // Diagonal overdrive (both axes pinned) clamps to unit magnitude.
+        let (x, y) = pad_stick_steer(1.0, 1.0, false);
+        let m = (x * x + y * y).sqrt();
+        assert!((m - 1.0).abs() < 1e-5, "magnitude {m}");
+        assert!((x - y).abs() < 1e-6, "direction preserved");
+        // Invert negates the commanded direction (both axes), like the
+        // touch stick's Invert setting.
+        let (nx, ny) = pad_stick_steer(0.4, -0.8, true);
+        let (px, py) = pad_stick_steer(0.4, -0.8, false);
+        assert!((nx + px).abs() < 1e-6 && (ny + py).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sync_delta_wire_format_reconstructs_the_recording_bit_exactly() {
+        // The spectator's whole correctness story: prefix + streamed deltas
+        // must equal the phone's recording, byte for byte.
+        let level = Level::demo().to_params();
+        let mut full = Recording::new(sim_params(), level.clone(), 100_000);
+        for t in 0..400u32 {
+            let input = InputState::from_controls(
+                if t % 11 < 4 { 1.0 } else { 0.3 }, 0,
+                (t as f32 / 60.0).cos(), 0.5, t % 3 == 0,
+            );
+            if full.record_tick(input) {
+                let mut kf = Keyframe {
+                    tick: t + 1, x: t as f32, y: -1.0, rot_re: 1.0, rot_im: 0.0,
+                    vx: 0.1, vy: 0.2, angvel: 0.0, fuel: 90.0, hull: 100.0,
+                    glow: 0.5, land_timer: 0.0, visited: 5, run_ticks: t + 1,
+                };
+                kf.x = t as f32 * 0.1;
+                full.push_keyframe(kf);
+            }
+        }
+        for (ev_cut, kf_cut) in [(0usize, 0usize), (2, 1), (5, 3)] {
+            let mut follow = Recording::new(sim_params(), level.clone(), 100_000);
+            follow.events = full.events[..ev_cut].to_vec();
+            follow.keyframes = full.keyframes[..kf_cut].to_vec();
+            let bytes = encode_sync_delta(&full, ev_cut, kf_cut);
+            let (ticks, ev, kf) = decode_sync_delta(&bytes).expect("decodes");
+            assert!(follow.extend_live(ticks, &ev, &kf));
+            assert_eq!(follow.serialize(0), full.serialize(0));
+        }
+        // Truncated bytes never panic, just fail to decode.
+        let bytes = encode_sync_delta(&full, 0, 0);
+        for cut in [0, 3, 10, bytes.len() - 1] {
+            assert!(decode_sync_delta(&bytes[..cut]).is_none() || cut == 0 && bytes.is_empty());
+        }
+    }
+
+    #[test]
+    fn sync_ghost_frame_round_trips_and_degrades_safely() {
+        // The kind-5 ghost context: name + recording must round-trip
+        // bit-exactly; the no-ghost frame and any malformed tail must
+        // decode to "no ghost" rather than erroring.
+        let rec = short_recorded_run(Level::demo(), 300, 1.0);
+        let bytes = encode_sync_ghost(Some(&rec), "Maja", 7);
+        let (name, back) = decode_sync_ghost(&bytes);
+        assert_eq!(name, "Maja");
+        assert_eq!(back.expect("ghost decodes").serialize(7), rec.serialize(7));
+
+        // No ghost (setting off / none loaded): name only.
+        let (name, back) = decode_sync_ghost(&encode_sync_ghost(None, "", 0));
+        assert_eq!(name, "");
+        assert!(back.is_none());
+
+        // Truncation anywhere never panics and never invents a ghost.
+        for cut in [0, 1, 3, bytes.len() / 2, bytes.len() - 1] {
+            let (_, back) = decode_sync_ghost(&bytes[..cut]);
+            assert!(back.is_none(), "cut at {cut} must not decode a ghost");
+        }
+    }
+
+    #[test]
+    fn sync_watermarks_catch_an_unarmed_level_switch() {
+        // A level switch before the run arms leaves the old and new
+        // recorders identical in shape (0 ticks, 1 spawn keyframe at
+        // tick 0) — only the LevelParams differ. The publisher's restart
+        // test must still demand a full frame, or the TV grafts the new
+        // level's inputs onto the old world (field bug 2026-08: the TV
+        // showed the first level regardless of the picker choice).
+        let fresh_rec = |level: &Level| {
+            let sim = Sim::new(level.clone());
+            let mut rec = Recording::new(sim_params(), level.to_params(), u32::MAX);
+            rec.push_keyframe(sim.keyframe(0, 0.0));
+            rec
+        };
+        let level_a = Level::demo();
+        let mut level_b = Level::demo();
+        level_b.seed = 7; // same shape, different world
+        let rec_a = fresh_rec(&level_a);
+
+        let mut marks = SyncWatermarks::new();
+        // A brand-new publisher always starts with a full frame.
+        assert!(marks.needs_full(&rec_a));
+        marks.update(&rec_a);
+        // Unchanged recorder: nothing to send at all.
+        assert!(!marks.needs_full(&rec_a) && !marks.progressed(&rec_a));
+
+        // The unarmed switch: same counts, different LevelParams → full.
+        let mut rec_b = fresh_rec(&level_b);
+        assert_eq!(rec_a.ticks(), rec_b.ticks());
+        assert_eq!(rec_a.keyframes.len(), rec_b.keyframes.len());
+        assert!(marks.needs_full(&rec_b));
+        marks.update(&rec_b);
+
+        // Ordinary growth on the new level rides the delta path.
+        let input = InputState::from_controls(1.0, 0, 0.0, 0.0, false);
+        rec_b.record_tick(input);
+        assert!(!marks.needs_full(&rec_b) && marks.progressed(&rec_b));
+        marks.update(&rec_b);
+
+        // A restart on the SAME level (fresh recorder, counts regress)
+        // still triggers the full — the pre-fix detection, kept working.
+        let rec_b2 = fresh_rec(&level_b);
+        assert!(marks.needs_full(&rec_b2));
+    }
+
+    #[test]
+    fn pad_throttle_passes_analog_and_floors_noise() {
+        assert_eq!(pad_throttle_cmd(0.0), 0.0);
+        assert_eq!(pad_throttle_cmd(PAD_THROTTLE_MIN * 0.5), 0.0); // resting jitter
+        // Partial travel = partial burn, expo-shaped (0.4² = 0.16): the
+        // low band gets the resolution because hover is only ~13% throttle.
+        assert!((pad_throttle_cmd(0.4) - 0.16).abs() < 1e-6);
+        // Monotonic analog: more travel is always more burn.
+        assert!(pad_throttle_cmd(0.3) < pad_throttle_cmd(0.5));
+        assert!(pad_throttle_cmd(0.5) < pad_throttle_cmd(0.8));
+        assert_eq!(pad_throttle_cmd(1.0), 1.0); // full squeeze = full burn
+        assert_eq!(pad_throttle_cmd(1.7), 1.0); // clamped
+        assert_eq!(pad_throttle_cmd(f32::NAN), 0.0); // hostile JS input
+    }
 
     #[test]
     fn a_rerolled_world_orphans_the_previous_rolls_ghost() {

@@ -52,6 +52,9 @@ runs:
         mkdir -p site
         cp index.html site/
         cp editor.html site/
+        # The AirPlay TV page (a second game instance in spectator mode,
+        # loaded by the iOS shell's external-display window).
+        cp spectator.html site/
         cp manifest.json site/
         cp icon-512.png icon-192.png icon-180.png site/
         cp mq_js_bundle.js site/

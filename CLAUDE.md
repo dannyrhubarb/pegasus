@@ -92,6 +92,12 @@ push-retry loop for concurrent deploys):
 - `levels/` — **runtime level data**: `*.level` files (`key = value`) + `manifest.json` (menu order), fetched by `index.html` and pushed into the wasm — new levels deploy with no recompile (see "Levels")
 - `fonts/` — the **vendored menu webfont**: `jetbrains-mono.woff2` (latin variable, wght 400–800) + its `OFL.txt`, loaded via `@font-face` by `index.html`/`editor.html` so every platform renders the same face (see the menu-font note under "Game menu"); in all three bundle copy lists
 - `editor.html` — the **standalone level editor** (issue #89 v1, 2026-07): draws hand-drawn `.level` worlds — the same `poly`/`pad`/`start` representation The Hollows uses — on a pan/zoom canvas. Self-contained like `index.html` (no CDNs), copied by `build-site`. **Deliberately UNLINKED from the game UI** (owner decision pre-merge): it lives at its own path with no menu button and no picker row; the game only meets it through the `?custom=1` test-fly handoff. **While it stays unlinked, editor commits carry NO `Whats-new:` trailers** (the changelog must not advertise an unannounced feature — the PR #110 branch had its trailers stripped before merge; give the editor one proper entry when it's linked up for real). See "Level editor & custom drafts" under "Levels"
+- `spectator.html` — the **AirPlay TV page**: a second instance of the game
+  booted in spectator mode (`set_spectator`), following the phone's live
+  recording via the shell-relayed sync pipe (see the AirPlay bullet under
+  "iOS app"). No menu, no analytics, no input — loaded only by the iOS
+  shell's external-display window, but shipped in every bundle (it's in
+  all three copy lists) since the web build is the single source
 - `tools/gen-third-party-licenses.py` + `third-party-licenses.html` — the generated third-party attribution page served with the site and linked from the About screen; regenerate when `Cargo.lock` changes (see "License")
 - `privacy.html` — standalone privacy policy served with the site (and bundled into both apps), written for the Play Store listing's required privacy-policy URL; same substance as the About screen's `#privacy-note` — keep the two in agreement when the analytics story changes
 - `tools/gen-whats-new.py` + `tools/whats-new-backfill.json` + `tools/whats-new-overrides.json` — deploy-time generator for `whats-new.json`, the About screen's What's New changelog (see "What's new page" — **every user-facing commit needs a `Whats-new:` trailer**; the overrides file rewords already-merged entries)
@@ -201,13 +207,37 @@ Four input paths feed the same physics, combined in the main loop:
     test (`tests/touch-e2e/`, in CI) rather than an emulator one — the bug
     is a race, so an emulator can only pass by luck, while dispatching both
     events in one JS task makes the collapse certain.
-- **Game controller** (BT/USB, web): `index.html` polls the **Web Gamepad API**
+- **Game controller** (BT/USB): `index.html` polls the **Web Gamepad API**
   each `requestAnimationFrame` and forwards to exported `set_pad_thrust(i32)` /
-  `set_pad_torque(f32)` / `set_pad_reset()`. Mapping (standard layout): thrust =
-  A/Cross (0), R2 (7, analog>0.3), or D-pad up (12); steer = left stick X
-  (axes[0], dead-zoned/rescaled) or D-pad L/R (14/15); reset = Start (9) or
-  Y/Triangle (3, edge-triggered). Polling starts on `gamepadconnected` and stops
-  (releasing held inputs) if the pad drops out.
+  `set_pad_stick(f32, f32)` / `set_pad_torque(f32)` / `set_pad_reset()`.
+  Mapping (standard layout, mirroring the SPLIT on-screen scheme — left
+  hand burns, right thumb steers; owner request 2026-08): throttle: the L2
+  trigger (6) is ANALOG — trigger travel = partial burn, racing style
+  (`set_pad_throttle` → `pad_throttle_cmd`, noise below 0.05 floors to
+  released, travel shaped by `PAD_THROTTLE_EXPO` — see
+  docs/control-tuning.md; every throttle consumer already scales), max'd
+  with the otherwise-unused **left stick pushed up** (HOTAS-style second
+  analog source — some pads' triggers are digital click switches, a
+  stick axis is analog everywhere) — with L1 (4) and
+  D-pad up (12) as digital full burn; left side only, A/R2 do nothing;
+  **right analog stick (both axes) = commanded nose direction** —
+  `set_pad_stick` feeds the SAME heading PD as
+  the touch stick (raw axes in screen convention; `pad_stick_steer` in
+  main.rs applies the `STICK_DZ` radial dead-zone/rescale + the Invert
+  setting, unit-tested; an active touch outranks the pad, and it NEVER
+  fires the engine — boost stays on its buttons, so `stick_held` remains
+  touch-only and the pad rides InputState's existing steer fields with no
+  replay-format change); reset = Start (9) or Y/Triangle (3,
+  edge-triggered) — no pad rate-rotation: the D-pad L/R override was
+  dropped 2026-08 as redundant next to the heading stick (rate control
+  remains keyboard-only). Polling starts on `gamepadconnected` and stops
+  (releasing held inputs) if the pad drops out. **In the iOS shell the
+  controller is read NATIVELY instead** (`ios/Pegasus/PadForwarder.swift`,
+  GCController → the same exports, change-deduped at 60 Hz; GCController's
+  up-positive y is negated to screen convention): WebKit gates gamepad
+  access on page focus/visibility — brittle inside an app shell, and
+  moot for GCController. The shell injects `__pegNativePad`, which makes
+  the page's web poll stand down so the two paths never double-drive.
 
 Touch is read directly via macroquad each frame; the gamepad uses `PAD_*`
 atomics (JS-forwarded) so a connected-but-idle controller never stomps an
@@ -215,8 +245,9 @@ active touch. The main engine is a
 **throttle (0..1)**: every current source is binary (1.0), but the plumbing
 stays analog — engine force, glow, fuel burn, and exhaust particle
 count/speed all scale with it. Rotation has two modes: **rate control**
-(keyboard keys / pad stick → nozzle force via `fire_rcs`) and the touch
-stick's **heading control** (PD to a commanded angle, pure `add_torque`);
+(keyboard keys → nozzle force via `fire_rcs`) and **heading
+control** (PD to a commanded angle, pure `add_torque`) commanded by the
+touch stick or the gamepad's right analog stick (touch outranks pad);
 rate control wins while actively held. `PAD_RESET` is a swap-to-consume flag
 so a held reset button fires exactly once.
 
@@ -2037,14 +2068,90 @@ re-acquired on the `visibilitychange` back while still wanted).
   `env()`, behavior unchanged (verified headless: unset vars reproduce
   the old computed styles exactly). The Android shell doesn't inject
   (no jank reported there); it can adopt the same vars if ever needed.
+- **AirPlay second screen — spectator instance** (`ios/Pegasus/AirPlay.swift`
+  + `spectator.html`, 2026-08): during AirPlay **screen mirroring**
+  (user-started from Control Center — there is NO API to start it
+  programmatically, so no in-app button can) the app replaces the
+  letterboxed mirror with a **full-screen 16:9 TV window** while the phone
+  stays COMPLETELY normal — portrait or landscape, every menu touchable,
+  nothing moves. The TV window (offered as a non-interactive
+  external-display scene; the `configurationForConnecting` callback fires
+  even with `UIApplicationSupportsMultipleScenes = false`, role matched
+  `!= .windowApplication` to dodge the iOS 16 rename) hosts a SECOND
+  WKWebView running `spectator.html`: a second instance of the SAME wasm
+  in spectator mode (`set_spectator`) that re-simulates the phone's LIVE
+  recording in lockstep — determinism (the replay/ghost/verifier
+  guarantee) is what makes the TV's independent 16:9 render bit-identical.
+  **Sync pipe**: the phone's frame loop publishes its recorder's growth
+  (full serialized `Recording` on run start / resync / connect, tiny
+  deltas otherwise — app-level wire format in main.rs, `encode_sync_delta`
+  / `decode_sync_delta`, unit-tested round-trip; `Recording::extend_live`
+  in replay.rs is the validated graft, additive — no stored-format bump,
+  no backend repin) into `SYNC_OUT`; index.html's `__pegSpecSetSync` block
+  drains it per rAF → base64 → `pegasusSpecData` message → the shell
+  relays into the TV page's `__pegSpecRecv` → `blob_in_ptr`/`spec_feed`.
+  The spectator drives the EXISTING replay-render bindings
+  (`replay_player`/`replay_frame` → `world_sim`, camera, glow, HUD,
+  recorded-input stick at its parked home; `spec_player_from` allows a
+  0-tick recording so the TV shows the right world's spawn during the
+  armed-idle wait; mode stays `Flying`, so no transport/exit paths engage).
+  A delta that doesn't join contiguously sets `spec_need_full` — the shell
+  polls it at 1 Hz and the phone resends the full blob (also auto-sent on
+  reset/level-load/trim, detected by `SyncWatermarks`: count regressions
+  **plus a `LevelParams` identity check** — an UNARMED level switch (or a
+  `seed = random` re-roll before arming) swaps recorders of identical
+  shape, 0 ticks + 1 spawn keyframe, so regression alone missed it and
+  the TV kept re-simming the old world; field bug 2026-08, unit-tested).
+  **The racing ghost mirrors too** (frame kind 5 — the ghost blob lives
+  in index.html's board fetch, which spectator.html deliberately lacks,
+  so the phone streams its ghost context: pilot name + recording, empty
+  = none; sent with every kind 1/3 and whenever the ghost / its name /
+  the Race-best-ghost setting changes — `encode/decode_sync_ghost`,
+  unit-tested). The TV feeds it through the existing
+  `replay_ghost_player` (params-equality + same-recording gates for
+  free) and steps it in lockstep with the spec player, replay-ghost
+  style; the name lands in the TV's `GHOST_NAME` so the Flying-mode
+  label path just works, and it hides during the armed-idle wait (the
+  followed recording has 0 ticks — `run_started` in spectator terms).
+  **TV framing & cosmetics are world-anchored** (field report 2026-08:
+  each AirPlay route — Apple TV vs direct mirroring — reports different
+  UIScreen geometry, so the phone/desktop `view_scale` heuristics picked
+  a different zoom per route, and px-fixed cosmetics shrank to specks):
+  in spectator mode `view_scale = min(sw,sh)/MOBILE_VIEW_M` (the phone's
+  landscape framing at any resolution) and the `cosm` factor
+  (`view_scale/20.5`, ≈1 on a phone by construction) scales stars, pad
+  beacons and particle radii with the world; particle emission counts
+  are normalized to 60 fps-equivalent (`emit_mul`) because the AirPlay
+  webview can render at 30 fps and emission is per-frame.
+  **Watching a replay mirrors it too**: in `Mode::Replay` the phone
+  streams the played recording once (frame kind 3) plus the playhead
+  tick as it moves (kind 4, published AFTER the transport block so seeks
+  are current) — the TV follows the playhead exactly, so pause/scrub/
+  speed mirror for free, racing the replay's OWN ghost (its kind 5 rides
+  along with kind 3); replay
+  exit re-arms a full live frame (kind 1), which always returns the
+  spectator to live follow and restores the live ghost context. Menus pause
+  the sim, so the TV simply holds the frozen scene — no idle-card handoff,
+  no webview reparenting, no touch forwarding: the phone's input paths are
+  untouched. Latency on the TV = relay (~a frame) + AirPlay's inherent
+  ~100–200 ms; the phone in the player's hands has zero added latency.
 - App icon: `icon.svg` rendered to an opaque 1024×1024 PNG in
   `Assets.xcassets` (no alpha — App Store validation rejects it);
   re-render if the SVG changes.
 - **CI**: `ios-build.yml` (PRs touching `ios/` — sync + UNSIGNED
-  xcodebuild, no secrets) and `ios-testflight.yml` (**manual dispatch
+  xcodebuild, no secrets; **this IS the Swift compile gate — check it's
+  green on the PR before manually dispatching `ios-testflight.yml` on a
+  branch**. Lesson from 2026-08: a TestFlight dispatch raced ahead of the
+  red build check and died on the same compile error the check had
+  already caught an hour earlier; the archive is the same compile, so a
+  pre-archive compile step inside the TestFlight workflow would add
+  nothing — the gate exists, honor it) and `ios-testflight.yml` (**manual dispatch
   ONLY** — automatic publish on `main` pushes is PAUSED since 2026-08,
   owner request; see the paused-trigger note under Android CI —
-  cloud-signed archive → TestFlight;
+  cloud-signed archive → TestFlight; the `distribution` dispatch input
+  picks `public-beta` (default: hands-free Beta App Review + the public
+  group) or `internal-only` (upload and stop — the build reaches internal
+  App Store Connect testers only, for branch builds under test);
   needs the four `APP_STORE_CONNECT_API_*`/`APPLE_TEAM_ID` repo secrets
   and the ASC app record; build number = workflow run number). Both run on
   **`macos-26` and select the newest stable Xcode** — App Store Connect

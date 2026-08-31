@@ -317,6 +317,42 @@ impl Recording {
         }
     }
 
+    // Live-follow append (2026-08, the AirPlay spectator): graft events and
+    // keyframes streamed from ANOTHER instance's growing recording onto
+    // this one, advancing the tick counter to the sender's. The wire format
+    // of the delta is app-level (src/main.rs) — this is just the validated
+    // mutation, kept here because `ticks` is private. Returns false (and
+    // mutates nothing) when the pieces don't join contiguously — the
+    // receiver's cue to request a full resync. No trim: a live follower
+    // must never cut history the sender still references by index.
+    pub fn extend_live(
+        &mut self,
+        ticks: u32,
+        events: &[InputEvent],
+        keyframes: &[Keyframe],
+    ) -> bool {
+        if ticks < self.ticks {
+            return false; // sender went backwards: stale/foreign delta
+        }
+        if let (Some(first), Some(last)) = (events.first(), self.events.last())
+            && first.tick < last.tick
+        {
+            return false;
+        }
+        if let (Some(first), Some(last)) = (keyframes.first(), self.keyframes.last())
+            && first.tick <= last.tick
+        {
+            return false;
+        }
+        self.events.extend_from_slice(events);
+        self.keyframes.extend_from_slice(keyframes);
+        self.ticks = ticks;
+        if let Some(e) = self.events.last() {
+            self.last_input = Some(e.input);
+        }
+        true
+    }
+
     // Drop history older than max_ticks, cutting at a keyframe so the
     // retained window is replayable from its first keyframe. The input in
     // effect at the cut is re-seeded as an event at the cut tick.
@@ -743,6 +779,44 @@ mod tests {
         assert_eq!(rec.keyframes.len(), 1);
         rec.finalize(kf(7));
         assert_eq!(rec.keyframes.len(), 2);
+    }
+
+    #[test]
+    fn extend_live_rebuilds_a_recording_from_watermark_slices() {
+        // Record a run, snapshot a prefix at an arbitrary watermark, then
+        // graft the remainder on via extend_live — the result must
+        // serialize bit-identically to the original (the property the
+        // spectator's delta stream depends on).
+        let mut full = Recording::new(params(), lparams(), 100_000);
+        for t in 0..500u32 {
+            let input = InputState::from_controls(
+                if t % 7 < 3 { 1.0 } else { 0.0 }, 0,
+                (t as f32 / 100.0).sin(), -0.4, t % 5 != 0,
+            );
+            if full.record_tick(input) {
+                full.push_keyframe(kf(t + 1));
+            }
+        }
+        for (ev_cut, kf_cut, tick_cut) in [(0usize, 0usize, 0u32), (3, 1, 130), (7, 2, 250)] {
+            let mut prefix = Recording::new(params(), lparams(), 100_000);
+            prefix.events = full.events[..ev_cut].to_vec();
+            prefix.keyframes = full.keyframes[..kf_cut].to_vec();
+            assert!(prefix.extend_live(tick_cut, &[], &[])); // seed the tick counter
+            assert!(prefix.extend_live(
+                full.ticks(),
+                &full.events[ev_cut..],
+                &full.keyframes[kf_cut..],
+            ));
+            assert_eq!(prefix.serialize(0), full.serialize(0));
+        }
+        // Non-contiguous pieces are refused untouched: re-applying the same
+        // keyframes must fail (their ticks aren't after the last one).
+        let before = full.serialize(0);
+        let kfs = full.keyframes.clone();
+        let ticks = full.ticks();
+        assert!(!full.extend_live(ticks, &[], &kfs));
+        assert!(!full.extend_live(ticks - 1, &[], &[])); // backwards tick
+        assert_eq!(full.serialize(0), before);
     }
 
     #[test]

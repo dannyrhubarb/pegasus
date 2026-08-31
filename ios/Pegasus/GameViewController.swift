@@ -11,6 +11,8 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
     private var webView: WKWebView!
     private var appBuildScript: WKUserScript!
     private var didStartLoad = false
+    private var nativePadScript: WKUserScript!
+    private var padForwarder: PadForwarder?
 
     // The status bar stays visible, drawn over the game's starfield (the
     // page lays its HUD out below env(safe-area-inset-top), so nothing
@@ -35,6 +37,10 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
         // resumes. (The controller lives for the whole app lifetime, so the
         // handler's strong reference to it is harmless.)
         config.userContentController.add(self, name: "pegasusKeepAwake")
+        // AirPlay spectator pipe: while a TV spectator is connected, the
+        // page posts base64 sync frames here each rAF; the coordinator
+        // relays them into the spectator webview. See AirPlay.swift.
+        config.userContentController.add(self, name: "pegasusSpecData")
         // Surface the INSTALLED app's version to the page for the About
         // screen's "App build" row: "1.0 (42)" — CFBundleShortVersionString
         // + CFBundleVersion (CI stamps the latter with the workflow run
@@ -49,6 +55,16 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
             forMainFrameOnly: true
         )
         config.userContentController.addUserScript(appBuildScript)
+        // The shell reads BT/USB game controllers natively (see
+        // PadForwarder.swift for why); this flag makes the page's own Web
+        // Gamepad poll stand down so the two paths never double-drive the
+        // same exports.
+        nativePadScript = WKUserScript(
+            source: "window.__pegNativePad = true",
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        )
+        config.userContentController.addUserScript(nativePadScript)
 
         webView = WKWebView(frame: view.bounds, configuration: config)
         // Fill the WHOLE screen, not the safe area: the page uses
@@ -72,6 +88,8 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
         // supports the iOS edge-swipe as "back one screen" — keep that.
         webView.allowsBackForwardNavigationGestures = true
         view.addSubview(webView)
+        // Native BT/USB controller bridge (see PadForwarder.swift).
+        padForwarder = PadForwarder(webView: webView)
         // load() happens in viewDidLayoutSubviews, once the safe-area
         // insets are known — see pushSafeAreaInsets.
     }
@@ -102,6 +120,7 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
         let ucc = webView.configuration.userContentController
         ucc.removeAllUserScripts()
         ucc.addUserScript(appBuildScript)
+        ucc.addUserScript(nativePadScript)
         ucc.addUserScript(WKUserScript(
             source: js, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         // …and update the live page directly (rotation happens mid-session).
@@ -116,6 +135,26 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
         pushSafeAreaInsets()
         didStartLoad = true
         webView.load(URLRequest(url: URL(string: "\(WebRootSchemeHandler.scheme)://app/index.html")!))
+        // Register AFTER the load kicks off, so an AirPlay session already
+        // active at launch starts the sync against a loading page (the
+        // page-side block arms itself once the wasm exports appear).
+        AirPlayCoordinator.shared.register(game: self)
+    }
+
+    // MARK: AirPlay spectator sync (driven by AirPlayCoordinator)
+
+    /// Tell the game page to start/stop publishing live sync frames.
+    func setSpectatorSync(enabled: Bool) {
+        webView.evaluateJavaScript(
+            "window.__pegSpecSetSync&&__pegSpecSetSync(\(enabled))",
+            completionHandler: nil)
+    }
+
+    /// The spectator asked for a full resync (joined mid-run/missed frames).
+    func requestSpectatorFullSync() {
+        webView.evaluateJavaScript(
+            "window.__pegSpecReqFull&&__pegSpecReqFull()",
+            completionHandler: nil)
     }
 
     // Keep the injected values current (rotation changes which edges carry
@@ -185,6 +224,10 @@ extension GameViewController: WKScriptMessageHandler {
     ) {
         if message.name == "pegasusKeepAwake" {
             UIApplication.shared.isIdleTimerDisabled = (message.body as? Bool) ?? false
+        } else if message.name == "pegasusSpecData" {
+            if let b64 = message.body as? String {
+                AirPlayCoordinator.shared.relay(b64)
+            }
         }
     }
 }

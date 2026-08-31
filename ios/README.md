@@ -59,6 +59,36 @@ deliberate differences:
 - **The injected revision carries an `-ios` suffix** so app builds are
   distinguishable in the About screen, analytics and replay build ids.
 
+## AirPlay: the game on the TV, the phone stays normal
+
+Start **Screen Mirroring from Control Center** (there is no API for an
+in-app button to start AirPlay). The app then replaces the letterboxed
+mirror image on the TV with a **full-screen 16:9 live view of the game**,
+while the phone keeps behaving exactly as if AirPlay didn't exist —
+portrait or landscape, touch flying, menus, score submit, everything.
+
+Under the hood the TV runs a **second instance of the game**
+(`spectator.html`) that re-simulates the phone's live input recording in
+lockstep — the same determinism that powers replays and the racing ghost
+guarantees the TV shows the identical run, rendered natively at TV
+aspect. The racing ghost appears on the TV too, and watching a replay
+shows on the TV as well, following your
+transport (pause, scrubbing, speed) exactly. Menus pause the sim, so the
+TV holds the frozen scene while you browse. The TV view lags by AirPlay's inherent ~100–200 ms; the phone in
+your hands has zero added latency, so play by watching either screen.
+
+A Bluetooth/USB game controller keeps working throughout — the shell
+reads it natively (`Pegasus/PadForwarder.swift`): the right analog stick
+commands the nose like the touch stick, throttle is on the left hand —
+the L2 trigger and the left stick pushed up are both analog (squeeze or
+push for partial burn; the stick covers pads whose triggers are digital
+click switches), L1 and D-pad up are full burn — and Menu or Y restarts.
+
+Implementation: `Pegasus/AirPlay.swift` (external-display scene, the
+spectator webview, the sync relay), the `__pegSpecSetSync` publisher
+block in `index.html`, and the spectator machinery in `src/main.rs` (see
+CLAUDE.md's AirPlay bullet for the full picture).
+
 ## Gotchas
 
 - **WebRoot/ is gitignored** (like `pegasus.wasm`) — it's a build product.
@@ -86,7 +116,10 @@ Two workflows, both on free public-repo macOS runners:
   **Release apps** wrapper workflow; automatic publishing on `main` pushes
   is paused since 2026-08 — the push trigger and its deliberately inverted
   `paths-ignore` filter are kept commented out in the workflow for when
-  it resumes): archives with
+  it resumes). The `distribution` input picks **public-beta** (default:
+  the hands-free review + public-group path below) or **internal-only**
+  (upload and stop — internal App Store Connect testers get the build
+  after processing, nobody else; for testing branch builds). Archives with
   xcodebuild **cloud signing** (the App Store Connect API key creates and
   fetches the distribution certificate + profile on the fly — nothing
   signing-related lives in the repo) and uploads to TestFlight.
