@@ -375,6 +375,16 @@ impl Sim {
         self.bodies[self.ship].angvel()
     }
 
+    // How far the landing settle timer has run toward registration, 0..1
+    // (1.0 = registered/held — the timer keeps counting while parked).
+    // Presentation-only read: the HUD draws a fill ring around the ship
+    // while a landing is registering, so a pilot can SEE the 0.8 s hold
+    // instead of guessing it (a field report missed a Hollows visit by two
+    // ticks and read it as "the game didn't register my landing").
+    pub fn land_progress(&self) -> f32 {
+        (self.land_timer / PAD_LAND_TIME).min(1.0)
+    }
+
     pub fn keyframe(&self, tick: u32, glow: f32) -> Keyframe {
         let b = &self.bodies[self.ship];
         let rot = *b.rotation();
@@ -1018,6 +1028,43 @@ mod tests {
                 "a pad-parked ship must refuel, not game-over");
         }
         assert!(sim.fuel > 0.0, "the pad must have refueled the parked ship");
+    }
+
+    #[test]
+    fn land_progress_tracks_the_settle_timer_and_caps_at_one() {
+        // The demo spawn stands the ship on pad 0, so neutral ticks settle
+        // straight into the landing window: progress must climb strictly to
+        // 1.0, the visit must register exactly when it gets there, and the
+        // cap must hold while the ship stays parked.
+        let mut sim = Sim::new(Level::demo());
+        assert_eq!(sim.land_progress(), 0.0, "fresh sim must start at zero");
+        let mut prev = 0.0f32;
+        let mut registered_at = None;
+        for t in 0..(2.0 / PHYSICS_DT) as u32 {
+            let rep = sim.tick(InputState::default());
+            let p = sim.land_progress();
+            assert!(p >= prev, "progress must never move backwards while settled");
+            assert!(p <= 1.0, "progress must cap at 1.0");
+            if rep.landed && registered_at.is_none() {
+                registered_at = Some(t);
+                assert_eq!(p, 1.0, "the visit registers exactly at full progress");
+            }
+            prev = p;
+        }
+        assert!(registered_at.is_some(), "a parked ship must register the visit");
+        assert_eq!(sim.land_progress(), 1.0, "still parked — the cap holds");
+
+        // Leaving the pad resets the timer: progress snaps back to zero.
+        let mut sim = Sim::new(Level::demo());
+        for _ in 0..((PAD_LAND_TIME * 0.6) / PHYSICS_DT) as u32 {
+            sim.tick(InputState::default());
+        }
+        let mid = sim.land_progress();
+        assert!(mid > 0.3 && mid < 1.0, "mid-settle progress expected, got {mid}");
+        for _ in 0..60 {
+            sim.tick(InputState::from_controls(1.0, 0, 0.0, 0.0, false));
+        }
+        assert_eq!(sim.land_progress(), 0.0, "lift-off must reset the settle progress");
     }
 
     fn assert_physics_eq(a: &Keyframe, b: &Keyframe) {
