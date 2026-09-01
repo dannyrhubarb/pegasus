@@ -1454,6 +1454,22 @@ other slot survives. Pads replicate per layer like obstacles
 0.73 below origin — within 0.3 of deck top) for `PAD_LAND_TIME = 0.8 s`. First
 visit per (slot, layer) scores `PAD_POINTS = 100` (green "+100" flash); parked
 ships refuel at `PAD_REFUEL_PER_S = 25/s` ("REFUELING" shown while below max).
+**The settle hold is VISIBLE — the landing settle ring** (2026-09): while
+the timer runs, a green ring around the ship fills clockwise over the
+0.8 s; hold until it closes and the visit is yours. Driven by
+`Sim::land_progress()` (`land_timer / PAD_LAND_TIME`, capped at 1 — a
+presentation-only read; the sim never consumes it, so determinism/replays/
+verification are untouched, no repin), drawn from `world_sim` right after
+the velocity vector in main.rs, so replays show it too; hidden at 1.0
+(the beacon flip / visit flash is the confirmation, and the timer keeps
+counting while parked). Born from a field bug report (Hollows, 2026-09):
+a pilot lifted off TWO TICKS before the hold completed — with no feedback
+during the hold, the silently-uncounted landing read as "the game ate my
+landing"; the ring makes the wait visible instead of changing the
+mechanic (a `PAD_LAND_TIME`/grace change would alter `Sim::tick` and
+break stored replays + require the backend repin dance —
+`sim-core/examples/landing_diag.rs` is the diagnostic that pinned the
+report down, see the sim-core bullet).
 `score` is in the HUD text line. Beacons blink green until visited, then
 steady blue; the minimap draws a deck-width line (green → blue-grey).
 `stand_y` prefers a pad deck over the floor, so the spawn parks on pad 0

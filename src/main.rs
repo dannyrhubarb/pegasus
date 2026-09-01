@@ -3030,6 +3030,38 @@ async fn main() {
                 p1 - perp * (5.0 * ui), speed_col);
         }
 
+        // Landing settle ring: while a landing is REGISTERING — settled on
+        // a pad but the PAD_LAND_TIME hold not yet elapsed — a green ring
+        // around the ship fills clockwise from 12 o'clock; hold until it
+        // closes and the visit is yours. Field lesson (bug report,
+        // 2026-09): a Hollows landing was aborted TWO TICKS before the
+        // 0.8 s hold registered, and with zero feedback during the hold the
+        // pilot read the silence as "the game ate my landing". Reads
+        // world_sim, so replays show the ring too; the sim never sees it
+        // (land_progress is a presentation-only read). Hidden at 1.0 — the
+        // beacon flip / visit flash takes over as the confirmation, and the
+        // timer keeps counting while parked (refuel/repair), where a stuck
+        // full ring would just be noise.
+        let land_p = world_sim.land_progress();
+        if ship_visible && land_p > 0.0 && land_p < 1.0 {
+            let c = w2s(cam_x, cam_y, sh, cam_x, cam_y); // camera is ship-centred
+            let r = 1.05 * view_scale;
+            // Faint full track so the fill reads as progress toward a goal.
+            draw_circle_lines(c.x, c.y, r, 1.5 * ui, Color::from_rgba(120, 140, 170, 60));
+            const SEGS: usize = 48;
+            let col = Color::from_rgba(110, 225, 130, 235); // the "landable" green
+            let mut prev = vec2(c.x, c.y - r); // 12 o'clock
+            for i in 1..=((land_p * SEGS as f32).ceil() as usize).min(SEGS) {
+                // The last segment is trimmed to the exact fraction so the
+                // arc tip moves smoothly instead of in 1/48 jumps.
+                let frac = (i as f32 / SEGS as f32).min(land_p);
+                let th = -std::f32::consts::FRAC_PI_2 + frac * std::f32::consts::TAU;
+                let p = vec2(c.x + r * th.cos(), c.y + r * th.sin());
+                draw_line(prev.x, prev.y, p.x, p.y, 3.5 * ui, col);
+                prev = p;
+            }
+        }
+
         smooth_fps += (get_fps() as f32 - smooth_fps) * 0.05;
         let cave_x = cam_x.rem_euclid(PERIOD);
         let debug_hud = DEBUG_HUD.load(Ordering::Relaxed) != 0;
