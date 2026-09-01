@@ -93,3 +93,13 @@ runs:
           echo "${BACKEND_CONFIG}" | python3 -c 'import json,sys; c = json.load(sys.stdin); assert c["apiBaseUrl"].startswith("https://") and c["replayBaseUrl"].startswith("https://")'
           printf '%s\n' "${BACKEND_CONFIG}" > site/config.json
         fi
+        # App update policy (forced-update wall + runtime config override,
+        # #190): a CHECKED-IN file — policy changes are commits (reviewed,
+        # diffable, self-deploying on the push to main), never console
+        # state. Validated so a malformed edit fails every PR's preview
+        # deploy rather than shipping a file every client parses; all keys
+        # optional ({} = no verdicts, everything fails open), but what's
+        # present must be well-shaped. Clients FETCH it live — the shells
+        # never bundle it (see WEB_ONLY in tools/check-bundle-sync.py).
+        python3 -c 'import json,sys,datetime; p=json.load(sys.stdin); assert isinstance(p,dict); assert all(k in ("android","ios") and isinstance(v,int) for k,v in p.get("minBuild",{}).items()); w=p.get("minWebBuildTime"); assert w is None or datetime.datetime.fromisoformat(w.replace("Z","+00:00")); assert isinstance(p.get("message",""),str); assert all(k in ("android","ios") and isinstance(v,str) for k,v in p.get("storeUrls",{}).items()); c=p.get("config"); assert c is None or (c["apiBaseUrl"].startswith("https://") and c["replayBaseUrl"].startswith("https://"))' < app-policy.json
+        cp app-policy.json site/
