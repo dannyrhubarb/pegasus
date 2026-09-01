@@ -94,6 +94,7 @@ push-retry loop for concurrent deploys):
 - `editor.html` — the **standalone level editor** (issue #89 v1, 2026-07): draws hand-drawn `.level` worlds — the same `poly`/`pad`/`start` representation The Hollows uses — on a pan/zoom canvas. Self-contained like `index.html` (no CDNs), copied by `build-site`. **Deliberately UNLINKED from the game UI** (owner decision pre-merge): it lives at its own path with no menu button and no picker row; the game only meets it through the `?custom=1` test-fly handoff. **While it stays unlinked, editor commits carry NO `Whats-new:` trailers** (the changelog must not advertise an unannounced feature — the PR #110 branch had its trailers stripped before merge; give the editor one proper entry when it's linked up for real). See "Level editor & custom drafts" under "Levels"
 - `tools/gen-third-party-licenses.py` + `third-party-licenses.html` — the generated third-party attribution page served with the site and linked from the About screen; regenerate when `Cargo.lock` changes (see "License")
 - `privacy.html` — standalone privacy policy served with the site (and bundled into both apps), written for the Play Store listing's required privacy-policy URL; same substance as the About screen's `#privacy-note` — keep the two in agreement when the analytics story changes
+- `app-policy.json` — the **checked-in update/config policy** every client fetches at launch (`{}` = no verdicts): **the remote lever over ALREADY-INSTALLED apps and stale web tabs** — commit a `config` override to repoint old installs at a moved backend with no store release, or a `minBuild`/`minWebBuildTime` wall for a genuinely breaking change. **Reach for this whenever a backend move or compatibility break is being planned** (it exists because the #171 migration had no such lever and drained for weeks — pegasus-backend#38); see "App update policy" under "Game menu"
 - `tools/gen-whats-new.py` + `tools/whats-new-backfill.json` + `tools/whats-new-overrides.json` — deploy-time generator for `whats-new.json`, the About screen's What's New changelog (see "What's new page" — **every user-facing commit needs a `Whats-new:` trailer**; the overrides file rewords already-merged entries)
 - `index.html` — web wrapper, safe-area insets, the **HTML game menu** (start / pause / game-over screens, level picker, settings, high scores, about — see "Game menu"), **gamepad polling**, and a **boot guard** (touch/stick input moved in-canvas — no touch handlers here any more): a small standalone `<script>` tag ahead of the bundle (script tags parse independently, so no error in the bundle/main script can kill it) that paints any script error on screen with file:line and offers a tap-to-reload if `wasm_exports` is missing 8 s after load. Keep it first and self-contained. It also pushes each reported error into a capped `window.__pegErrs` buffer (push-only — the guard never depends on anything) that the analytics module drains (see "Analytics"). It also wraps `console.error` (installed ahead of the bundle, so the wasm `console_error` import routes through it) and appends the last logged error to the banner when the error event is anonymous or attributed to the `.wasm` file — **a Rust panic reaches JS as an opaque trap** (`RuntimeError: unreachable`; iOS Safari mutes it further to a bare "Script error." with no filename, because wasm frames fail its same-origin check), and the only useful description is the panic-hook line logged just before the trap (`src/main.rs` installs `std::panic::set_hook` → `error!("{}", info)`; the *default* hook prints the useless Debug form `PanicHookInfo { payload: Any { .. }, … }`). Unhandled promise rejections get the same banner (skipped when `reason` is null). **Fully-anonymous errors (no filename AND no console.error trace) are deliberately ignored**: same-origin scripts always carry file:line and a wasm panic always logs via the hook first, so the only things that land there are Safari-injected third-party scripts — reproduced live on iOS: opening the **share sheet** runs share/action extensions' preprocessing JS in the page, and an error in any of them arrives as a muted "Script error." (this was the mystery banner of 2026-07-06, seen right after the Pegasus rename and initially blamed on it).
 - `mq_js_bundle.js` — **vendored** miniquad/quad-snd JS loader (from not-fl3/miniquad-samples). Pinned in-repo so deploys don't depend on a third-party host; includes the audio backend. Update it deliberately if macroquad is upgraded. **Gotcha**: it declares globals at top level (`const canvas`, `var gl`, `wasm_exports`, `function load`, …) that share the page's global scope — redeclaring any of them in `index.html`'s inline script is a SyntaxError that silently kills the *whole* inline script (no `load()` → no wasm, page shows only the HTML chrome). Pick distinct names and check the bundle before adding top-level identifiers.
@@ -518,6 +519,62 @@ over the menu and was "hidden" with `opacity: 0` only — an invisible
 so taps there "mysteriously" reloaded to the main menu whenever a newer
 build existed. Hidden overlays must be `pointer-events: none` (the `.show`
 state re-enables them).
+
+### App update policy (forced-update wall + config override)
+The stale-cache toast's forceful sibling (#190, born from the #171
+account split): apps bake `config.json` at build time, so a backend move
+or breaking change leaves old installs silently broken with no way to
+reach them — and a web tab parked open for weeks is nearly as stale.
+Every client checks **`app-policy.json`** at launch AND on a slow
+re-check (10 min interval + on returning to the foreground, throttled
+5 min — webviews fire `visibilitychange`, so resuming the app re-checks):
+the SHELLS (detected via the `PegasusApp`/`__pegAppBuild` bridges) fetch
+`https://pegasusmoonlander.com/app-policy.json` — the LIVE site origin,
+absolute on purpose: works from any install however old (GitHub Pages
+serves `access-control-allow-origin: *`, verified incl. the iOS custom
+scheme's opaque origin); the WEB page fetches it RELATIVE (the same file
+at the root; a preview serves an inert copy — the preview page SKIPS the
+feature entirely, incl. the shared-origin localStorage cache, so the
+prod policy can never leak into a staging-configured preview). The
+policy is a **CHECKED-IN file: `app-policy.json` at the repo root**
+(owner decision 2026-09 — it's public content served to every client, so
+its history belongs in git: a policy change is a reviewed, diffable
+commit that self-deploys on the push to `main`, and reverting it is a
+revert). `build-site` validates and copies it (a malformed edit fails
+every PR's preview deploy); it is deliberately NEVER bundled into the
+app shells (WEB_ONLY in check-bundle-sync.py — fetching it live IS the
+feature). Note the values usually trail the change that motivates them
+by one commit: `minBuild` is a store build's CI run number and
+`minWebBuildTime` a deploy instant, both assigned only when the fixed
+release actually runs. All keys optional (`{}` = no verdicts):
+- `minBuild` `{android, ios}`: a shell build (CI run number, the "(42)"
+  in the About screen's App build) below the platform's number gets the
+  **scr-update wall** — full-screen, undismissable (`walled` latch:
+  `showScreen`/`closeMenu` redirect to it, hardware back no-ops — no
+  `.mbtn.back`), with `message` and a store button from `storeUrls`.
+- `minWebBuildTime` (ISO instant): walls WEB pages whose deploy-baked
+  `__BUILD_TIME__` predates it. The web wall's button is **Reload** (the
+  `?fresh=` navigation), and the first verdict per build spends **one
+  SILENT self-reload** (sessionStorage latch) before anything shows —
+  the reload usually IS the fix; the latch keeps a cache-wedged client
+  (the `?fresh=` lesson above) from reload-looping, and that client gets
+  the visible wall instead. Dev builds (placeholder) are exempt.
+- `config` `{apiBaseUrl, replayBaseUrl, wsUrl}`: **outranks the baked
+  config.json** (the online layer's `Promise.all` waits for both) — the
+  remote fix that repoints old installs at a new backend without a store
+  release; must be complete + https or it falls through whole. A future
+  backend move = deploy the new backend, commit the override, and old
+  installs follow on next launch — no weeks-long drain
+  (pegasus-backend#38).
+**A wall never interrupts a live play**: a verdict arriving mid-flight or
+mid-replay latches (`wallPolicy`) and `showScreen` raises it at the next
+screen — pause, crash, game over, exit; boot is menu-open, so launch
+walls immediately. **FAIL OPEN, always** (the analytics/logging
+philosophy): no file, bad JSON, offline, broken bridge, dev build ⇒ play
+normally; walling needs an explicit well-formed "too old" verdict. The
+last-seen policy is cached (`pegasus_app_policy`) so a known-stale
+client stays walled offline — absence of information never walls, and a
+corrected policy lifts the wall in place.
 
 ### What's new page (per-commit maintenance rule)
 The About screen's **What's new** button opens **scr-whatsnew**: a

@@ -39,6 +39,11 @@ WEB_ONLY = {
     # button, no picker row) and is reachable only by opening its own URL,
     # which cannot happen inside an app shell. 95 KB of unreachable page.
     "editor.html",
+    # The update/config policy (#190) is served to be FETCHED LIVE at
+    # launch — the shells from the live site root, the web page relative.
+    # Bundling it into an app would freeze exactly the thing that must
+    # stay remote (see "App update policy" in CLAUDE.md).
+    "app-policy.json",
 }
 
 # Differences in HOW a file is produced, not IN WHICH bundle it appears,
