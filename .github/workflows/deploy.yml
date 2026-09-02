@@ -34,6 +34,7 @@ jobs:
         with:
           revision: ${{ steps.rev.outputs.short }}
           backend-config: ${{ vars.BACKEND_CONFIG_JSON }}
+          apple-team-id: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Sync site root into gh-pages branch
         uses: ./.github/actions/sync-pages-branch

@@ -23,6 +23,7 @@
 		5E6A50000000000000000005 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		5E6A50000000000000000006 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		5E6A50000000000000000007 /* WebRoot */ = {isa = PBXFileReference; lastKnownFileType = folder; path = WebRoot; sourceTree = "<group>"; };
+		5E6A50000000000000000009 /* Pegasus.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Pegasus.entitlements; sourceTree = "<group>"; };
 		5E6A50000000000000000008 /* Pegasus.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Pegasus.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -54,6 +55,7 @@
 				5E6A50000000000000000004 /* WebRootSchemeHandler.swift */,
 				5E6A50000000000000000005 /* Assets.xcassets */,
 				5E6A50000000000000000006 /* Info.plist */,
+				5E6A50000000000000000009 /* Pegasus.entitlements */,
 				5E6A50000000000000000007 /* WebRoot */,
 			);
 			path = Pegasus;
@@ -203,6 +205,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Pegasus/Pegasus.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -224,6 +227,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Pegasus/Pegasus.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = NO;

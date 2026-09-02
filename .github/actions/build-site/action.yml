@@ -14,6 +14,14 @@ inputs:
       and the game runs with online scores disabled.
     required: false
     default: ""
+  apple-team-id:
+    description: >
+      Apple Developer Team ID (the APPLE_TEAM_ID repo secret). Stamped into
+      .well-known/apple-app-site-association's appIDs so Universal Links
+      verify for the iOS app. Empty = the placeholder file is removed and the
+      site ships no AASA (forks / local builds have no app to link to).
+    required: false
+    default: ""
 runs:
   using: composite
   steps:
@@ -48,6 +56,7 @@ runs:
       env:
         GIT_REV: ${{ inputs.revision }}
         BACKEND_CONFIG: ${{ inputs.backend-config }}
+        APPLE_TEAM_ID: ${{ inputs.apple-team-id }}
       run: |
         mkdir -p site
         cp index.html site/
@@ -68,6 +77,20 @@ runs:
         # Vendored menu font (JetBrains Mono woff2 + its OFL license text),
         # referenced by index.html/editor.html @font-face.
         cp -r fonts site/
+        # Digital Asset Links (Android App Links / related-app detection):
+        # a dot-dir, so it rides cp -a through sync-pages-branch and the
+        # Pages artifact; .nojekyll keeps Pages from dropping it. Web-only
+        # (nothing in an app shell fetches it — see check-bundle-sync.py).
+        cp -r .well-known site/
+        # apple-app-site-association (Universal Links): the repo copy carries
+        # an __APPLE_TEAM_ID__ placeholder so the Team ID stays a secret
+        # rather than repo content (owner preference — the file is public
+        # once served, but forks shouldn't inherit it). No Team ID = no AASA.
+        if [ -n "${APPLE_TEAM_ID}" ]; then
+          sed -i "s|__APPLE_TEAM_ID__|${APPLE_TEAM_ID}|g" site/.well-known/apple-app-site-association
+        else
+          rm site/.well-known/apple-app-site-association
+        fi
         # Shrink the wasm (~30% on top of the size-tuned release profile).
         wasm-opt -Oz -o site/pegasus.wasm target/wasm32-unknown-unknown/release/pegasus.wasm
         # Inject the build's git revision and timestamp into the info overlay.

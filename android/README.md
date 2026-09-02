@@ -123,3 +123,13 @@ hassle.
   sessions as Android webview device-mix.
 - Launcher icons are rendered from the repo's `icon.svg` (adaptive
   foreground at 108dp densities + legacy sizes); re-render if it changes.
+
+## App Links
+
+`AndroidManifest.xml` carries an `autoVerify` intent filter for
+`https://pegasusmoonlander.com/` (root + `index.html` only); the site
+serves `.well-known/assetlinks.json` with the Play app-signing
+certificate's SHA-256, so only the Play-signed release build verifies —
+the `.preview` test APK and locally signed debug builds keep opening links
+in the browser. Check on a device: `adb shell pm get-app-links
+se.danielfalk.pegasus`.

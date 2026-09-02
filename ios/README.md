@@ -114,3 +114,14 @@ The TestFlight pipeline was verified end-to-end 2026-07-20 (build 5, the
 first accepted upload). Re-checked 2026-07-24 after Apple approved the
 Beta App Review — this run exercises the full hands-free path incl. the
 automatic beta-group assignment.
+
+## Universal Links
+
+`Pegasus.entitlements` declares `applinks:pegasusmoonlander.com`; the
+site serves `.well-known/apple-app-site-association` (Team ID stamped at
+deploy time from the `APPLE_TEAM_ID` secret). Only the site root /
+`index.html` opens in the app — previews and document pages stay in
+Safari. If the TestFlight archive ever fails with a profile that "doesn't
+support the Associated Domains capability", enable Associated Domains on
+the App ID once at developer.apple.com → Identifiers (automatic signing
+normally does this itself).

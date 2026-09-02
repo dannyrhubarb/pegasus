@@ -1,0 +1,13 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["__APPLE_TEAM_ID__.se.danielfalk.pegasus"],
+        "components": [
+          { "/": "/", "comment": "The game at the site root opens in the app (query string forwarded)." },
+          { "/": "/index.html", "comment": "Same page, explicit filename." }
+        ]
+      }
+    ]
+  }
+}
