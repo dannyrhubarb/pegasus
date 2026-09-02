@@ -3233,8 +3233,9 @@
     //   latch — the reload usually IS the fix; the latch stops the
     //   documented cache-wedge from looping it) before anything shows.
     // - `config` overrides the baked config.json — the remote fix that
-    //   would have made the #171 drain a zero-day (shells only in effect:
-    //   the web's config.json is deploy-fresh, previews are excluded).
+    //   would have made the #171 drain a zero-day. SHELLS ONLY, enforced
+    //   at the apply site: the web's config.json is deploy-fresh at every
+    //   load, so a web override could only misroute the live site.
     // FAIL OPEN, always (the analytics/logging philosophy): no file, bad
     // JSON, offline, broken bridge, dev build ⇒ play normally; walling
     // needs an explicit, well-formed "too old" verdict. The last-seen
@@ -3503,15 +3504,18 @@
       fetch("config.json?nocache=" + Date.now(), { cache: "no-store" })
         .then(r => (r.ok ? r.json() : null))
         .catch(() => null), // offline build / no server: stays local below
-      policyPromise, // resolves null outside the app shells — zero web impact
+      policyPromise, // the config chain must not race the policy verdict
     ])
       .then(([baked, policy]) => {
-        // A complete policy `config` outranks the baked config.json: the
-        // baked one is frozen into installed apps at build time, and the
-        // override is the remote fix for it pointing at retired
-        // infrastructure (see the app-policy block above; on the web the
-        // policy is always null and `c` is just the fetched config).
-        const c = policyConfig(policy) || baked;
+        // A complete policy `config` outranks the baked config.json IN THE
+        // APP SHELLS ONLY: their baked config is frozen at build time, and
+        // the override is the remote fix for it pointing at retired
+        // infrastructure (see the app-policy block above). The web page
+        // deliberately never applies it — its config.json is deploy-fresh
+        // at every load (a parked tab re-reads config only via a reload,
+        // which fetches fresh anyway), so an override could only ever
+        // misroute the live site during a shell-targeted policy window.
+        const c = (appShell && policyConfig(policy)) || baked;
         pegAnalytics.configure(c); // analytics needs only apiBaseUrl
         if (!c || !c.apiBaseUrl || !c.replayBaseUrl) return;
         backendCfg = c;

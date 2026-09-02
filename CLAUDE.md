@@ -560,12 +560,14 @@ release actually runs. All keys optional (`{}` = no verdicts):
   (the `?fresh=` lesson above) from reload-looping, and that client gets
   the visible wall instead. Dev builds (placeholder) are exempt.
 - `config` `{apiBaseUrl, replayBaseUrl, wsUrl}`: **outranks the baked
-  config.json** (the online layer's `Promise.all` waits for both) — the
-  remote fix that repoints old installs at a new backend without a store
-  release; must be complete + https or it falls through whole. A future
-  backend move = deploy the new backend, commit the override, and old
-  installs follow on next launch — no weeks-long drain
-  (pegasus-backend#38).
+  config.json IN THE SHELLS ONLY** (the online layer's `Promise.all`
+  waits for both; the web page never applies it — its config.json is
+  deploy-fresh at every load, so a web override could only misroute the
+  live site during a shell-targeted window) — the remote fix that
+  repoints old installs at a new backend without a store release; must
+  be complete + https or it falls through whole. A future backend move =
+  deploy the new backend, commit the override, and old installs follow
+  on next launch — no weeks-long drain (pegasus-backend#38).
 **A wall never interrupts a live play**: a verdict arriving mid-flight or
 mid-replay latches (`wallPolicy`) and `showScreen` raises it at the next
 screen — pause, crash, game over, exit; boot is menu-open, so launch
