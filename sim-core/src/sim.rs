@@ -66,7 +66,14 @@ pub const FUEL_OUT_END_SECS: f32 = 2.5;
 
 // The exact simulation constants this build runs with, serialized into every
 // replay blob so a recording can be re-run under the rules it was flown with.
-pub fn sim_params() -> SimParams {
+// Ruleset 1 — the LEGACY BASELINE: the values every v3–v5 recording was
+// flown under, and what those formats' decoders fill the extension fields
+// with. FROZEN forever: when live play moves to a new ruleset, a new
+// ruleset_vN() joins the registry and `sim_params()` starts returning it —
+// this function must keep returning exactly these numbers (the module
+// consts stay their single source; a future ruleset overrides fields on
+// top of this baseline rather than editing the consts).
+pub fn ruleset_v1() -> SimParams {
     SimParams {
         dt: PHYSICS_DT,
         gravity_y: GRAVITY_Y,
@@ -83,11 +90,26 @@ pub fn sim_params() -> SimParams {
         crash_dv_soft: CRASH_DV_SOFT,
         crash_dv_hard: CRASH_DV_HARD,
         hull_max: HULL_MAX,
+        pad_land_time: PAD_LAND_TIME,
+        pad_refuel_per_s: PAD_REFUEL_PER_S,
+        hull_repair_per_s: HULL_REPAIR_PER_S,
+        fuel_out_end_secs: FUEL_OUT_END_SECS,
+        min_logic: 1,
     }
 }
 
+// The ruleset LIVE PLAY runs — what the recorder stamps into new blobs and
+// what the backend verifier's registry must contain. Currently ruleset 1;
+// a tuning change means adding ruleset_v2() and pointing this at it (see
+// issue #194 — never editing ruleset_v1()).
+pub fn sim_params() -> SimParams {
+    ruleset_v1()
+}
+
 // The ship's state at a spawn/reset point: standing on the floor (or pad 0
-// at the origin), upright, still, tanks full.
+// at the origin), upright, still, tanks full. Fuel/hull are the BASELINE
+// maxima; Sim's internal spawn path (`spawn_kf`) overlays its own ruleset's
+// maxima on top, so a non-baseline ruleset spawns with the right tanks.
 pub fn spawn_keyframe(level: &Level, x: f32) -> Keyframe {
     Keyframe {
         tick: 0,
@@ -188,6 +210,11 @@ pub struct Sim {
     // lifetime — switching level means a fresh Sim (same rule as a new run).
     pub level: Level,
 
+    // The RULESET this sim runs under — every behavioral constant `tick`
+    // reads. Live play uses `sim_params()`; resim/playback build from a
+    // recording's header (`Sim::with_rules`). Immutable like `level`.
+    pub rules: SimParams,
+
     // Ship systems (all tick-driven).
     pub fuel: f32,
     pub hull: f32,
@@ -205,16 +232,25 @@ pub struct Sim {
 }
 
 impl Sim {
+    // Live play: the current ruleset (`sim_params()`).
     pub fn new(level: Level) -> Sim {
+        Sim::with_rules(level, sim_params())
+    }
+
+    // Resim/playback/verification: build the sim FROM a recording's header
+    // ruleset, so a run replays under the rules it was flown with — the
+    // format-v6 contract (issue #194). Under ruleset 1 headers this is
+    // bit-identical to `new` (same numbers, same op sequence).
+    pub fn with_rules(level: Level, rules: SimParams) -> Sim {
         let mut bodies = RigidBodySet::new();
         let mut colliders = ColliderSet::new();
 
         let body = RigidBodyBuilder::dynamic()
             .translation(vector![0.0, level.stand_y(0.0)])
-            .angular_damping(ANGULAR_DAMPING)
+            .angular_damping(rules.angular_damping)
             // A whisper of drag: imperceptible at landing speeds but it caps
             // how much momentum can pile up on a long burn or free-fall.
-            .linear_damping(LINEAR_DAMPING)
+            .linear_damping(rules.linear_damping)
             .ccd_enabled(true)
             .build();
         let ship = bodies.insert(body);
@@ -255,7 +291,7 @@ impl Sim {
                 num_solver_iterations: std::num::NonZeroUsize::new(8).unwrap(),
                 ..Default::default()
             },
-            gravity: vector![0.0, GRAVITY_Y],
+            gravity: vector![0.0, rules.gravity_y],
             ship,
             cave: BTreeMap::new(),
             shafts: BTreeMap::new(),
@@ -264,8 +300,9 @@ impl Sim {
             synced_at: None,
             terrain_loaded: false,
             level,
-            fuel: FUEL_MAX,
-            hull: HULL_MAX,
+            rules,
+            fuel: rules.fuel_max,
+            hull: rules.hull_max,
             score: 0,
             max_dist: 0.0,
             run_ticks: 0,
@@ -278,9 +315,18 @@ impl Sim {
         };
         // Seed the collider window at the spawn so even the very first tick
         // has ground under the ship.
-        let kf = spawn_keyframe(&sim.level, SPAWN_X);
+        let kf = sim.spawn_kf(SPAWN_X);
         sim.restore(&kf);
         sim
+    }
+
+    // The spawn keyframe under THIS sim's ruleset (tanks at its maxima).
+    fn spawn_kf(&self, x: f32) -> Keyframe {
+        Keyframe {
+            fuel: self.rules.fuel_max,
+            hull: self.rules.hull_max,
+            ..spawn_keyframe(&self.level, x)
+        }
     }
 
     // Place the ship in the state a Keyframe describes. Used by reset (spawn
@@ -357,7 +403,7 @@ impl Sim {
     // to handle numbering (see the fresh-sim regression test). The game
     // creates a fresh Sim per run instead; this is for tests/tools.
     pub fn reset(&mut self, x: f32) {
-        let kf = spawn_keyframe(&self.level, x);
+        let kf = self.spawn_kf(x);
         self.restore(&kf);
     }
 
@@ -382,7 +428,7 @@ impl Sim {
     // instead of guessing it (a field report missed a Hollows visit by two
     // ticks and read it as "the game didn't register my landing").
     pub fn land_progress(&self) -> f32 {
-        (self.land_timer / PAD_LAND_TIME).min(1.0)
+        (self.land_timer / self.rules.pad_land_time).min(1.0)
     }
 
     pub fn keyframe(&self, tick: u32, glow: f32) -> Keyframe {
@@ -462,7 +508,7 @@ impl Sim {
             let a = rb.rotation().angle();
 
             if throttle > 0.0 {
-                let f = THRUST_FORCE * throttle;
+                let f = self.rules.thrust_force * throttle;
                 rb.add_force(vector![-a.sin() * f, a.cos() * f], true);
             }
 
@@ -475,7 +521,7 @@ impl Sim {
                 let (lx, ly) = (0.30 * side, -0.71);
                 let px = rb.translation().x + lx * a.cos() - ly * a.sin();
                 let py = rb.translation().y + lx * a.sin() + ly * a.cos();
-                let (fx, fy) = (-RCS_FORCE * a.sin(), RCS_FORCE * a.cos());
+                let (fx, fy) = (-self.rules.rcs_force * a.sin(), self.rules.rcs_force * a.cos());
                 rb.add_force_at_point(vector![fx, fy], point![px, py], true);
             }
 
@@ -489,21 +535,23 @@ impl Sim {
                 let mut err = target - a;
                 if err > std::f32::consts::PI { err -= std::f32::consts::TAU; }
                 if err < -std::f32::consts::PI { err += std::f32::consts::TAU; }
-                heading_torque = (err * HEADING_KP - rb.angvel() * HEADING_KD)
-                    .clamp(-HEADING_TORQUE_MAX, HEADING_TORQUE_MAX) * steer_mag;
+                heading_torque = (err * self.rules.heading_kp - rb.angvel() * self.rules.heading_kd)
+                    .clamp(-self.rules.heading_torque_max, self.rules.heading_torque_max)
+                    * steer_mag;
                 rb.add_torque(heading_torque, true);
             }
             report.heading_torque = heading_torque;
 
             // Fuel burn for whatever fired this tick.
             if throttle > 0.0 {
-                self.fuel -= FUEL_BURN_MAIN * throttle * PHYSICS_DT;
+                self.fuel -= self.rules.fuel_burn_main * throttle * PHYSICS_DT;
             }
             if rot != 0 {
-                self.fuel -= FUEL_BURN_RCS * PHYSICS_DT;
+                self.fuel -= self.rules.fuel_burn_rcs * PHYSICS_DT;
             } else if heading_torque != 0.0 {
                 self.fuel -=
-                    FUEL_BURN_RCS * (heading_torque.abs() / HEADING_TORQUE_MAX) * PHYSICS_DT;
+                    self.rules.fuel_burn_rcs * (heading_torque.abs() / self.rules.heading_torque_max)
+                        * PHYSICS_DT;
             }
             self.fuel = self.fuel.max(0.0);
         }
@@ -540,10 +588,12 @@ impl Sim {
             // within one tick; gravity/thrust move v by < 0.05 m/s per tick).
             let (dvx, dvy) = (vx - self.prev_vel.0, vy - self.prev_vel.1);
             let dv = (dvx * dvx + dvy * dvy).sqrt();
-            if dv > CRASH_DV_SOFT {
-                let damage = (dv - CRASH_DV_SOFT) / (CRASH_DV_HARD - CRASH_DV_SOFT) * HULL_MAX;
+            if dv > self.rules.crash_dv_soft {
+                let damage = (dv - self.rules.crash_dv_soft)
+                    / (self.rules.crash_dv_hard - self.rules.crash_dv_soft)
+                    * self.rules.hull_max;
                 self.hull -= damage;
-                let destroyed = dv > CRASH_DV_HARD || self.hull <= 0.0;
+                let destroyed = dv > self.rules.crash_dv_hard || self.hull <= 0.0;
                 let rot = *self.bodies[self.ship].rotation();
                 report.impact = Some(Impact {
                     dv, damage, destroyed, x, y, vx, vy,
@@ -582,7 +632,7 @@ impl Sim {
                 .flatten();
             if let Some(key) = on_pad {
                 self.land_timer += PHYSICS_DT;
-                if self.land_timer >= PAD_LAND_TIME {
+                if self.land_timer >= self.rules.pad_land_time {
                     // First visits always register (beacons turn blue), but
                     // they only pay points on Pads-scoring levels — on
                     // Distance levels the score IS max |x|.
@@ -620,8 +670,12 @@ impl Sim {
                             Scoring::Distance => {}
                         }
                     }
-                    self.fuel = (self.fuel + PAD_REFUEL_PER_S * PHYSICS_DT).min(FUEL_MAX);
-                    self.hull = (self.hull + HULL_REPAIR_PER_S * PHYSICS_DT).min(HULL_MAX);
+                    self.fuel =
+                        (self.fuel + self.rules.pad_refuel_per_s * PHYSICS_DT)
+                            .min(self.rules.fuel_max);
+                    self.hull =
+                        (self.hull + self.rules.hull_repair_per_s * PHYSICS_DT)
+                            .min(self.rules.hull_max);
                     report.landed = true;
                 }
             } else {
@@ -639,7 +693,7 @@ impl Sim {
             } else {
                 self.fuel_out_timer = 0.0;
             }
-            report.fuel_out = self.fuel_out_timer >= FUEL_OUT_END_SECS;
+            report.fuel_out = self.fuel_out_timer >= self.rules.fuel_out_end_secs;
         } else {
             self.land_timer = 0.0;
         }
@@ -915,7 +969,10 @@ impl Sim {
 // recorded keyframes bit-for-bit (glow excepted — it's a render-side
 // smoothing; resim substitutes the commanded throttle).
 pub fn resim(rec: &Recording) -> Vec<Keyframe> {
-    let mut sim = Sim::new(Level::from_params(&rec.level));
+    // The v6 contract: the recording's header IS the ruleset — the run
+    // replays under the rules it was flown with, whatever this build's
+    // current ruleset is (ruleset-1 headers make this identical to new()).
+    let mut sim = Sim::with_rules(Level::from_params(&rec.level), rec.params);
     let Some(&k0) = rec.keyframes.first() else { return Vec::new() };
     sim.restore(&k0);
     let mut out = vec![k0];
@@ -968,8 +1025,18 @@ mod tests {
     }
 
     fn record_scripted_flight(level: Level, ticks: u32) -> (Recording, Vec<Keyframe>) {
-        let mut sim = Sim::new(level.clone());
-        let mut rec = Recording::new(sim_params(), level.to_params(), u32::MAX);
+        record_scripted_flight_with(level, ticks, sim_params())
+    }
+
+    // The same scripted flight under an explicit ruleset — the fixture for
+    // the header-ruleset resim tests (issue #194).
+    fn record_scripted_flight_with(
+        level: Level,
+        ticks: u32,
+        rules: SimParams,
+    ) -> (Recording, Vec<Keyframe>) {
+        let mut sim = Sim::with_rules(level.clone(), rules);
+        let mut rec = Recording::new(rules, level.to_params(), u32::MAX);
         rec.push_keyframe(sim.keyframe(0, 0.0));
         for t in 0..ticks {
             let input = script(t);
@@ -1028,6 +1095,35 @@ mod tests {
                 "a pad-parked ship must refuel, not game-over");
         }
         assert!(sim.fuel > 0.0, "the pad must have refueled the parked ship");
+    }
+
+    #[test]
+    fn a_recording_resims_bit_exactly_under_its_own_header_ruleset() {
+        // The issue #194 contract: fly under a NON-baseline ruleset (the
+        // planned ruleset-2 preview — halved settle hold), record with that
+        // header, and resim() must rebuild the sim FROM the header and
+        // reproduce every keyframe bit-for-bit — whatever ruleset this
+        // build's live play uses.
+        let rules = SimParams { pad_land_time: 0.4, ..sim_params() };
+        let (rec, kfs) = record_scripted_flight_with(Level::demo(), 1200, rules);
+        // Through the wire: serialize (must pick v6) → deserialize → resim.
+        let blob = rec.serialize(0);
+        assert_eq!(u16::from_le_bytes([blob[4], blob[5]]), 6, "non-baseline ⇒ v6");
+        let (back, _) = Recording::deserialize(&blob).expect("v6 decodes");
+        let out = resim(&back);
+        assert_eq!(out.len(), kfs.len());
+        for (a, b) in kfs.iter().zip(out.iter()) {
+            assert_physics_eq(a, b);
+        }
+
+        // And the ruleset genuinely applies: parked on the spawn pad, the
+        // visit registers after 0.4 s — before the baseline's 0.8 s hold.
+        let mut sim = Sim::with_rules(Level::demo(), rules);
+        let registered = (0..120)
+            .position(|_| sim.tick(InputState::default()).landed)
+            .expect("a parked ship must register");
+        let secs = (registered + 1) as f32 * PHYSICS_DT;
+        assert!(secs < 0.5, "registered after {secs} s — the header hold didn't apply");
     }
 
     #[test]
