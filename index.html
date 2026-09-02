@@ -1243,11 +1243,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">78e7efe</div>
+        <div class="info-value" id="git-rev">613e29b</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-08-31T05:36:48Z</div>
+        <div class="info-value" id="build-time">2026-09-02T19:07:31Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -1346,6 +1346,17 @@
              placeholder="YOUR CALLSIGN">
       <div class="mbtn primary" id="btn-name-submit">Submit</div>
       <div class="mbtn back" id="btn-name-skip">Skip</div>
+    </div>
+
+    <!-- Forced-update wall (app shells only, #190): shown when
+         app-policy.json declares this build too old — see the policy block
+         in the script. Deliberately NO .mbtn.back and no other exit:
+         uiBack's generic branch finds nothing, and showScreen/closeMenu
+         redirect here while walled, so the wall cannot be dismissed. -->
+    <div class="screen" id="scr-update">
+      <div class="h2">UPDATE REQUIRED</div>
+      <div class="hint" id="update-msg"></div>
+      <div class="mbtn primary" id="btn-store">Update</div>
     </div>
 
     <!-- CRT scanlines + vignette + sweep, over everything but tap-transparent -->
@@ -1756,7 +1767,17 @@
       }
     }, 200);
 
+    // Forced-update wall latches (#190, set by the app-policy block further
+    // down). `walled` = the wall is up: every navigation lands back on
+    // scr-update, and only a fresh policy verdict lifts it — never the UI.
+    // `wallPolicy` = a standing "too old" verdict whose wall hasn't been
+    // raised yet because the canvas was live when it arrived (a wall must
+    // never interrupt a play); the next screen raises it here.
+    let walled = false;
+    let wallPolicy = null;
     function showScreen(id) {
+      if (!walled && wallPolicy && id !== "scr-update") armWall(wallPolicy);
+      if (walled && id !== "scr-update") id = "scr-update";
       if (overlay === "scr-bugreport" && id !== "scr-bugreport") bugReportLeft();
       overlay = id;
       menuEl.classList.add("open");
@@ -1774,6 +1795,7 @@
       syncHistory();
     }
     function closeMenu() {
+      if (walled) { showScreen("scr-update"); return; }
       if (overlay === "scr-bugreport") bugReportLeft();
       overlay = null;
       menuEl.classList.remove("open");
@@ -2675,7 +2697,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "78e7efe";
+    const wasmRev = "613e29b";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -3187,6 +3209,172 @@
       pegAnalytics.pollRuns();
     }, 500);
 
+    // --- App update policy (forced-update wall + config override, #190) -----
+    // Installed apps bake config.json at build time, so a backend move (the
+    // #171 account split) or a breaking change leaves old installs silently
+    // broken or pointing at infrastructure being retired — and a web tab
+    // parked open for weeks can be nearly as stale. The client fetches
+    // app-policy.json — the SHELLS from the LIVE SITE ORIGIN, absolute on
+    // purpose (more durable than any API host — it's the identity #157's RP
+    // ID makes permanent; GitHub Pages serves access-control-allow-origin:*
+    // — verified incl. the iOS custom scheme's opaque origin), the WEB
+    // relative (the same checked-in file at the root; a preview serves an
+    // inert copy — the preview page skips the feature entirely below) — at
+    // launch AND on a slow re-check (10 min + on foreground, throttled) so
+    // an app resumed from the switcher for weeks still sees a new verdict:
+    // - `minBuild` {android, ios} walls shell builds below it (CI run
+    //   number); `minWebBuildTime` (ISO instant) walls web pages whose
+    //   baked 2026-09-02T19:07:31Z predates it. A wall NEVER interrupts a live
+    //   play: a mid-flight/replay verdict latches in `wallPolicy` and
+    //   showScreen raises it at the next screen (pause, crash, game over,
+    //   exit) — boot is menu-open, so launch walls immediately. On the web
+    //   the wall's action is a RELOAD, not a store visit, and the first
+    //   verdict per build spends one SILENT self-reload (sessionStorage
+    //   latch — the reload usually IS the fix; the latch stops the
+    //   documented cache-wedge from looping it) before anything shows.
+    // - `config` overrides the baked config.json — the remote fix that
+    //   would have made the #171 drain a zero-day (shells only in effect:
+    //   the web's config.json is deploy-fresh, previews are excluded).
+    // FAIL OPEN, always (the analytics/logging philosophy): no file, bad
+    // JSON, offline, broken bridge, dev build ⇒ play normally; walling
+    // needs an explicit, well-formed "too old" verdict. The last-seen
+    // policy is cached so a known-stale client stays walled offline — but
+    // absence of information never walls, and a corrected policy lifts the
+    // wall in place.
+    const POLICY_URL = "https://pegasusmoonlander.com/app-policy.json";
+    const appShell = (function () {
+      try {
+        if (window.PegasusApp && PegasusApp.appBuild)
+          return { platform: "android", build: String(PegasusApp.appBuild()) };
+        if (window.__pegAppBuild)
+          return { platform: "ios", build: String(window.__pegAppBuild) };
+      } catch (e) { /* broken bridge — treat as web */ }
+      return null;
+    })();
+    // The web page's own version identity: the deploy-baked build instant
+    // (`rawBuildTime`, captured by the About block above BEFORE the dev
+    // fallback rewrites the element — reading the DOM here is too late).
+    // Placeholder = dev build = feature off; previews are excluded too
+    // (fresh by construction, and the root page's cached policy must not
+    // leak into them — same localStorage origin).
+    const webBuild = (function () {
+      if (appShell) return null;
+      try {
+        if (/\/pr-\d+\//.test(location.pathname)) return null;
+        return rawBuildTime && !rawBuildTime.startsWith("__")
+          ? { buildTime: rawBuildTime } : null;
+      } catch (e) { return null; }
+    })();
+    function policyWalls(p) {
+      // True only on an explicit, well-formed verdict for THIS platform.
+      try {
+        if (!p || typeof p !== "object") return false;
+        if (appShell) {
+          if (!p.minBuild) return false;
+          const min = p.minBuild[appShell.platform];
+          const m = appShell.build.match(/\((\d+)\)/); // "1.0 (42)" → 42
+          if (typeof min !== "number" || !isFinite(min) || !m) return false;
+          return parseInt(m[1], 10) < min;
+        }
+        if (!webBuild || typeof p.minWebBuildTime !== "string") return false;
+        const built = Date.parse(webBuild.buildTime);
+        const min = Date.parse(p.minWebBuildTime);
+        if (!isFinite(built) || !isFinite(min)) return false;
+        return built < min;
+      } catch (e) { return false; }
+    }
+    function policyConfig(p) {
+      // The override must be complete and https to outrank the baked
+      // config — a partial object falls through rather than half-applying.
+      const c = p && p.config;
+      return (c && typeof c.apiBaseUrl === "string" && c.apiBaseUrl.startsWith("https://") &&
+              typeof c.replayBaseUrl === "string" && c.replayBaseUrl.startsWith("https://"))
+        ? c : null;
+    }
+    const freshUrl = () => location.pathname + "?fresh=" + Date.now();
+    function armWall(p) {
+      // Turn the standing verdict into the visible wall. Web first: spend
+      // the build's one silent self-reload if it hasn't been — navigating
+      // away IS the fix when the CDN serves the new build; the latch keeps
+      // a cache-wedged client (the ?fresh= lesson) from reload-looping,
+      // and IT gets the visible wall with a manual Reload instead.
+      if (!appShell) {
+        try {
+          if (sessionStorage.getItem("pegasus_wall_reload") !== webBuild.buildTime) {
+            sessionStorage.setItem("pegasus_wall_reload", webBuild.buildTime);
+            location = freshUrl();
+            return; // navigating away — nothing to draw
+          }
+        } catch (e) { /* storage blocked — straight to the wall */ }
+      }
+      walled = true;
+      document.getElementById("update-msg").textContent =
+        (p && typeof p.message === "string" && p.message) || (appShell
+          ? "This version is out of date and can no longer play online. Update to keep flying."
+          : "This page is running an outdated build. Reload to get the latest version.");
+      const btn = document.getElementById("btn-store");
+      if (appShell) {
+        const url = p && p.storeUrls && typeof p.storeUrls[appShell.platform] === "string"
+          ? p.storeUrls[appShell.platform] : "";
+        btn.style.display = url ? "" : "none";
+        if (url) btn.onclick = () => { try { location.href = url; } catch (e) { /* shell rejects */ } };
+      } else {
+        btn.textContent = "Reload";
+        btn.style.display = "";
+        btn.onclick = () => { location = freshUrl(); };
+      }
+    }
+    function applyWall(p) {
+      if (!policyWalls(p)) {
+        wallPolicy = null;
+        if (walled) {
+          walled = false;
+          if (overlay === "scr-update") showScreen("scr-home"); // corrected policy lifts it
+        }
+        return;
+      }
+      wallPolicy = p;
+      if (overlay === null) return; // canvas live (flight/replay): never
+                                    // disturb a play — showScreen raises
+                                    // the latched verdict at the next screen
+      armWall(p);
+      if (walled) showScreen("scr-update"); // not walled ⇒ armWall navigated away
+    }
+    let cachedPolicy = null;
+    let lastPolicyCheck = 0;
+    function fetchPolicy() {
+      lastPolicyCheck = Date.now();
+      return fetch((appShell ? POLICY_URL : "app-policy.json") + "?nocache=" + Date.now(),
+        { cache: "no-store" })
+        .then(r => (r.ok ? r.json() : null))
+        .then(p => {
+          if (!p || typeof p !== "object") return cachedPolicy; // 404/malformed: last known stands
+          cachedPolicy = p;
+          try { localStorage.setItem("pegasus_app_policy", JSON.stringify(p)); } catch (e) { /* quota */ }
+          try { applyWall(p); } catch (e) { /* fail open */ }
+          return p;
+        })
+        .catch(() => cachedPolicy); // offline: last known policy (or none) stands
+    }
+    const policyPromise = (function () {
+      if (!appShell && !webBuild) return Promise.resolve(null); // dev / preview: feature off
+      try { cachedPolicy = JSON.parse(localStorage.getItem("pegasus_app_policy") || "null"); } catch (e) { /* fresh */ }
+      // Apply the cached verdict off the eval path (showScreen's helpers —
+      // pegAnalytics among them — are defined below this block).
+      setTimeout(() => { try { applyWall(cachedPolicy); } catch (e) { /* fail open */ } }, 0);
+      // Slow re-check while the page stays open: 10 min interval + on
+      // returning to the foreground (webviews fire visibilitychange too),
+      // throttled — an install resumed from the app switcher for weeks
+      // never cold-boots, and this is how it still meets a new verdict.
+      setInterval(() => { try { fetchPolicy(); } catch (e) { /* fail open */ } }, 600000);
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState !== "visible") return;
+        if (Date.now() - lastPolicyCheck < 300000) return;
+        try { fetchPolicy(); } catch (e) { /* fail open */ }
+      });
+      return fetchPolicy();
+    })();
+
     // --- Online high scores (dannyrhubarb/pegasus-backend) -----------------
     // config.json ({apiBaseUrl, replayBaseUrl}) is written at deploy time
     // from the BACKEND_CONFIG_JSON repo variable (see build-site); no file =
@@ -3311,9 +3499,19 @@
       return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
     }
 
-    fetch("config.json?nocache=" + Date.now(), { cache: "no-store" })
-      .then(r => (r.ok ? r.json() : null))
-      .then(c => {
+    Promise.all([
+      fetch("config.json?nocache=" + Date.now(), { cache: "no-store" })
+        .then(r => (r.ok ? r.json() : null))
+        .catch(() => null), // offline build / no server: stays local below
+      policyPromise, // resolves null outside the app shells — zero web impact
+    ])
+      .then(([baked, policy]) => {
+        // A complete policy `config` outranks the baked config.json: the
+        // baked one is frozen into installed apps at build time, and the
+        // override is the remote fix for it pointing at retired
+        // infrastructure (see the app-policy block above; on the web the
+        // policy is always null and `c` is just the fetched config).
+        const c = policyConfig(policy) || baked;
         pegAnalytics.configure(c); // analytics needs only apiBaseUrl
         if (!c || !c.apiBaseUrl || !c.replayBaseUrl) return;
         backendCfg = c;
