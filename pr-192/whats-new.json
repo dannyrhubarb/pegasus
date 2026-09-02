@@ -1,5 +1,10 @@
 [
  {
+  "rev": "613e29b",
+  "date": "2026-09-02T21:06:37+02:00",
+  "note": "New: Outdated app versions now get a friendly update screen instead of silently losing online play"
+ },
+ {
   "rev": "24459fa",
   "date": "2026-09-01T07:44:32Z",
   "note": "New: Landings now charge up a green ring — keep her parked until it closes and the pad is yours"
