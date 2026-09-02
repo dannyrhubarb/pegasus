@@ -1692,11 +1692,48 @@ for now:
   `time_limit_ticks` u32 + `goal_distance` f32 right after the flags
   byte, written only by time-LIMITED or GOAL levels — The Flux Sprint /
   The Flux Dash — same per-recording rule, so v3/v4 blobs stay
-  byte-identical). **No backward
+  byte-identical; **v6** = the RULESET format, see "Ruleset versioning"
+  below — written only when the recording's ruleset differs from the
+  ruleset-1 baseline, so while live play flies ruleset 1 every new blob
+  stays byte-identical to v3–v5). **No backward
   compatibility while iterating** — `deserialize` rejects pre-v3
   versions, so older server blobs stop decoding (watch/ghost pushes
   no-op gracefully); add version-tolerant reads when the game is
   released.
+- **Ruleset versioning (format v6, issue #194 phase 1, 2026-09)**:
+  `SimParams` IS the ruleset — since v6 the sim is BUILT from the header
+  (`Sim::with_rules`; `resim`/`ResimPlayer` construct their scratch sims
+  from `rec.params`), so a replay re-runs under the rules it was flown
+  with whatever ruleset live play is on, and a client can bit-exactly
+  replay runs from rulesets it never shipped with as long as only
+  NUMBERS changed. The struct gained the behavioral constants v3–v5
+  never carried (`pad_land_time`, `pad_refuel_per_s`,
+  `hull_repair_per_s`, `fuel_out_end_secs`) — serialized in v6's
+  **length-prefixed extension block** right after the legacy 15 fields,
+  so future params can be APPENDED without a format bump (readers parse
+  the prefix they know, skip the rest; the append contract: a new
+  param's ruleset-1 value must be its neutral default) — plus
+  **`min_logic`**: the oldest client `LOGIC_VERSION` that can re-sim the
+  recording bit-exactly. Parameter-only tunings keep it put; a new
+  mechanic in `Sim::tick` bumps `LOGIC_VERSION` (replay.rs) and stamps
+  it, and older clients then refuse the blob with the distinguishable
+  `ERR_NEEDS_NEWER` (so the UI can say "update to watch" instead of
+  treating it as corrupt — the phase-3 UI work on #194). The rulesets
+  themselves are registry functions in sim.rs: **`ruleset_v1()` is the
+  FROZEN legacy baseline** (what every v3–v5 blob means; never edit it —
+  the module consts are its single source) and **`sim_params()` is what
+  live play flies** (currently = v1; a tuning change = add
+  `ruleset_v2()` and repoint, never edit v1). The racing ghost needs NO
+  ruleset gate: it is an independent lockstep re-sim of its own
+  recording under its own header rules (unlike the LEVEL gate, which
+  stays — the ghost renders in the live world's geometry).
+  `spawn_keyframe` keeps baseline maxima; `Sim` overlays its own
+  ruleset's tanks via the internal `spawn_kf`. **Backend caveat
+  unchanged for now (phase 2)**: the deployed verifier's pin predates
+  v6, so a v6 blob (i.e. any non-baseline-ruleset submission) is
+  silently discarded until the repin that also brings the
+  registry-instead-of-equality check and per-era boards — do NOT ship a
+  `ruleset_v2()` before that lands.
 - **Cosmetic trailer** (2026-08 — the format's FORWARD-compatibility
   channel): optional bytes after the last keyframe, any version — magic
   `PGXT` + TLV entries (tag u8, len u16, payload). Every parser ever

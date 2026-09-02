@@ -86,7 +86,10 @@ impl ResimPlayer {
         if rec.ticks() <= k0.tick {
             return None;
         }
-        let mut s = sim::Sim::new(world::Level::from_params(&rec.level));
+        // Build the scratch sim FROM the recording's header ruleset (the
+        // format-v6 contract, issue #194): a replay re-runs under the rules
+        // it was flown with, whatever ruleset live play is on.
+        let mut s = sim::Sim::with_rules(world::Level::from_params(&rec.level), rec.params);
         s.restore(&k0);
         let prev_pose = s.ship_pose();
         Some(ResimPlayer {
@@ -207,7 +210,7 @@ impl ResimPlayer {
         if kf.tick >= self.end_tick {
             return; // nothing playable at or after this keyframe
         }
-        let mut s = sim::Sim::new(world::Level::from_params(&rec.level));
+        let mut s = sim::Sim::with_rules(world::Level::from_params(&rec.level), rec.params);
         s.restore(&kf);
         self.prev_pose = s.ship_pose();
         self.sim = s;
