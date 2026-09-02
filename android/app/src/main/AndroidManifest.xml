@@ -29,6 +29,24 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Android App Links: https://pegasusmoonlander.com/ opens in the
+                 app once the OS has verified .well-known/assetlinks.json on
+                 the live domain against THIS build's signing certificate
+                 (the release applicationId + Play's app-signing key; the
+                 .preview test APK is deliberately unlisted, so its links
+                 stay in the browser). Root + index.html only — previews
+                 (pr-<n>/), the editor, the APK download and the document
+                 pages must keep opening in the browser. Path matching
+                 ignores the query string, which MainActivity forwards. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:host="pegasusmoonlander.com" />
+                <data android:path="/" />
+                <data android:path="/index.html" />
+            </intent-filter>
         </activity>
     </application>
 </manifest>

@@ -21,6 +21,11 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
     // keeps an accidental swipe during a low pass from killing the run.
     override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge { [.bottom] }
 
+    /// Query string of the Universal Link that launched the app (nil for a
+    /// plain launch); appended to the bundled index.html load. Set by
+    /// SceneDelegate before the view loads.
+    var launchQuery: String?
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
@@ -115,7 +120,13 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
         guard !didStartLoad else { return }
         pushSafeAreaInsets()
         didStartLoad = true
-        webView.load(URLRequest(url: URL(string: "\(WebRootSchemeHandler.scheme)://app/index.html")!))
+        var page = "\(WebRootSchemeHandler.scheme)://app/index.html"
+        if let q = launchQuery { page += "?" + q }
+        // WebRootSchemeHandler strips the query when resolving the file, so a
+        // forwarded query can't miss the bundle; a malformed one just falls
+        // back to the plain page.
+        let url = URL(string: page) ?? URL(string: "\(WebRootSchemeHandler.scheme)://app/index.html")!
+        webView.load(URLRequest(url: url))
     }
 
     // Keep the injected values current (rotation changes which edges carry

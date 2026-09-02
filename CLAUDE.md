@@ -2319,6 +2319,70 @@ mechanisms — no custom banner, no JS, nothing to dismiss or persist:
   Home screen" still works. Accepted as the pre-launch state; flip
   `prefer_related_applications` to `false` if the PWA prompt is wanted
   back in the meantime. The prompt never appears inside the WebView shell.
+- **`.well-known/` — App Links + Universal Links (2026-09)**: NOT part of
+  the banners; it's what makes `https://pegasusmoonlander.com/` open in the
+  INSTALLED app (and, on Android, what `navigator.getInstalledRelatedApps()`
+  would verify). Scope on both platforms is the site root + `/index.html`
+  ONLY — previews (`pr-<n>/`), `editor.html`, the APK download and the
+  document pages must keep opening in the browser (the app bundles its
+  own build, so a preview link opening in it would show the wrong
+  build). Same-origin navigation (the editor's `?custom=1` test-fly
+  handoff) stays in the browser on both OSes by their own rules. A link's
+  QUERY STRING is forwarded into the bundled `index.html` on a cold start
+  (utm attribution keeps working for app opens; `?custom=1` with no
+  stored draft falls through to the normal boot), while a link arriving
+  in a RUNNING app is ignored — reloading would kill a run in progress.
+  **#148 hook**: the multiplayer PR's invite links are `/?join=<code>`
+  (auto-join on landing) — cold starts already carry them, but a WARM
+  invite (app open, friend's link tapped) is the one case the no-op gets
+  wrong; when #148 lands, both shells must hand the code to the page via
+  evaluateJavaScript instead (TODO(#148) comments at `SceneDelegate.scene(_:continue:)`
+  and `MainActivity.onCreate`), and a fragment-form invite would need the
+  fragment forwarded too.
+  Apex only: `www` 301s to the apex and neither OS verifies a
+  redirecting host.
+  - `assetlinks.json` (Digital Asset Links): release package
+    `se.danielfalk.pegasus` + the SHA-256 of Play's **classical**
+    app-signing certificate (Play Console → Setup → App integrity —
+    Google's key under Play App Signing, NOT the upload keystore; the
+    post-quantum key Play also shows can be listed alongside,
+    `sha256_cert_fingerprints` is an array). Public by nature (the
+    certificate, not the key — `apksigner verify --print-certs` on the
+    sideload APK prints it), so it's plain repo content. App side:
+    `AndroidManifest.xml`'s `android:autoVerify="true"` VIEW filter for
+    the two paths; `MainActivity.onCreate` forwards `intent.data.query`.
+    The `.preview` test APK's id is deliberately NOT listed, so its links
+    stay in the browser. Verify on a device with
+    `adb shell pm get-app-links se.danielfalk.pegasus` (`verified`).
+  - `apple-app-site-association` (Universal Links): the repo copy carries
+    an **`__APPLE_TEAM_ID__` placeholder** — `build-site` stamps it from
+    the new `apple-team-id` input (`secrets.APPLE_TEAM_ID`, passed by
+    `deploy.yml` and `preview-deploy.yml`) and REMOVES the file when the
+    input is empty (forks / local builds ship no AASA). Owner preference:
+    the Team ID stays a secret rather than repo content even though the
+    served file is public. App side: `ios/Pegasus/Pegasus.entitlements`
+    (`applinks:pegasusmoonlander.com`, wired via `CODE_SIGN_ENTITLEMENTS`
+    in both build configs — the unsigned CI build ignores it);
+    `SceneDelegate` forwards a cold-start `NSUserActivityTypeBrowsingWeb`
+    URL's query via `GameViewController.launchQuery` and no-ops the warm
+    `scene(_:continue:)`. `-allowProvisioningUpdates` in the TestFlight
+    archive is expected to add the Associated Domains capability to the
+    App ID by itself; if the archive ever fails with a "doesn't support
+    the Associated Domains capability" profile error, enable it once by
+    hand at developer.apple.com → Identifiers. Apple's CURRENT
+    associated-domains doc requires only HTTPS + valid cert + no
+    redirects + no file extension — the oft-quoted `application/json`
+    MIME rule comes from the archived iOS 9 guide and is not in the
+    current one; GitHub Pages serves the extensionless file as
+    `application/octet-stream`. Verify after a `main` deploy via Apple's
+    CDN (what devices actually read):
+    `curl https://app-site-association.cdn-apple.com/a/v1/pegasusmoonlander.com`
+    (the raw site copy is at
+    `https://pegasusmoonlander.com/.well-known/apple-app-site-association`).
+  - **Pipeline**: dot-dirs reach Pages only because `publish-pages.yml`
+    uploads hidden files (see "Deploy pipeline & PR previews").
+    `check-bundle-sync.py` lists `.well-known` as `WEB_ONLY` — nothing in
+    a shell fetches it, and a copy on an app-local origin verifies nothing.
 Both are browser chrome, not page content, so nothing here interacts with
 the menu overlay, the canvas or the touch stick. Bundled copies of
 `manifest.json`/`index.html` in the app shells carry the same fields

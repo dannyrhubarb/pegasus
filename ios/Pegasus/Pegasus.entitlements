@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Universal Links: https://pegasusmoonlander.com/ opens in the app.
+	     The site-side half is .well-known/apple-app-site-association (Team
+	     ID stamped at deploy time by build-site). Apex only — www 301s to
+	     the apex, and an AASA behind a redirect never verifies. -->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:pegasusmoonlander.com</string>
+	</array>
+</dict>
+</plist>

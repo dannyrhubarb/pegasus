@@ -44,6 +44,12 @@ WEB_ONLY = {
     # Bundling it into an app would freeze exactly the thing that must
     # stay remote (see "App update policy" in CLAUDE.md).
     "app-policy.json",
+    # Digital Asset Links for the Play app (assetlinks.json): Android and
+    # Chrome fetch it from the LIVE domain to verify App Links / the
+    # related-app install prompt. Nothing inside a WKWebView/WebView
+    # shell ever requests it, and a copy on an app-local origin would
+    # verify nothing anyway.
+    ".well-known",
 }
 
 # Differences in HOW a file is produced, not IN WHICH bundle it appears,

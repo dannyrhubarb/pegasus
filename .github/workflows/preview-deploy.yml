@@ -52,6 +52,10 @@ jobs:
           # boards; falls back to the prod config until the staging
           # variable is configured.
           backend-config: ${{ vars.BACKEND_CONFIG_JSON_STAGING || vars.BACKEND_CONFIG_JSON }}
+          # Previews get the AASA too so the dot-dir plumbing is exercised
+          # per PR; Apple only ever reads the DOMAIN ROOT's copy, so a
+          # preview's file is inert (and fork PRs never reach this job).
+          apple-team-id: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Sync preview into gh-pages branch
         uses: ./.github/actions/sync-pages-branch

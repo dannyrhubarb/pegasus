@@ -98,7 +98,21 @@ class MainActivity : Activity() {
         // emulator smoke test; the pre-11 fallback path masked it by creating
         // the decor as a side effect).
         enterEdgeToEdge()
-        webView.loadUrl("https://${WebViewAssetLoader.DEFAULT_DOMAIN}/index.html")
+        // Cold start from an App Link (https://pegasusmoonlander.com/?…): the
+        // bundled game opens either way; the query string is forwarded so
+        // utm-tagged links attribute in analytics. A link arriving while the
+        // activity is alive (singleTask → onNewIntent) is deliberately
+        // ignored — reloading would kill a run in progress, and just
+        // foregrounding the app is the whole effect.
+        // TODO(#148): multiplayer invite links are /?join=<code> (auto-join
+        // on landing). Cold start already forwards the query; once #148
+        // lands, override onNewIntent to hand a WARM invite's code to the
+        // page via evaluateJavascript (join from the menu / prompt mid-run
+        // is the page's call), never a reload. A `#` fragment invite would
+        // need intent.data.fragment as well — `query` alone drops it.
+        val query = intent?.data?.takeIf { it.scheme == "https" }?.query
+        val page = "https://${WebViewAssetLoader.DEFAULT_DOMAIN}/index.html"
+        webView.loadUrl(if (query.isNullOrEmpty()) page else "$page?$query")
     }
 
     /**
