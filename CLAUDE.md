@@ -55,7 +55,12 @@ push-retry loop for concurrent deploys):
   **Android release** and **Android test APK** (must match their `name:`
   strings exactly — a workflow that pushes to `gh-pages` without being listed
   here lands on the branch and is never deployed) and snapshots the whole
-  `gh-pages` branch.
+  `gh-pages` branch. **Its upload step sets `include-hidden-files: true`**:
+  `actions/upload-pages-artifact` EXCLUDES dot-files/dirs by default
+  (`tar --exclude=.[^/]*`), so anything under `.well-known/` sat on
+  `gh-pages` and still 404'd (found 2026-09 on the PR #195 preview); the
+  rest of the pipeline was already dot-safe (`build-site` `cp -r`,
+  `sync-pages-branch`'s `cp -a` root replace).
   **Gotcha**: the auto-created `github-pages` environment only allows
   deployments from `main`, so PR-triggered workflows can't deploy directly;
   `workflow_run` workflows execute from the default branch, which passes the

@@ -64,6 +64,12 @@ jobs:
         uses: actions/upload-pages-artifact@v5
         with:
           path: .
+          # The action EXCLUDES dot-files/dirs by default (tar
+          # --exclude=.[^/]*), which silently dropped .well-known/ (Digital
+          # Asset Links + apple-app-site-association) from every deployment
+          # even though it sat on gh-pages — found on the PR #195 preview.
+          # .git/.github stay excluded regardless.
+          include-hidden-files: true
 
       # The Pages API intermittently rejects deployments created in rapid
       # succession ("Deployment failed, try again later.") — seen in practice
