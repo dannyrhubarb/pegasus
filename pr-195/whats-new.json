@@ -1,5 +1,10 @@
 [
  {
+  "rev": "613e29b",
+  "date": "2026-09-02T21:06:37+02:00",
+  "note": "New: Outdated app versions now get a friendly update screen instead of silently losing online play"
+ },
+ {
   "rev": "78e7efe",
   "date": "2026-08-31T07:35:46+02:00",
   "note": "Fixed: The level menu no longer wiggles sideways on smaller iPhones - menu screens stay on rails now"
