@@ -1,7 +1,1 @@
-{
-  "config": {
-    "apiBaseUrl": "https://api.staging.pegasusmoonlander.com",
-    "replayBaseUrl": "https://d3ljabwg64euws.cloudfront.net",
-    "wsUrl": "wss://kkxs0iypdc.execute-api.eu-north-1.amazonaws.com/prod"
-  }
-}
+{}
