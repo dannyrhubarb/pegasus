@@ -557,6 +557,13 @@ release actually runs. All keys optional (`{}` = no verdicts):
   **scr-update wall** — full-screen, undismissable (`walled` latch:
   `showScreen`/`closeMenu` redirect to it, hardware back no-ops — no
   `.mbtn.back`), with `message` and a store button from `storeUrls`.
+  **`storeUrls` is pre-filled** (2026-09, with the install-prompt work):
+  iOS = the App Store link for Apple ID 6792584910, Android = the Play
+  link derived from the release `applicationId` (valid once the listing
+  is live). Without an entry for the platform the wall's Update button
+  is HIDDEN — a wall raised with no store link strands the player — so
+  the URLs live in the file permanently, inert until a `minBuild`
+  verdict actually raises the wall.
 - `minWebBuildTime` (ISO instant): walls WEB pages whose deploy-baked
   `__BUILD_TIME__` predates it. The web wall's button is **Reload** (the
   `?fresh=` navigation), and the first verdict per build spends **one

@@ -1,1 +1,6 @@
-{}
+{
+  "storeUrls": {
+    "android": "https://play.google.com/store/apps/details?id=se.danielfalk.pegasus",
+    "ios": "https://apps.apple.com/app/id6792584910"
+  }
+}
