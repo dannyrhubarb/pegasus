@@ -11,6 +11,12 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Pegasus">
   <link rel="apple-touch-icon" href="./icon-180.png">
+  <!-- Safari's native Smart App Banner for the App Store app (App Store
+       Connect Apple ID). Safari renders nothing until the app is actually
+       purchasable in the viewer's storefront, so this is inert until the
+       App Store release and needs no gating. The Android twin is
+       manifest.json's related_applications (Chrome). -->
+  <meta name="apple-itunes-app" content="app-id=6792584910">
   <!-- Bundled menu font (see the @font-face below). Preloaded because the
        menu is the first paint; crossorigin is required on font preloads
        even same-origin or the browser fetches it twice. -->

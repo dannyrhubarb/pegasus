@@ -2287,6 +2287,38 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   (CANCEL jumping = something claims the gesture; nothing incrementing =
   events never delivered).
 
+## Native-app install prompts (web → store apps, 2026-09)
+
+The website advertises the store apps through the two PLATFORM-NATIVE
+mechanisms — no custom banner, no JS, nothing to dismiss or persist:
+- **iOS — Safari Smart App Banner**: `<meta name="apple-itunes-app"
+  content="app-id=6792584910">` in `index.html`'s `<head>` (the numeric
+  **Apple ID** of the App Store Connect app record — App Information →
+  General; not the bundle id). Safari draws the banner itself, above the
+  page, with View/Open + a close button, and renders NOTHING while the app
+  isn't purchasable in the viewer's storefront — so the tag is inert until
+  the App Store release, needs no gating, and lights up on its own the
+  moment the app goes live. Never shows inside a frame, the simulator, an
+  installed home-screen PWA or the WKWebView shell. `app-argument` is
+  deliberately unset (the app has no URL handler to receive it).
+- **Android — Chrome's related-app install prompt**: `manifest.json`
+  carries `related_applications` (`platform: "play"`, id =
+  `se.danielfalk.pegasus`, the release `applicationId` — the `.preview`
+  test-APK id is NOT listed on purpose; plus an informational `itunes`
+  entry Chrome ignores) and **`prefer_related_applications: true`**
+  (owner decision 2026-09): Chrome offers the Play app INSTEAD of the PWA
+  install. Chrome resolves the id against Play at prompt time, so
+  **until the app is live on Play (production or open testing) Android
+  Chrome shows NO ambient install prompt at all** — not the Play one (no
+  listing) and not the PWA one (preferred away); the browser-menu "Add to
+  Home screen" still works. Accepted as the pre-launch state; flip
+  `prefer_related_applications` to `false` if the PWA prompt is wanted
+  back in the meantime. The prompt never appears inside the WebView shell.
+Both are browser chrome, not page content, so nothing here interacts with
+the menu overlay, the canvas or the touch stick. Bundled copies of
+`manifest.json`/`index.html` in the app shells carry the same fields
+harmlessly (a WebView reads neither).
+
 ## License
 
 Pegasus is **GPL-3.0-or-later** (`LICENSE`). Contributors sign on via the
