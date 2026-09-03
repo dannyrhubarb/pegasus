@@ -1,0 +1,31 @@
+# Keeps the repo's issue labels in sync with .github/labels.json — the
+# checked-in label convention (CONTRIBUTING.md → "Issue labels"). Runs on
+# every push to main that touches the file or the script, and on demand.
+# Prunes labels that aren't in the file: the file IS the convention, so add
+# a label there, not in the GitHub UI.
+name: Sync labels
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/labels.json
+      - tools/sync-labels.py
+      - .github/workflows/labels.yml
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+concurrency:
+  group: labels
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 tools/sync-labels.py --prune
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
