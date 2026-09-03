@@ -29,6 +29,16 @@ name: iOS TestFlight
 
 on:
   workflow_dispatch:
+    inputs:
+      distribution:
+        description: >-
+          public = submit to Beta App Review + attach to the public beta group
+          (the default, also what a push trigger would do); internal = upload
+          only — App Store Connect team members under TestFlight → Internal
+          Testing get it automatically, no review, the public group never sees it.
+        type: choice
+        options: [public, internal]
+        default: public
   # Push trigger PAUSED — restore by uncommenting this block verbatim.
   # push:
   #   branches: [main]
@@ -184,6 +194,9 @@ jobs:
       # name comes from the TESTFLIGHT_GROUP_NAME repo variable (default
       # "Public beta"); a group that doesn't exist yet is a soft no-op.
       - name: Assign build to TestFlight group
+        # Skipped for an internal-only dispatch (see the input above); an
+        # empty input (push trigger, if ever resumed) means public.
+        if: inputs.distribution != 'internal'
         env:
           BUNDLE_ID: se.danielfalk.pegasus
           BUILD_VERSION: ${{ github.run_number }}

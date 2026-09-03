@@ -366,7 +366,15 @@ while the wasm loads):
   downloadable/shareable text file — see "Client log & bug reports" under
   "Analytics") and the
   **⟳ Reload latest build** button (`#force-reload`, same `?fresh=<ts>`
-  bypass as the toast below).
+  bypass as the toast below). Debug-only (visible while the Debug HUD
+  toggle is on, like Settings' `#reset-consent`): the **Camera test**
+  button (`#cam-test`, 2026-09) — the `getUserMedia` PROBE for the
+  video-avatar idea (#200): logs `secureContext` / `mediaDevices` /
+  origin, requests the selfie camera and shows the raw feed in a round
+  bubble with the verdict (or the error name) beneath; every step goes
+  through `console.log` so a bug report zip carries it. Stops on leaving
+  the screen. It exists to answer whether the iOS `pegasus://` origin is
+  a secure context — nothing is sent anywhere.
 - **scr-pause**: Resume / Exit to menu. **scr-gameover**: CRASHED + run
   distance + best, Fly again / Watch replay / "‹ Back" (`#btn-gomenu` —
   ends the run and opens the fly-mode level picker; home when there's no
@@ -2116,7 +2124,11 @@ re-acquired on the `visibilitychange` back while still wanted).
   xcodebuild, no secrets) and `ios-testflight.yml` (**manual dispatch
   ONLY** — automatic publish on `main` pushes is PAUSED since 2026-08,
   owner request; see the paused-trigger note under Android CI —
-  cloud-signed archive → TestFlight;
+  cloud-signed archive → TestFlight; its `distribution` input
+  (2026-09) = `public` (default: Beta App Review + the public group) or
+  `internal` (upload only — ASC team members under Internal Testing get
+  it automatically, the public group never sees it; used for shell
+  probes like the #200 camera test);
   needs the four `APP_STORE_CONNECT_API_*`/`APPLE_TEAM_ID` repo secrets
   and the ASC app record; build number = workflow run number). Both run on
   **`macos-26` and select the newest stable Xcode** — App Store Connect
@@ -2127,7 +2139,9 @@ re-acquired on the `visibilitychange` back while still wanted).
   on a fresh runner can't see locally auto-generated schemes — and
   `fetch-depth: 0` (What's New). `Info.plist` carries
   `ITSAppUsesNonExemptEncryption = false` so TestFlight builds skip the
-  per-upload compliance question. After the upload,
+  per-upload compliance question, and `NSCameraUsageDescription` (2026-09,
+  for the #200 camera probe — a missing key is a hard crash the moment
+  `getUserMedia` runs, not a denial). After the upload,
   `ios/testflight-distribute.py` (ASC API, same key) waits out Apple's
   build processing, submits the build to Beta App Review and attaches it
   to the beta group named by the `TESTFLIGHT_GROUP_NAME` repo variable
