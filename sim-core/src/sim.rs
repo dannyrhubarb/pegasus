@@ -106,6 +106,21 @@ pub fn sim_params() -> SimParams {
     ruleset_v1()
 }
 
+// THE REGISTRY: every ruleset ever shipped, in order — index + 1 is the
+// ruleset NUMBER stored on board rows and shown as the "vN" tag. The
+// backend verifier boards a submission only if its header equals one of
+// these exactly (predetermined tunings — owner rule, issue #194); the
+// newest entry must be what `sim_params()` returns. Append-only.
+pub fn rulesets() -> Vec<SimParams> {
+    vec![ruleset_v1()]
+}
+
+// The registry number of a header ruleset (1-based), None if it matches
+// no shipped ruleset.
+pub fn ruleset_number(params: &SimParams) -> Option<u16> {
+    rulesets().iter().position(|r| r == params).map(|i| i as u16 + 1)
+}
+
 // The ship's state at a spawn/reset point: standing on the floor (or pad 0
 // at the origin), upright, still, tanks full. Fuel/hull are the BASELINE
 // maxima; Sim's internal spawn path (`spawn_kf`) overlays its own ruleset's
