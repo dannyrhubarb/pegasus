@@ -1477,6 +1477,119 @@ mod tests {
     }
 
     #[test]
+    fn warren_geometry_keeps_every_chamber_passage_and_pad_open() {
+        // Geometry lint for the hand-drawn maze (the Hollows lint's twin):
+        // the spawn, every chamber, every riser/drop/slit midpoint, both
+        // chicane gaps and every pad must be open space — an authoring slip
+        // that seals a passage or buries a deck fails at unit-test time.
+        let level = Level::parse(include_str!("../../levels/warren.level"));
+        assert_eq!(level.scoring, Scoring::Time);
+        let t = level.terrain.as_ref().expect("warren must be a terrain level");
+        assert_eq!(t.pads.len(), 7, "The Warren ships with seven pads");
+        let sp = t.start.expect("The Warren spawns on a start platform");
+        for dx in [-PAD_HALF_W, 0.0, PAD_HALF_W] {
+            assert!(!t.point_in_rock(glam::vec2(sp.x + dx, sp.y + 0.4)),
+                "start platform deck is buried in rock");
+        }
+        let waypoints = [
+            (0.0, 6.0, "core"),
+            (-58.0, 6.0, "west hall"),
+            (58.0, 6.0, "east hall"),
+            (-21.0, 4.5, "west tunnel"),
+            (17.0, 4.5, "east tunnel entry"),
+            (20.0, 3.0, "chicane gap under tooth 1"),
+            (27.5, 5.8, "chicane gap over tooth 2"),
+            (-49.75, -4.5, "west drop"),
+            (4.25, -4.5, "core drop"),
+            (-22.8, -4.5, "slit B"),
+            (-52.0, -13.0, "basement west"),
+            (-30.0, -15.5, "under the low lintel"),
+            (0.0, -13.0, "basement east"),
+            (-41.75, 18.0, "west riser"),
+            (54.25, 18.0, "east riser"),
+            (0.0, 18.0, "chimney low"),
+            (0.0, 30.0, "chimney mid"),
+            (0.0, 39.0, "chimney high"),
+            (-55.0, 27.0, "NW loft west"),
+            (-30.0, 30.0, "NW loft east"),
+            (20.0, 30.0, "NE gallery west"),
+            (54.0, 30.0, "NE gallery east"),
+            (22.25, 39.0, "east passage"),
+            (-26.7, 39.0, "slit A"),
+            (-20.0, 50.0, "crown west"),
+            (9.0, 50.0, "over the pillar"),
+            (22.0, 48.0, "crown east"),
+        ];
+        for (x, y, what) in waypoints {
+            assert!(!t.point_in_rock(glam::vec2(x, y)), "{what} at ({x},{y}) is inside rock");
+        }
+        for p in &t.pads {
+            // Deck span just above the collider line, plus the editor's
+            // ship-sized landing-pocket probes (the lintel pad and the
+            // pillar top are deliberately tight, but never THIS tight).
+            for dx in [-PAD_HALF_W, 0.0, PAD_HALF_W] {
+                let q = glam::vec2(p.x + dx, p.y + 0.4);
+                assert!(!t.point_in_rock(q), "pad at ({},{}) deck is buried", p.x, p.y);
+            }
+            for (ox, oy) in [(0.0, 1.2), (0.0, 2.0), (-1.2, 1.0), (1.2, 1.0)] {
+                let q = glam::vec2(p.x + ox, p.y + oy);
+                assert!(!t.point_in_rock(q),
+                    "pad at ({},{}) has rock in its landing pocket", p.x, p.y);
+            }
+        }
+        assert!(!t.point_in_rock(glam::vec2(0.0, level.stand_y(0.0))));
+    }
+
+    #[test]
+    fn every_warren_pad_is_landable_and_completes_as_the_last_one() {
+        // Park the ship on each pad in turn with every OTHER pad already
+        // visited (keyframe mask, the same path a replay seek takes): the
+        // settle must register the landing and, being the last unvisited
+        // pad, complete the run. Proves each deck is physically landable —
+        // the pillar top and the under-lintel pad included — and that
+        // completion is pad-order independent.
+        let level = Level::parse(include_str!("../../levels/warren.level"));
+        let t = level.terrain.as_ref().unwrap();
+        let n = t.pads.len();
+        for (i, pad) in t.pads.iter().enumerate() {
+            let mut sim = Sim::new(level.clone());
+            let mut kf = spawn_keyframe(&level, 0.0);
+            kf.x = pad.x;
+            kf.y = pad.y + 0.78;
+            kf.visited = ((1u64 << n) - 1) & !(1u64 << i);
+            sim.restore(&kf);
+            assert!(!sim.completed);
+            let mut completed = false;
+            for _ in 0..(3.0 / PHYSICS_DT) as u32 {
+                if sim.tick(InputState::default()).completed {
+                    completed = true;
+                    break;
+                }
+            }
+            assert!(completed, "pad {i} at ({},{}) never registered a landing", pad.x, pad.y);
+            assert!(!sim.crashed, "settling on pad {i} crashed the ship");
+        }
+    }
+
+    #[test]
+    fn warren_spawn_stands_on_its_neutral_start_platform() {
+        // The core spawn must stand (not fall through or bounce into a
+        // crash) and register nothing — the start platform is neutral.
+        let level = Level::parse(include_str!("../../levels/warren.level"));
+        let mut sim = Sim::new(level.clone());
+        sim.fuel = 50.0;
+        for _ in 0..(2.0 / PHYSICS_DT) as u32 {
+            let rep = sim.tick(InputState::default());
+            assert!(!rep.scored && !rep.landed, "the start platform must be neutral");
+        }
+        let (_, y, _) = sim.ship_pose();
+        assert!((y - level.stand_y(0.0)).abs() < 0.5, "ship sank or bounced: y={y}");
+        assert!(!sim.crashed);
+        assert!(sim.visited_pads.is_empty(), "no pad visit at the neutral spawn");
+        assert_eq!(sim.fuel, 50.0, "the start platform must not refuel");
+    }
+
+    #[test]
     fn spawn_has_ground_under_the_ship() {
         // The window syncs inside restore/tick, so even tick 0 collides:
         // an idle ship must still be standing (not fallen through) after 2 s.

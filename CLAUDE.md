@@ -883,7 +883,20 @@ tunnels, five pads scattered through them (incl. a perch on the west
 tunnel's sill) plus a neutral `start` platform in the spawn chamber,
 **time-scored**: visit all five as fast as you can, the run ends on the
 last pad; its geometry-lint unit test asserts every chamber / tunnel /
-pad / start waypoint is open space via `Terrain::point_in_rock`).
+pad / start waypoint is open space via `Terrain::point_in_rock`),
+and **The Warren** (2026-08: the third hand-drawn level, the expert's
+burrow — a four-storey maze (basement / ground halls / lofts / crown)
+with SEVEN pads including the two hardest landings shipped so far, a
+freestanding pillar top in the crown and a basement pad under a low
+lintel; the east tunnel is a chicane with a longer safe route around it
+via the crown, two 2.5–2.6 m expert slits shortcut whole wings, and the
+route is long enough that fuel is a genuine resource at race pace.
+Time-scored like The Hollows. Its geometry was authored as
+probe-validated jittered slabs (generator stayed in scratch, like the
+ship-mesh scripts); beyond the waypoint lint it has a stronger per-pad
+test that PARKS the ship on each deck via a keyframe mask and asserts
+the landing registers and completes the run — a buried or
+pocket-blocked pad fails in CI, not on a phone).
 **The Caves** (the original shafted world) was retired 2026-07 with The
 Rift — its world survives as the compiled-in `Level::demo()` (`pads`
 scoring), which remains the no-manifest fallback and the fixture for the
