@@ -4,6 +4,15 @@
     <!-- Online high scores, the ghost and analytics; the game itself is
          fully bundled and runs offline. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Multiplayer video/voice bubbles (getUserMedia in the WebView; the
+         page asks, MainActivity's WebChromeClient forwards the runtime
+         permission prompts). Neither is required hardware: the game plays
+         without a camera, the bubbles just stay off. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <!-- enableOnBackInvokedCallback=false: targeting API 36 turns predictive
          back ON by default, which stops delivering onBackPressed() — and
