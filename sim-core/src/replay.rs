@@ -64,12 +64,17 @@ pub const REPLAY_MAGIC: [u8; 4] = *b"PGRP";
 //                      contract: a new param's LEGACY value (the ruleset-1
 //                      behavior) must be its neutral default — a recording
 //                      whose new param sits at neutral keeps its min_logic.
+// The LevelParams block gains fuel_max (f32, right after goal_distance) —
+// the first per-LEVEL tunable (`fuel = …` in the level file; 0 = the
+// ruleset's default), pinned per stem by the verifier's shipped-level
+// equality check like every other level param.
 // v6 also always carries the v4 flags byte and the v5 time_limit/goal
 // fields (one deterministic layout), whatever the level uses. Per-recording
 // choice, one level up from the others: v6 is written ONLY when the
-// recording's ruleset differs from ruleset 1 (the legacy baseline) — while
-// live play flies ruleset 1, every new blob stays byte-identical to v3–v5
-// and every shipped client keeps decoding it.
+// recording's ruleset differs from ruleset 1 (the legacy baseline) OR the
+// level uses a v6 level tunable — while live play flies ruleset 1 on the
+// shipped levels, every new blob stays byte-identical to v3–v5 and every
+// shipped client keeps decoding it.
 pub const REPLAY_FORMAT_VERSION: u16 = 3;
 pub const REPLAY_FORMAT_VERSION_EXT: u16 = 4;
 pub const REPLAY_FORMAT_VERSION_V5: u16 = 5;
@@ -271,13 +276,34 @@ pub struct LevelParams {
     pub terrain: Option<crate::world::Terrain>, // Some = hand-drawn world (format v4)
     pub time_limit_ticks: u32, // hard run clock, 0 = none (format v5)
     pub goal_distance: f32,    // finish-pad distance, 0 = none (format v5)
+    pub fuel_max: f32,         // per-level tank, 0 = ruleset default (format v6)
+    // More per-level tunables, 0 = ruleset default, all format v6 (in this
+    // serialization order, right after fuel_max):
+    pub gravity_y: f32,
+    pub thrust_force: f32,
+    pub hull_max: f32,
+    pub refuel_per_s: f32,
+    pub start_fuel: f32,
+}
+
+impl LevelParams {
+    // The v6 level-tunable block in serialization order (after fuel_max).
+    fn tunables(&self) -> [f32; 5] {
+        [self.gravity_y, self.thrust_force, self.hull_max, self.refuel_per_s, self.start_fuel]
+    }
+
+    fn has_tunables(&self) -> bool {
+        self.fuel_max != 0.0 || self.tunables().iter().any(|&v| v != 0.0)
+    }
 }
 
 impl LevelParams {
     // The lowest format version whose layout can express this level — the
     // per-recording version choice that keeps every older blob decoding.
     fn format_version(&self) -> u16 {
-        if self.time_limit_ticks != 0 || self.goal_distance != 0.0 {
+        if self.has_tunables() {
+            REPLAY_FORMAT_VERSION_V6
+        } else if self.time_limit_ticks != 0 || self.goal_distance != 0.0 {
             REPLAY_FORMAT_VERSION_V5
         } else if self.endless != 0 || self.terrain.is_some() || self.scoring >= 2 {
             REPLAY_FORMAT_VERSION_EXT
@@ -420,16 +446,21 @@ impl Recording {
 
     // --- Serialization (little-endian) ---
     // Header: magic(4) version(2) build_id(4) params(15×4)
+    //         [v6 only: min_logic(2) ext_len(2) ext(ext_len — 4×f32 today:
+    //          pad_land_time, pad_refuel_per_s, hull_repair_per_s,
+    //          fuel_out_end_secs; append-only)]
     //         level: scoring(1) shafts(1) obstacles(1) pad_spacing(4) seed(4)
-    //         [v4/v5 only, right after seed: flags(1) — bit 0 endless,
-    //          bit 1 terrain present; v5 only: time_limit_ticks(4) +
-    //          goal_distance(4); if flags bit 1: terrain — n_polys(2),
+    //         [v4+ only, right after seed: flags(1) — bit 0 endless,
+    //          bit 1 terrain present; v5+: time_limit_ticks(4) +
+    //          goal_distance(4); v6+: fuel_max(4) gravity_y(4)
+    //          thrust_force(4) hull_max(4) refuel_per_s(4) start_fuel(4)
+    //          (level tunables, 0 = inherit); if flags bit 1: terrain — n_polys(2),
     //          per poly n_verts(2) + verts(2×4 each); n_pads(2) +
     //          pads(2×4 each); has_start(1) [+ start 2×4]; spawn_y(4)]
     //         ticks(4) n_events(4) n_keyframes(4)      = 93 B (v3, no extras)
     // Event:  tick(4) throttle(1) rot(1) steer_x(1) steer_y(1) held(1) = 9 B
     // Keyframe: tick(4) + 11×f32                          = 48 B (v3)
-    //           v4/v5 append visited(8) + run_ticks(4)    = 60 B
+    //           v4+ append visited(8) + run_ticks(4)      = 60 B
     // Trailer (optional, any version, AFTER the last keyframe): "PGXT" +
     //           TLV entries (tag u8, len u16, payload) — cosmetic data old
     //           parsers never reach (see REPLAY_TRAILER_MAGIC). Written
@@ -477,6 +508,12 @@ impl Recording {
         if version >= REPLAY_FORMAT_VERSION_V5 {
             out.extend_from_slice(&self.level.time_limit_ticks.to_le_bytes());
             out.extend_from_slice(&self.level.goal_distance.to_le_bytes());
+        }
+        if version >= REPLAY_FORMAT_VERSION_V6 {
+            out.extend_from_slice(&self.level.fuel_max.to_le_bytes());
+            for f in self.level.tunables() {
+                out.extend_from_slice(&f.to_le_bytes());
+            }
         }
         if let Some(t) = &self.level.terrain {
             out.extend_from_slice(&(t.polys.len() as u16).to_le_bytes());
@@ -595,6 +632,12 @@ impl Recording {
             terrain: None,
             time_limit_ticks: 0,
             goal_distance: 0.0,
+            fuel_max: 0.0,
+            gravity_y: 0.0,
+            thrust_force: 0.0,
+            hull_max: 0.0,
+            refuel_per_s: 0.0,
+            start_fuel: 0.0,
         };
         if version != REPLAY_FORMAT_VERSION {
             let flags = r.u8()?;
@@ -602,6 +645,14 @@ impl Recording {
             if version >= REPLAY_FORMAT_VERSION_V5 {
                 level.time_limit_ticks = r.u32()?;
                 level.goal_distance = r.f32()?;
+            }
+            if version >= REPLAY_FORMAT_VERSION_V6 {
+                level.fuel_max = r.f32()?;
+                level.gravity_y = r.f32()?;
+                level.thrust_force = r.f32()?;
+                level.hull_max = r.f32()?;
+                level.refuel_per_s = r.f32()?;
+                level.start_fuel = r.f32()?;
             }
             if flags & 2 != 0 {
                 // Same hostile-count rule as events/keyframes below: cap
@@ -776,6 +827,8 @@ mod tests {
         LevelParams {
             scoring: 0, shafts: 1, obstacles: 1, pad_spacing: 130.0, seed: 0,
             endless: 0, terrain: None, time_limit_ticks: 0, goal_distance: 0.0,
+            fuel_max: 0.0, gravity_y: 0.0, thrust_force: 0.0, hull_max: 0.0,
+            refuel_per_s: 0.0, start_fuel: 0.0,
         }
     }
 
@@ -917,6 +970,21 @@ mod tests {
             REPLAY_FORMAT_VERSION,
             "the baseline ruleset must keep the legacy version choice"
         );
+    }
+
+    #[test]
+    fn a_level_tunable_forces_v6_under_the_baseline_ruleset() {
+        // Per-level fuel rides LevelParams; a level that sets it needs the
+        // v6 layout even when the ruleset is the plain baseline, and the
+        // value must round-trip.
+        let lp = LevelParams { fuel_max: 60.0, ..lparams() };
+        let mut rec = Recording::new(params(), lp.clone(), u32::MAX);
+        rec.push_keyframe(kf(0));
+        let blob = rec.serialize(0);
+        assert_eq!(u16::from_le_bytes([blob[4], blob[5]]), REPLAY_FORMAT_VERSION_V6);
+        let (back, _) = Recording::deserialize(&blob).expect("deserialize v6 level");
+        assert_eq!(back.level, lp);
+        assert_eq!(back.params, params());
     }
 
     #[test]

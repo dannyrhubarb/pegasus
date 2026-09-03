@@ -291,7 +291,10 @@ impl Sim {
                 num_solver_iterations: std::num::NonZeroUsize::new(8).unwrap(),
                 ..Default::default()
             },
-            gravity: vector![0.0, rules.gravity_y],
+            gravity: vector![
+                0.0,
+                if level.gravity_y != 0.0 { level.gravity_y } else { rules.gravity_y }
+            ],
             ship,
             cave: BTreeMap::new(),
             shafts: BTreeMap::new(),
@@ -299,10 +302,10 @@ impl Sim {
             pads: BTreeMap::new(),
             synced_at: None,
             terrain_loaded: false,
+            fuel: 0.0, // set by spawn_kf/restore below
+            hull: 0.0,
             level,
             rules,
-            fuel: rules.fuel_max,
-            hull: rules.hull_max,
             score: 0,
             max_dist: 0.0,
             run_ticks: 0,
@@ -320,13 +323,38 @@ impl Sim {
         sim
     }
 
-    // The spawn keyframe under THIS sim's ruleset (tanks at its maxima).
+    // The spawn keyframe under THIS sim's ruleset + level (tanks at their
+    // maxima).
     fn spawn_kf(&self, x: f32) -> Keyframe {
         Keyframe {
-            fuel: self.rules.fuel_max,
-            hull: self.rules.hull_max,
+            fuel: self.spawn_fuel(),
+            hull: self.hull_cap(),
             ..spawn_keyframe(&self.level, x)
         }
+    }
+
+    // Effective per-level tunables: the level's own value when it sets one
+    // (level file key in Level's doc), else the ruleset's. The HUD gauges
+    // and banners read these too — never a const — so per-level tanks and
+    // future rulesets render right, in live play and in replays alike.
+    pub fn fuel_cap(&self) -> f32 {
+        if self.level.fuel_max > 0.0 { self.level.fuel_max } else { self.rules.fuel_max }
+    }
+    pub fn hull_cap(&self) -> f32 {
+        if self.level.hull_max > 0.0 { self.level.hull_max } else { self.rules.hull_max }
+    }
+    pub fn spawn_fuel(&self) -> f32 {
+        if self.level.start_fuel > 0.0 {
+            self.level.start_fuel.min(self.fuel_cap())
+        } else {
+            self.fuel_cap()
+        }
+    }
+    fn thrust_force(&self) -> f32 {
+        if self.level.thrust_force > 0.0 { self.level.thrust_force } else { self.rules.thrust_force }
+    }
+    fn refuel_per_s(&self) -> f32 {
+        if self.level.refuel_per_s > 0.0 { self.level.refuel_per_s } else { self.rules.pad_refuel_per_s }
     }
 
     // Place the ship in the state a Keyframe describes. Used by reset (spawn
@@ -502,13 +530,14 @@ impl Sim {
             let (steer_x, steer_y) = input.steer_f32();
             let steer_mag = (steer_x * steer_x + steer_y * steer_y).sqrt().min(1.0);
 
+            let thrust_force = self.thrust_force();
             let rb = self.bodies.get_mut(self.ship).unwrap();
             rb.reset_forces(true);
             rb.reset_torques(true);
             let a = rb.rotation().angle();
 
             if throttle > 0.0 {
-                let f = self.rules.thrust_force * throttle;
+                let f = thrust_force * throttle;
                 rb.add_force(vector![-a.sin() * f, a.cos() * f], true);
             }
 
@@ -591,7 +620,7 @@ impl Sim {
             if dv > self.rules.crash_dv_soft {
                 let damage = (dv - self.rules.crash_dv_soft)
                     / (self.rules.crash_dv_hard - self.rules.crash_dv_soft)
-                    * self.rules.hull_max;
+                    * self.hull_cap();
                 self.hull -= damage;
                 let destroyed = dv > self.rules.crash_dv_hard || self.hull <= 0.0;
                 let rot = *self.bodies[self.ship].rotation();
@@ -671,11 +700,11 @@ impl Sim {
                         }
                     }
                     self.fuel =
-                        (self.fuel + self.rules.pad_refuel_per_s * PHYSICS_DT)
-                            .min(self.rules.fuel_max);
+                        (self.fuel + self.refuel_per_s() * PHYSICS_DT)
+                            .min(self.fuel_cap());
                     self.hull =
                         (self.hull + self.rules.hull_repair_per_s * PHYSICS_DT)
-                            .min(self.rules.hull_max);
+                            .min(self.hull_cap());
                     report.landed = true;
                 }
             } else {
@@ -1124,6 +1153,88 @@ mod tests {
             .expect("a parked ship must register");
         let secs = (registered + 1) as f32 * PHYSICS_DT;
         assert!(secs < 0.5, "registered after {secs} s — the header hold didn't apply");
+    }
+
+    #[test]
+    fn a_level_fuel_override_sets_the_spawn_fill_and_the_refuel_cap() {
+        // `fuel = 60` in a level file: the tank spawns at 60, refueling on a
+        // pad stops at 60 (not the ruleset's 100), and the header carries it
+        // (format v6) so resim reproduces the same tank bit-exactly.
+        let lvl = Level::parse("fuel = 60\n");
+        assert_eq!(lvl.fuel_max, 60.0);
+        assert_eq!(Level::parse("fuel = 1\n").fuel_max, 5.0, "clamped floor");
+        assert_eq!(Level::demo().fuel_max, 0.0, "no key = inherit the ruleset");
+
+        let mut sim = Sim::new(lvl.clone());
+        assert_eq!(sim.fuel, 60.0, "spawn fill is the level's tank");
+        assert_eq!(sim.fuel_cap(), 60.0);
+        sim.fuel = 40.0;
+        for _ in 0..(4.0 / PHYSICS_DT) as u32 {
+            sim.tick(InputState::default()); // parked on pad 0: refuels
+        }
+        assert_eq!(sim.fuel, 60.0, "refuel must cap at the level tank");
+        assert_eq!(Sim::new(Level::demo()).fuel_cap(), FUEL_MAX, "inherit path");
+
+        let (rec, kfs) = record_scripted_flight(lvl, 600);
+        assert_eq!(kfs[0].fuel, 60.0);
+        let blob = rec.serialize(0);
+        assert_eq!(u16::from_le_bytes([blob[4], blob[5]]), 6, "level tunable ⇒ v6");
+        let (back, _) = Recording::deserialize(&blob).expect("v6 decodes");
+        assert_eq!(back.level.fuel_max, 60.0);
+        for (a, b) in kfs.iter().zip(resim(&back).iter()) {
+            assert_physics_eq(a, b);
+        }
+    }
+
+    #[test]
+    fn the_other_level_tunables_apply_and_resim_from_the_header() {
+        // gravity / thrust / hull / refuel_rate / start_fuel: parsed with
+        // their clamps, applied by the sim (each observable), carried in the
+        // v6 header, and — since gravity/thrust change the trajectory — the
+        // resim-from-header round trip must stay bit-exact.
+        let lvl = Level::parse(
+            "fuel = 80\nstart_fuel = 30\ngravity = 3.0\nthrust = 12\nhull = 40\nrefuel_rate = 5\n",
+        );
+        assert_eq!(lvl.gravity_y, -3.0, "file magnitude, stored signed");
+        assert_eq!(lvl.thrust_force, 12.0);
+        assert_eq!(lvl.hull_max, 40.0);
+        assert_eq!(lvl.refuel_per_s, 5.0);
+        assert_eq!(lvl.start_fuel, 30.0);
+        assert_eq!(Level::parse("gravity = -100\n").gravity_y, -20.0, "clamped, sign-normalized");
+        assert_eq!(Level::parse("start_fuel = 500\nfuel = 50\n").start_fuel, 500.0);
+        assert_eq!(Sim::new(Level::parse("start_fuel = 500\nfuel = 50\n")).fuel, 50.0,
+            "the spawn fill never exceeds the tank");
+
+        let mut sim = Sim::new(lvl.clone());
+        assert_eq!(sim.fuel, 30.0, "start_fuel is the spawn fill");
+        assert_eq!(sim.fuel_cap(), 80.0);
+        assert_eq!(sim.hull, 40.0, "hull spawns at the level's cap");
+        assert_eq!(sim.hull_cap(), 40.0);
+        // Parked on pad 0: refuel at 5/s (not 25) after the hold.
+        for _ in 0..((PAD_LAND_TIME + 2.0) / PHYSICS_DT) as u32 {
+            sim.tick(InputState::default());
+        }
+        assert!((sim.fuel - 40.0).abs() < 0.5, "2 s at 5/s ⇒ ~40, got {}", sim.fuel);
+        // Heavier gravity + stronger engine: a full burn from rest must still
+        // climb, and faster than the baseline's net acceleration would.
+        let mut heavy = Sim::new(lvl.clone());
+        let mut base = Sim::new(Level::demo());
+        for _ in 0..60 {
+            heavy.tick(InputState::from_controls(1.0, 0, 0.0, 0.0, false));
+            base.tick(InputState::from_controls(1.0, 0, 0.0, 0.0, false));
+        }
+        let (hy, by) = (heavy.ship_vel().1, base.ship_vel().1);
+        assert!(hy > 0.0 && hy != by, "level thrust/gravity must change the climb ({hy} vs {by})");
+
+        let (rec, kfs) = record_scripted_flight(lvl, 900);
+        let blob = rec.serialize(0);
+        assert_eq!(u16::from_le_bytes([blob[4], blob[5]]), 6);
+        let (back, _) = Recording::deserialize(&blob).expect("v6 decodes");
+        assert_eq!(back.level.gravity_y, -3.0);
+        assert_eq!(back.level.start_fuel, 30.0);
+        for (a, b) in kfs.iter().zip(resim(&back).iter()) {
+            assert_physics_eq(a, b);
+        }
     }
 
     #[test]

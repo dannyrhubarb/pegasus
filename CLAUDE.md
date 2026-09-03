@@ -852,6 +852,12 @@ generator — all world generation is `Level` methods, so a level IS the world:
 | `pad` | `x,y` | Hand-placed pad (deck centre x, deck top y) — terrain levels only; keyed `(index, 0)` in `Sim.pads`, same landing/refuel/score logic |
 | `start` | `x,y` | Terrain levels: a NEUTRAL start platform under the spawn — a plain high-friction deck NOT in `Sim.pads` (no visit/refuel/score fires there), so a Time level's launch spot isn't a freebie visit. Defines the spawn ground (`spawn_y = start.y`); drawn as a dimmer, light-less deck, grey on the minimap |
 | `spawn_y` | f32 | Terrain levels: ground y under the spawn at x = 0 (`stand_y` returns it + 0.78); overridden by `start`'s y when a start platform is present |
+| `fuel` | 5–1000 (clamped) | **Per-level tank** (2026-09, the first LEVEL tunable of #194): capacity AND spawn fill in fuel units; omitted = the ruleset's `fuel_max` (100). `Level.fuel_max` (0 = inherit) rides `LevelParams` in the header (**forces replay format v6**), so a stored run re-sims with its tank and the verifier's shipped-level equality check pins the value per stem — `Sim::fuel_cap()` is the effective capacity (spawn fill, refuel cap, HUD gauge + REFUELING banner — never a const). **Level tunables vs ruleset tunables**: a knob that should differ BETWEEN levels (tank, and candidates like gravity/thrust/hull) belongs in `Level`/`LevelParams` — predetermined per stem by the level file; a knob that changes the game FOR EVERY level (settle hold, crash thresholds, damping, PD gains) belongs in the ruleset registry (`ruleset_vN()`). Either way the verifier only accepts exact matches against compiled entries — no free-form combinations reach a board |
+| `gravity` | 0.2–20 (m/s², clamped) | Per-level gravity — the file value is the downward MAGNITUDE (`1.62` = the moon), stored signed as `Level.gravity_y`; 0 = inherit the ruleset. Same contract as `fuel` (v6 `LevelParams`, verifier-pinned per stem) |
+| `thrust` | 1–50 (clamped) | Per-level main-engine force at full throttle (the TWR knob); 0 = inherit (`THRUST_FORCE = 8`) |
+| `hull` | 5–1000 (clamped) | Per-level hull points — fragile-ship levels; `Sim::hull_cap()` is the effective value (spawn, repair cap, damage scaling — a scrape at `CRASH_DV_HARD` empties whatever the cap is — HUD gauge) |
+| `refuel_rate` | 1–500 (units/s, clamped) | Per-level pad refuel rate — slow pit stops; 0 = inherit (`PAD_REFUEL_PER_S = 25`) |
+| `start_fuel` | 1–1000 (clamped) | Spawn fill BELOW the tank capacity (launch on fumes, must refuel); clamped again to the effective tank at spawn (`Sim::spawn_fuel()`); 0 = full tank |
 
 `Level::parse` reads `key = value` lines (# comments; unknown keys ignored
 for forward compatibility; missing keys keep `Level::demo()` defaults — the
@@ -1733,7 +1739,15 @@ for now:
   v6, so a v6 blob (i.e. any non-baseline-ruleset submission) is
   silently discarded until the repin that also brings the
   registry-instead-of-equality check and per-era boards — do NOT ship a
-  `ruleset_v2()` before that lands.
+  `ruleset_v2()` before that lands. **Predetermined tunings (owner
+  rule, 2026-09)**: submissions must match a compiled registry entry
+  EXACTLY — the full `SimParams` (legacy 15 + extension block) equal to
+  some `ruleset_vN()`, and `LevelParams` equal to the shipped level file
+  for known stems — so nobody boards an arbitrary combination; the
+  client-side decoder stays lenient (any numbers replay) because that IS
+  the forward-compat property, but leniency never reaches a board.
+  Per-level knobs (the `fuel` key, see the Levels table) ride
+  `LevelParams`, not the ruleset.
 - **Cosmetic trailer** (2026-08 — the format's FORWARD-compatibility
   channel): optional bytes after the last keyframe, any version — magic
   `PGXT` + TLV entries (tag u8, len u16, payload). Every parser ever

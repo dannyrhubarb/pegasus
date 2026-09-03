@@ -1822,7 +1822,7 @@ async fn main() {
         // turns the strongest impact of the frame into effects and, on
         // destruction, freezes the shareable recording.
         if let Some(imp) = &frame_impact {
-            shake = (shake + imp.damage / HULL_MAX + 0.25).min(1.0);
+            shake = (shake + imp.damage / sim.hull_cap() + 0.25).min(1.0);
             if imp.destroyed {
                 crash_timer = CRASH_DIALOG_DELAY;
                 // Debris burst at the crash site.
@@ -3282,8 +3282,8 @@ async fn main() {
             let alpha = (pad_msg_timer / 1.8 * 255.0) as u8;
             draw_text(&msg, (sw - dims.width) / 2.0, sh * 0.38, fs,
                 Color::from_rgba(120, 255, 160, alpha));
-        } else if landed && (sim.fuel < FUEL_MAX || sim.hull < HULL_MAX) {
-            let msg = if sim.fuel < FUEL_MAX { "REFUELING" } else { "REPAIRING" };
+        } else if landed && (sim.fuel < sim.fuel_cap() || sim.hull < sim.hull_cap()) {
+            let msg = if sim.fuel < sim.fuel_cap() { "REFUELING" } else { "REPAIRING" };
             let fs = 36.0 * ui;
             let dims = measure_text(msg, None, fs as u16, 1.0);
             draw_text(msg, (sw - dims.width) / 2.0, sh * 0.38, fs,
@@ -3864,7 +3864,7 @@ async fn main() {
 
         // Fuel gauge (warm amber identity, red when low).
         let fg_y = mm_oy + mm_h + 8.0 * ui;
-        let frac = world_sim.fuel / FUEL_MAX;
+        let frac = world_sim.fuel / world_sim.fuel_cap();
         let fg_col = if frac > 0.5 {
             Color::from_rgba(250, 190, 70, 255)
         } else if frac > 0.25 {
@@ -3881,7 +3881,7 @@ async fn main() {
         // Hull gauge — red health identity (heart + bar); brighter red when
         // critically low. The bar length still shows how much is left.
         let hg_y = fg_y + fg_h + bar_gap;
-        let hfrac = world_sim.hull / HULL_MAX;
+        let hfrac = world_sim.hull / world_sim.hull_cap();
         let hg_col = if hfrac > 0.25 {
             Color::from_rgba(220, 65, 55, 255)
         } else {
