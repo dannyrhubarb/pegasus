@@ -1,5 +1,10 @@
 [
  {
+  "rev": "f7843f0",
+  "date": "2026-09-03T20:43:55Z",
+  "note": "New: A landing now counts once the ship has actually stopped — no more registering while skidding across the pad"
+ },
+ {
   "rev": "ccad171",
   "date": "2026-09-03T19:36:20Z",
   "note": "New: Land crooked and the ship now rocks onto both feet instead of freezing on one leg"
