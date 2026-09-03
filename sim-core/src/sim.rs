@@ -105,6 +105,7 @@ pub fn ruleset_v1() -> SimParams {
         hull_repair_per_s: HULL_REPAIR_PER_S,
         fuel_out_end_secs: FUEL_OUT_END_SECS,
         land_rule: 0.0,
+        ship_sleep: 1.0,
         min_logic: 1,
     }
 }
@@ -116,11 +117,16 @@ pub fn ruleset_v1() -> SimParams {
 // the edge as long as its centre was over the deck). The both-feet
 // predicate is new tick logic, so min_logic is 2: clients on logic 1
 // refuse these replays cleanly ("update to watch") instead of desyncing.
+// And the ship NEVER SLEEPS (`ship_sleep` 0): Rapier's 2 s sleep timer
+// used to freeze a crooked touchdown mid-rock on one leg — lunar gravity
+// rights the ship slower than the sleep thresholds — so the both-feet
+// rule could never be met without a nudge (see SimParams::ship_sleep).
 // Everything else is the v1 baseline. FROZEN like every registry entry.
 pub fn ruleset_v2() -> SimParams {
     SimParams {
         pad_land_time: 0.4,
         land_rule: 1.0,
+        ship_sleep: 0.0,
         min_logic: 2,
         ..ruleset_v1()
     }
@@ -294,6 +300,8 @@ impl Sim {
             // A whisper of drag: imperceptible at landing speeds but it caps
             // how much momentum can pile up on a long burn or free-fall.
             .linear_damping(rules.linear_damping)
+            // Ruleset 2: never sleep — see SimParams::ship_sleep.
+            .can_sleep(rules.ship_sleep > 0.0)
             .ccd_enabled(true)
             .build();
         let ship = bodies.insert(body);
@@ -1937,5 +1945,46 @@ mod tests {
         assert!(landed, "never registered as landed");
         assert_eq!(sim.score, PAD_POINTS);
         assert!(sim.fuel > 50.0, "no refuel happened");
+    }
+
+    // A ship placed on ONE foot at the given tilt, at rest, low foot exactly
+    // on the deck of the pad nearest the spawn.
+    fn one_foot_pose(sim: &Sim, a: f32) -> Keyframe {
+        let cx = sim.pads.values().map(|p| p.cx).min_by(|a, b| a.abs().total_cmp(&b.abs())).unwrap();
+        let pad_y = sim.pads.values().find(|p| p.cx == cx).unwrap().y;
+        let y = pad_y - (-FOOT_X * a.sin() + FOOT_Y * a.cos());
+        Keyframe {
+            tick: 0, x: cx, y, rot_re: a.cos(), rot_im: a.sin(), vx: 0.0, vy: 0.0, angvel: 0.0,
+            fuel: 100.0, hull: 100.0, glow: 0.0, land_timer: 0.0, visited: 0, run_ticks: 0,
+        }
+    }
+
+    #[test]
+    fn ruleset_2_ship_never_sleeps_so_gravity_finishes_a_crooked_touchdown() {
+        // 0.4 rad on one foot, just short of the tipping point: the righting
+        // torque is tiny, the rock-back takes > 2 s at < 0.5 rad/s, and
+        // under ruleset 1 Rapier's sleep timer FREEZES the ship mid-rock
+        // (measured: asleep at 0.188 rad after 2.0 s, one foot 12 cm up —
+        // the "stuck on one leg" report). Ruleset 2 builds the body with
+        // can_sleep(false): gravity keeps working, the ship comes level,
+        // both feet touch and the landing registers.
+        let mut legacy = Sim::with_rules(Level::demo(), ruleset_v1());
+        let kf = one_foot_pose(&legacy, 0.4);
+        legacy.restore(&kf);
+        for _ in 0..480 {
+            legacy.tick(InputState::default());
+        }
+        assert!(legacy.bodies[legacy.ship].is_sleeping(), "ruleset 1 keeps the legacy sleep");
+        assert!(legacy.ship_pose().2 > 0.15, "frozen mid-rock: {}", legacy.ship_pose().2);
+
+        let mut sim = Sim::with_rules(Level::demo(), ruleset_v2());
+        sim.restore(&kf);
+        let mut landed = false;
+        for _ in 0..720 {
+            landed |= sim.tick(InputState::default()).landed;
+            assert!(!sim.bodies[sim.ship].is_sleeping(), "ruleset 2 never sleeps");
+        }
+        assert!(sim.ship_pose().2.abs() < 0.02, "levelled by gravity alone: {}", sim.ship_pose().2);
+        assert!(landed, "the settled ship's landing registers");
     }
 }
