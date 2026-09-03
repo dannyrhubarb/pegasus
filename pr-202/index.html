@@ -1249,11 +1249,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">b5828d2-pr-202</div>
+        <div class="info-value" id="git-rev">bcc3dea-pr-202</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-09-03T16:37:51Z</div>
+        <div class="info-value" id="build-time">2026-09-03T16:53:23Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -1284,6 +1284,11 @@
         <div class="hint" id="cam-status" style="margin:6px 0 10px;word-break:break-word"></div>
         <div style="width:160px;height:160px;margin:0 auto;border-radius:50%;overflow:hidden;border:2px solid var(--cyan);box-shadow:0 0 14px var(--cyan);background:#000">
           <video id="cam-video" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;transform:scaleX(-1)"></video>
+        </div>
+        <!-- Microphone input level (RMS of the captured audio) — the only
+             way to SEE that the mic track is live; nothing is played back. -->
+        <div style="width:160px;height:6px;margin:10px auto 0;border-radius:3px;background:rgba(255,255,255,.12);overflow:hidden">
+          <div id="cam-level" style="width:0;height:100%;background:var(--green);transition:width 60ms linear"></div>
         </div>
       </div>
       <a class="mbtn" href="third-party-licenses.html" target="_blank" rel="noopener">Third-party licenses</a>
@@ -2718,7 +2723,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "b5828d2-pr-202";
+    const wasmRev = "bcc3dea-pr-202";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -3245,7 +3250,7 @@
     // an app resumed from the switcher for weeks still sees a new verdict:
     // - `minBuild` {android, ios} walls shell builds below it (CI run
     //   number); `minWebBuildTime` (ISO instant) walls web pages whose
-    //   baked 2026-09-03T16:37:51Z predates it. A wall NEVER interrupts a live
+    //   baked 2026-09-03T16:53:23Z predates it. A wall NEVER interrupts a live
     //   play: a mid-flight/replay verdict latches in `wallPolicy` and
     //   showScreen raises it at the next screen (pause, crash, game over,
     //   exit) — boot is menu-open, so launch walls immediately. On the web
@@ -4066,17 +4071,50 @@
     const camPanel = document.getElementById("cam-panel");
     const camStatus = document.getElementById("cam-status");
     const camVideo = document.getElementById("cam-video");
+    const camLevel = document.getElementById("cam-level");
     let camStream = null;
+    let camAudioCtx = null;
+    let camLevelRaf = 0;
     function camTestStop() {
       // Called from showScreen/closeMenu too — hoisted, so it must never
       // throw (the consts above are in their TDZ until this block runs).
       try {
+        if (camLevelRaf) cancelAnimationFrame(camLevelRaf);
+        camLevelRaf = 0;
+        if (camAudioCtx) camAudioCtx.close().catch(() => {});
+        camAudioCtx = null;
         if (camStream) camStream.getTracks().forEach(t => t.stop());
         camStream = null;
         camVideo.srcObject = null;
+        camLevel.style.width = "0";
         camPanel.style.display = "none";
         camTestBtn.textContent = "Camera test";
       } catch (e) { /* probe only — never break the menu */ }
+    }
+    // Mic level meter: RMS of the time-domain samples → bar width. The
+    // click that started the probe is the user gesture the AudioContext
+    // needs; nothing is connected to the destination, so no playback.
+    function camMeterStart(stream) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return "no AudioContext";
+      camAudioCtx = new AC();
+      camAudioCtx.resume().catch(() => {});
+      const analyser = camAudioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      camAudioCtx.createMediaStreamSource(stream).connect(analyser);
+      const buf = new Uint8Array(analyser.fftSize);
+      let peak = 0;
+      const tick = () => {
+        analyser.getByteTimeDomainData(buf);
+        let sum = 0;
+        for (let i = 0; i < buf.length; i++) { const d = (buf[i] - 128) / 128; sum += d * d; }
+        const rms = Math.sqrt(sum / buf.length);
+        if (rms > peak) { peak = rms; if (peak > 0.02) console.log("[cam-test] mic level peak " + peak.toFixed(3)); }
+        camLevel.style.width = Math.min(100, rms * 300) + "%";
+        camLevelRaf = requestAnimationFrame(tick);
+      };
+      camLevelRaf = requestAnimationFrame(tick);
+      return "meter on";
     }
     async function camTestStart() {
       const facts = `secureContext=${window.isSecureContext} mediaDevices=${!!navigator.mediaDevices} origin=${location.origin}`;
@@ -4089,14 +4127,26 @@
         console.log("[cam-test] getUserMedia unavailable");
         return;
       }
+      const video = { facingMode: "user", width: { ideal: 320 }, height: { ideal: 320 } };
       try {
-        camStream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: { ideal: 320 }, height: { ideal: 320 } }, audio: false,
-        });
+        // Camera + microphone in ONE request (one combined WebKit decision;
+        // iOS still shows its two system prompts, once each). A device or
+        // policy with no usable mic fails the whole call, so fall back to
+        // video-only and report the mic error rather than nothing.
+        let micNote;
+        try {
+          camStream = await navigator.mediaDevices.getUserMedia({ video, audio: true });
+        } catch (e) {
+          micNote = `mic FAILED ${e && e.name}`;
+          console.log("[cam-test] camera+mic request failed (" + (e && e.name) + "), retrying video-only");
+          camStream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+        }
         const track = camStream.getVideoTracks()[0];
+        const mic = camStream.getAudioTracks()[0];
         const s = track ? track.getSettings() : {};
         camVideo.srcObject = camStream;
-        const verdict = `OK ${s.width || "?"}x${s.height || "?"} @${s.frameRate || "?"}fps ${track ? track.label : ""}`;
+        if (mic) micNote = `mic OK ${mic.label} (${camMeterStart(camStream)})`;
+        const verdict = `OK ${s.width || "?"}x${s.height || "?"} @${s.frameRate || "?"}fps ${track ? track.label : ""} · ${micNote}`;
         camStatus.textContent = facts + " — " + verdict;
         console.log("[cam-test] " + verdict);
         track && track.addEventListener("ended", () => {
