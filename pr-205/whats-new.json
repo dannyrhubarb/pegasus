@@ -1,5 +1,10 @@
 [
  {
+  "rev": "e9a9410",
+  "date": "2026-09-03T21:12:16Z",
+  "note": "New: The landing ring is now a Settings toggle — on by default, off for the purists"
+ },
+ {
   "rev": "a6139e1",
   "date": "2026-09-03T21:06:43Z",
   "note": "New: A Flight manual under About — read exactly what makes a landing count before the pad tells you it didn't"

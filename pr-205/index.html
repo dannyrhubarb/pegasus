@@ -1257,6 +1257,10 @@
         <span>Race best ghost</span>
         <input type="checkbox" id="ghost-toggle"><span class="tgl"></span>
       </label>
+      <label class="setrow" id="ring-toggle-row">
+        <span>Landing ring</span>
+        <input type="checkbox" id="ring-toggle"><span class="tgl"></span>
+      </label>
       <label class="setrow" id="debug-toggle-row">
         <span>Debug HUD</span>
         <input type="checkbox" id="debug-toggle"><span class="tgl"></span>
@@ -1279,11 +1283,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">a6139e1-pr-205</div>
+        <div class="info-value" id="git-rev">e9a9410-pr-205</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-09-03T21:08:50Z</div>
+        <div class="info-value" id="build-time">2026-09-03T21:13:27Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -1320,8 +1324,9 @@
         <h3>Landing</h3>
         <p>A landing counts when the ship has come to rest on a pad with
         <b>both feet on the deck</b> and stays that way for <b>0.4 s</b>.
-        The green ring around the ship fills while that timer runs &mdash;
-        lift off before it closes and the landing never happened.</p>
+        The green ring around the ship (Settings &rarr; Landing ring)
+        fills while that timer runs &mdash; lift off before it closes and
+        the landing never happened.</p>
         <ul>
           <li><b>Both feet on the deck</b> &mdash; each landing leg inside
           the pad and no more than 6 cm above it. A foot in the air or
@@ -2794,7 +2799,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "a6139e1-pr-205";
+    const wasmRev = "e9a9410-pr-205";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -3996,6 +4001,24 @@
       if (typeof wasm_exports !== "undefined" && wasm_exports.set_ghost_enabled) {
         applyGhostSetting();
         clearInterval(ghostTimer);
+      }
+    }, 200);
+
+    // "Landing ring" toggle (on by default): the green settle ring that
+    // fills around the ship while a landing registers. Presentation only.
+    const ringToggle = document.getElementById("ring-toggle");
+    ringToggle.checked = localStorage.getItem("pegasus_land_ring") !== "0";
+    function applyRingSetting() {
+      call("set_land_ring", ringToggle.checked ? 1 : 0);
+    }
+    ringToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_land_ring", ringToggle.checked ? "1" : "0");
+      applyRingSetting();
+    });
+    const ringTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_land_ring) {
+        applyRingSetting();
+        clearInterval(ringTimer);
       }
     }, 200);
 
