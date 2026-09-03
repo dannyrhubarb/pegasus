@@ -1231,6 +1231,16 @@ static MP_IN: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
 static MP_OUT: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
 static MP_OUT_TAKE: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
 static MP_REMOTE_DIST: AtomicU32 = AtomicU32::new(0); // f32 bits, opponent's max |x|
+// Per-frame mirrors of the opponent silhouette's SCREEN position (logical
+// = CSS px, the same space every HTML overlay lays out in) + the current
+// pixels-per-metre, so the JS video bubble can ride the ship instead of
+// sitting in a corner (#200). Written where the silhouette is drawn;
+// MP_REMOTE_POSE = 0 whenever there is no pose to follow (no room, the
+// opponent's wreck, replay mode) and JS parks the bubble.
+static MP_REMOTE_SX: AtomicU32 = AtomicU32::new(0);
+static MP_REMOTE_SY: AtomicU32 = AtomicU32::new(0);
+static MP_REMOTE_PXM: AtomicU32 = AtomicU32::new(0);
+static MP_REMOTE_POSE: AtomicU32 = AtomicU32::new(0);
 // Backstop if JS stops draining (dead tab logic): stop queueing rather
 // than grow without bound. ~4 min of worst-case output.
 const MP_OUT_MAX: usize = 256 * 1024;
@@ -1324,6 +1334,26 @@ pub extern "C" fn mp_out_ptr() -> *const u8 {
 #[unsafe(no_mangle)]
 pub extern "C" fn mp_remote_dist() -> f32 {
     f32::from_bits(MP_REMOTE_DIST.load(Ordering::Relaxed))
+}
+
+/// Opponent silhouette on screen this frame? 1 = `mp_remote_screen_x/y`
+/// hold its position (CSS px; may lie outside the viewport — JS clamps)
+/// and `mp_remote_px_per_m` the render scale; 0 = nothing to follow.
+#[unsafe(no_mangle)]
+pub extern "C" fn mp_remote_pose() -> i32 {
+    MP_REMOTE_POSE.load(Ordering::Relaxed) as i32
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn mp_remote_screen_x() -> f32 {
+    f32::from_bits(MP_REMOTE_SX.load(Ordering::Relaxed))
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn mp_remote_screen_y() -> f32 {
+    f32::from_bits(MP_REMOTE_SY.load(Ordering::Relaxed))
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn mp_remote_px_per_m() -> f32 {
+    f32::from_bits(MP_REMOTE_PXM.load(Ordering::Relaxed))
 }
 
 // --- Bluetooth / USB game controller bridge (Web Gamepad API, see index.html) ---
@@ -3375,6 +3405,19 @@ async fn main() {
         // The multiplayer opponent — the record ghost's translucent-hull
         // treatment in the opponent's own tint (magenta, vs the ghost's
         // pale blue — both can be on screen at once), callsign beneath.
+        // The screen position is mirrored out for the JS video bubble
+        // (mp_remote_screen_*), off-screen included — JS clamps it to the
+        // viewport edge as a "they're over there" hint.
+        match mp_pose {
+            Some((mx, my, _)) => {
+                let ms = w2s(mx, my, sh, cam_x, cam_y);
+                MP_REMOTE_SX.store(ms.x.to_bits(), Ordering::Relaxed);
+                MP_REMOTE_SY.store(ms.y.to_bits(), Ordering::Relaxed);
+                MP_REMOTE_PXM.store(view_scale.to_bits(), Ordering::Relaxed);
+                MP_REMOTE_POSE.store(1, Ordering::Relaxed);
+            }
+            None => MP_REMOTE_POSE.store(0, Ordering::Relaxed),
+        }
         if let Some((mx, my, ma)) = mp_pose {
             let ms = w2s(mx, my, sh, cam_x, cam_y);
             if ms.x > -120.0 && ms.x < sw + 120.0 && ms.y > -120.0 && ms.y < sh + 120.0 {

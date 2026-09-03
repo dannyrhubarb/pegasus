@@ -2149,9 +2149,22 @@ backend-verification flow.
   `sender.replaceTrack` — no renegotiation, #148's offer/answer flow is
   untouched. A DataChannel `{t:"av", video, audio}` message is the truth
   for the opponent's bubble (track `mute` is only a belt-and-braces hide).
-  HUD: `#mp-bubbles` (HTML, `pointer-events: none`, top-right under the
-  corner buttons) — the opponent 96 px magenta with callsign, own 64 px
-  cyan mirrored — shown only while in a room AND the canvas is live
+  HUD: `#mp-bubbles` (HTML, `pointer-events: none`) — own bubble 64 px
+  cyan mirrored, parked top-right under the corner buttons; the
+  **opponent's 96 px magenta bubble FOLLOWS THEIR SHIP** (owner request
+  2026-09): the frame loop mirrors the silhouette's screen position +
+  `view_scale` out of the wasm (`mp_remote_pose` / `mp_remote_screen_x`
+  / `_y` / `mp_remote_px_per_m` — logical = CSS px, the space every HTML
+  overlay lays out in; written where the silhouette is drawn,
+  off-screen included), and a JS rAF loop (`followTick`, running only
+  while the remote bubble shows) places it ~1.1 m above the hull as a
+  compositor-only `transform`, clamped inside the safe-area viewport when
+  the opponent is off-screen (an edge hint toward them; the top-right
+  corner keeps clear of the corner buttons) and parked back in the
+  top-right stack — inline transform cleared, or the flex-positioned
+  bubble inherits the stale ship offset — when there is no pose (their
+  wreck, no room). The HTML callsign hides in follow mode (the in-canvas
+  label already sits under the silhouette). Shown only while in a room AND the canvas is live
   (`showScreen`/`closeMenu` call `pegMP.syncBubbles()` next to
   `syncWakeLock`; the try/catch covers pegMP's TDZ at boot). The remote
   `<video>` carries the voice track too, so it stays attached (audible)
