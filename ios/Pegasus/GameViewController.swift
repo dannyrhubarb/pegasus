@@ -210,12 +210,27 @@ extension GameViewController {
         guard origin.protocol == WebRootSchemeHandler.scheme else {
             return decisionHandler(.prompt)
         }
-        // No microphone: Info.plist carries no NSMicrophoneUsageDescription,
-        // and requesting audio access without it is a crash, not a denial.
-        // Add the key and extend this switch if a feature ever needs audio.
-        guard type == .camera else { return decisionHandler(.deny) }
-        AVCaptureDevice.requestAccess(for: .video) { granted in
+        // Both usage strings live in Info.plist (requesting access without
+        // the matching key is a crash, not a denial — keep them paired).
+        let media: [AVMediaType]
+        switch type {
+        case .camera: media = [.video]
+        case .microphone: media = [.audio]
+        case .cameraAndMicrophone: media = [.video, .audio]
+        @unknown default: return decisionHandler(.prompt)
+        }
+        requestAccess(media) { granted in
             DispatchQueue.main.async { decisionHandler(granted ? .grant : .deny) }
+        }
+    }
+
+    /// Sequential system authorization for each media type; false as soon
+    /// as one is refused. iOS shows one prompt per type, once per install.
+    private func requestAccess(_ media: [AVMediaType], _ completion: @escaping (Bool) -> Void) {
+        guard let first = media.first else { return completion(true) }
+        AVCaptureDevice.requestAccess(for: first) { granted in
+            guard granted else { return completion(false) }
+            self.requestAccess(Array(media.dropFirst()), completion)
         }
     }
 }

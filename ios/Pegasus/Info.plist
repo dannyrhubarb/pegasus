@@ -24,6 +24,8 @@
 	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Pegasus can send your voice to your race opponent during a match. Audio goes directly to them and is never uploaded or stored.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Pegasus can show your face in a small bubble to your race opponent. Video goes directly to them and is never uploaded or stored.</string>
 	<key>UIApplicationSceneManifest</key>

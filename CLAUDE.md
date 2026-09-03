@@ -370,8 +370,10 @@ while the wasm loads):
   toggle is on, like Settings' `#reset-consent`): the **Camera test**
   button (`#cam-test`, 2026-09) — the `getUserMedia` PROBE for the
   video-avatar idea (#200): logs `secureContext` / `mediaDevices` /
-  origin, requests the selfie camera and shows the raw feed in a round
-  bubble with the verdict (or the error name) beneath; every step goes
+  origin, requests the selfie camera AND the microphone (one combined
+  request, video-only fallback with the mic error named) and shows the
+  raw feed in a round bubble with a live mic-level bar (AnalyserNode RMS,
+  nothing played back) and the verdict (or the error name) beneath; every step goes
   through `console.log` so a bug report zip carries it. Stops on leaving
   the screen. Nothing is sent anywhere. **Verdict (2026-09-03, owner's
   phone)**: the iOS `pegasus://app` origin IS a secure context —
@@ -2148,8 +2150,8 @@ re-acquired on the `visibilitychange` back while still wanted).
   requests from the bundle scheme are answered from
   `AVCaptureDevice.requestAccess`, so the player sees ONE system dialog
   naming Pegasus instead of that plus WebKit's own per-origin sheet (two
-  dialogs, seen on the first probe); microphone is denied outright (no
-  usage key). After the upload,
+  dialogs, seen on the first probe); microphone (`NSMicrophoneUsageDescription`)
+  goes through the same path, one system prompt per media type. After the upload,
   `ios/testflight-distribute.py` (ASC API, same key) waits out Apple's
   build processing, submits the build to Beta App Review and attaches it
   to the beta group named by the `TESTFLIGHT_GROUP_NAME` repo variable
