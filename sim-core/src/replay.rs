@@ -263,6 +263,17 @@ pub struct SimParams {
     // tilted touchdown doesn't count. A new predicate, not a number:
     // rulesets using it stamp min_logic 2 (LOGIC_VERSION history above).
     pub land_rule: f32,
+    // May Rapier put the ship body to SLEEP? (ext field 5; 1 = yes, the
+    // legacy behaviour; 0 = the body is built with can_sleep(false).)
+    // Rapier's island manager freezes a body that stays under 0.4 m/s and
+    // 0.5 rad/s for 2 s — and a tilted touchdown rocks back under lunar
+    // gravity SLOWER than that (~0.35 rad/s² from 11°), so with sleeping on
+    // a ship landed crooked froze mid-rock on one leg, 12 cm foot in the
+    // air, until the next thrust input woke it (the "stuck on one leg"
+    // report, 2026-09; measured with a contact/sleep probe). A never-
+    // sleeping ship integrates while parked and drifts by float dust, so
+    // ruleset 1 keeps sleeping for bit-exact old replays. Logic level 2.
+    pub ship_sleep: f32,
     // Oldest client LOGIC_VERSION that can re-sim this ruleset bit-exactly.
     // Not a physics number: it rides serialization but is excluded from
     // "same ruleset" comparisons only in the sense that equal params imply
@@ -327,7 +338,7 @@ impl LevelParams {
 impl SimParams {
     const N_FIELDS: usize = 15;
     // v6 extension fields, in serialization order (append-only).
-    const N_EXT_FIELDS: usize = 5;
+    const N_EXT_FIELDS: usize = 6;
 
     fn to_array(self) -> [f32; Self::N_FIELDS] {
         [
@@ -355,7 +366,7 @@ impl SimParams {
         [
             self.pad_land_time, self.pad_refuel_per_s,
             self.hull_repair_per_s, self.fuel_out_end_secs,
-            self.land_rule,
+            self.land_rule, self.ship_sleep,
         ]
     }
 
@@ -366,6 +377,7 @@ impl SimParams {
             2 => self.hull_repair_per_s = v,
             3 => self.fuel_out_end_secs = v,
             4 => self.land_rule = v,
+            5 => self.ship_sleep = v,
             _ => {} // future field this build doesn't know — min_logic decides
         }
     }
@@ -840,7 +852,7 @@ mod tests {
             crash_dv_soft: 2.5, crash_dv_hard: 6.0, hull_max: 100.0,
             pad_land_time: 0.8, pad_refuel_per_s: 25.0,
             hull_repair_per_s: 20.0, fuel_out_end_secs: 2.5,
-            land_rule: 0.0, min_logic: 1,
+            land_rule: 0.0, ship_sleep: 1.0, min_logic: 1,
         }
     }
 

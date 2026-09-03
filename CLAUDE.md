@@ -1468,7 +1468,22 @@ FEET TOUCHING the deck** — each leg-pod tip (`FOOT_X = ±0.33`,
 and within `FOOT_TOUCH_M = 0.10` of its top (contact slop only — the
 first preview reused the legacy 0.3 tolerance, which let a one-foot
 tilted touchdown with the other foot 13 cm in the air run the timer;
-regression-tested). The both-feet predicate is new tick LOGIC, so ruleset 2 stamps
+regression-tested). **Ruleset 2 also never lets the ship SLEEP**
+(`SimParams::ship_sleep` 0 → the body is built `can_sleep(false)`):
+Rapier's island manager freezes a body that stays under 0.4 m/s and
+0.5 rad/s for 2 s, and a crooked touchdown rocks back SLOWER than that —
+lunar gravity's righting torque is ~0.35 rad/s² at 11°, so levelling
+takes ~1 s from 0.2 rad and > 2 s from 0.4 rad (the tipping point is
+~0.43 rad) — so a ship landed on one leg used to freeze mid-rock with a
+foot 12 cm in the air until the next thrust input woke it (the "stuck on
+one leg" report, 2026-09, found with a contact/sleep probe; the per-tick
+`reset_forces(true)` only wakes a body that HAD a user force). Ruleset 1
+keeps sleeping: a never-sleeping parked ship integrates and drifts by
+float dust, so old replays would not resim bit-exactly. The angular
+damping was not the cause (the contact couples linear + angular damping
+into an ~0.8/s brake on the pivot), and a synthetic settling torque was
+tried and rejected as unnatural — gravity alone does the job once it is
+allowed to keep acting. The both-feet predicate is new tick LOGIC, so ruleset 2 stamps
 `min_logic` 2 and `LOGIC_VERSION` is 2 (a logic-1 client refuses those
 replays with `ERR_NEEDS_NEWER` → "update to watch"); ruleset-1 headers
 keep running the legacy predicate verbatim, so old replays resim
@@ -1743,7 +1758,7 @@ for now:
   themselves are registry functions in sim.rs (`rulesets()`, index + 1 =
   the number on board rows): **`ruleset_v1()` is the FROZEN legacy
   baseline** (what every v3–v5 blob means; never edit it — the module
-  consts are its single source), **`ruleset_v2()`** (2026-09: 0.4 s hold
+  consts are its single source), **`ruleset_v2()`** (2026-09: 0.4 s hold, never-sleeping ship
   + the both-feet landing rule, `min_logic` 2 — see "Landing pads &
   scoring") and **`sim_params()` is what live play flies** (currently =
   v2; a tuning change = add `ruleset_vN()`, append it to `rulesets()` and
