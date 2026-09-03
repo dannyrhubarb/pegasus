@@ -1,0 +1,18 @@
+# Level — The Flux Dash: a 1,000 m time trial through The Flux's endless
+# reshuffling cave (`endless = on`, `seed = random` — brand-new rock every
+# attempt). A gold FINISH pad waits at ±1000 m (either direction — the cave
+# is endless both ways); the run ENDS the moment your landing on it
+# registers, and the clock is the score — lowest time wins, like The
+# Hollows. A crash or an empty tank is a DNF (no board entry). Full
+# throttle burns the tank in ~28 s and the kilometre takes longer than
+# that, so plan refuel stops on the regular pads along the way — every
+# stop costs the settle time, so the trade is the level.
+name = The Flux Dash
+description = Race to the finish pad 1,000 m out. Fastest time wins
+scoring = time
+shafts = off
+obstacles = on
+endless = on
+pad_spacing = 150
+seed = random
+goal_distance = 1000
