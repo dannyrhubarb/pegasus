@@ -1456,8 +1456,23 @@ boulder (checked via `obstacle_spec`) would overlap the deck — roughly every
 other slot survives. Pads replicate per layer like obstacles
 (`BTreeMap<(slot, layer), Pad>` in `Sim`, same sliding window).
 
-**Landing** = settled on a deck (|angle| < 0.3, |v| < 1 m/s, |ω| < 0.5, feet —
-0.73 below origin — within 0.3 of deck top) for `PAD_LAND_TIME = 0.8 s`. First
+**Landing** = settled on a deck (|angle| < 0.3, |v| < 1 m/s, |ω| < 0.5) with
+the ship ON the deck, held for the ruleset's `pad_land_time`. **Two rules
+exist, selected by the ruleset's `land_rule` (#194 phase 4, 2026-09)**:
+ruleset 1 (legacy, `land_rule` 0, hold `PAD_LAND_TIME = 0.8 s`) = the
+ship's CENTRE within `PAD_HALF_W` of the pad centre and the foot line
+(0.73 below origin) within 0.3 of the deck top — a foot hanging over the
+edge still counted; **ruleset 2 (live, `land_rule` 1, hold 0.4 s) = BOTH
+FEET TOUCHING the deck** — each leg-pod tip (`FOOT_X = ±0.33`,
+`FOOT_Y = −0.73` scaled-local, rotated with the hull) inside the deck span
+and within `FOOT_TOUCH_M = 0.10` of its top (contact slop only — the
+first preview reused the legacy 0.3 tolerance, which let a one-foot
+tilted touchdown with the other foot 13 cm in the air run the timer;
+regression-tested). The both-feet predicate is new tick LOGIC, so ruleset 2 stamps
+`min_logic` 2 and `LOGIC_VERSION` is 2 (a logic-1 client refuses those
+replays with `ERR_NEEDS_NEWER` → "update to watch"); ruleset-1 headers
+keep running the legacy predicate verbatim, so old replays resim
+bit-exactly. First
 visit per (slot, layer) scores `PAD_POINTS = 100` (green "+100" flash); parked
 ships refuel at `PAD_REFUEL_PER_S = 25/s` ("REFUELING" shown while below max).
 **The settle hold is VISIBLE — the landing settle ring** (2026-09): while
@@ -1725,11 +1740,16 @@ for now:
   it, and older clients then refuse the blob with the distinguishable
   `ERR_NEEDS_NEWER` (so the UI can say "update to watch" instead of
   treating it as corrupt — the phase-3 UI work on #194). The rulesets
-  themselves are registry functions in sim.rs: **`ruleset_v1()` is the
-  FROZEN legacy baseline** (what every v3–v5 blob means; never edit it —
-  the module consts are its single source) and **`sim_params()` is what
-  live play flies** (currently = v1; a tuning change = add
-  `ruleset_v2()` and repoint, never edit v1). The racing ghost needs NO
+  themselves are registry functions in sim.rs (`rulesets()`, index + 1 =
+  the number on board rows): **`ruleset_v1()` is the FROZEN legacy
+  baseline** (what every v3–v5 blob means; never edit it — the module
+  consts are its single source), **`ruleset_v2()`** (2026-09: 0.4 s hold
+  + the both-feet landing rule, `min_logic` 2 — see "Landing pads &
+  scoring") and **`sim_params()` is what live play flies** (currently =
+  v2; a tuning change = add `ruleset_vN()`, append it to `rulesets()` and
+  repoint, never edit a shipped entry). Since live play is on ruleset 2
+  every new recording is v6 (`min_logic` 2): the API withholds them from
+  pre-v6 clients and the frozen app builds until those update. The racing ghost needs NO
   ruleset gate: it is an independent lockstep re-sim of its own
   recording under its own header rules (unlike the LEVEL gate, which
   stays — the ghost renders in the live world's geometry).
@@ -1738,8 +1758,10 @@ for now:
   unchanged for now (phase 2)**: the deployed verifier's pin predates
   v6, so a v6 blob (i.e. any non-baseline-ruleset submission) is
   silently discarded until the repin that also brings the
-  registry-instead-of-equality check and per-era boards — do NOT ship a
-  `ruleset_v2()` before that lands. **Predetermined tunings (owner
+  registry-instead-of-equality check — pegasus-backend#43, whose pin must
+  include `ruleset_v2()` + `LOGIC_VERSION` 2 and be PROMOTED before the
+  ruleset-2 game merges, or every new submission is discarded as
+  `ParamsMismatch`. **Predetermined tunings (owner
   rule, 2026-09)**: submissions must match a compiled registry entry
   EXACTLY — the full `SimParams` (legacy 15 + extension block) equal to
   some `ruleset_vN()`, and `LevelParams` equal to the shipped level file
