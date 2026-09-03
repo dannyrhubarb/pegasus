@@ -392,6 +392,18 @@ impl Recording {
         self.ticks
     }
 
+    // The format version this recording serializes as — the per-recording
+    // choice (ruleset-driven v6, else the level-driven pick). The backend
+    // stores it per board row so a board can withhold replays a requesting
+    // client can't decode (a pre-v6 client can't read any v6 blob).
+    pub fn format_version(&self) -> u16 {
+        if self.params != crate::sim::ruleset_v1() {
+            REPLAY_FORMAT_VERSION_V6
+        } else {
+            self.level.format_version()
+        }
+    }
+
     // Record one physics step under `input`. Pushes an event only when the
     // input changed. Returns true when a keyframe is due (call push_keyframe
     // with the post-step state).
@@ -477,11 +489,7 @@ impl Recording {
         // know to build the sim from the header — serving changed params in
         // a v5 layout would silently drift-warp on old clients); the
         // baseline keeps today's byte-identical v3/v4/v5 choice.
-        let version = if self.params != crate::sim::ruleset_v1() {
-            REPLAY_FORMAT_VERSION_V6
-        } else {
-            self.level.format_version()
-        };
+        let version = self.format_version();
         out.extend_from_slice(&version.to_le_bytes());
         out.extend_from_slice(&build_id.to_le_bytes());
         for f in self.params.to_array() {
