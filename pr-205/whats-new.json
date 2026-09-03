@@ -1,5 +1,10 @@
 [
  {
+  "rev": "a95ebeb",
+  "date": "2026-09-03T19:05:20Z",
+  "note": "New: Landing gear that actually works — touch down on one foot and the ship rocks onto both instead of balancing on a leg"
+ },
+ {
   "rev": "0575b06",
   "date": "2026-09-03T17:49:53Z",
   "note": "New: Landings count after 0.4 s now — but only with both feet on the pad, so no more heel-hanging"
