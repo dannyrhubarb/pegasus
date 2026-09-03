@@ -968,6 +968,57 @@
     }
     #mp-fail-hints div::before { content: "▸ "; }
 
+    /* Video/voice bubbles (#200, step 1 = raw feed): the opponent's camera
+       (magenta, callsign beneath) and your own (cyan, mirrored) float
+       top-right under the corner buttons while the canvas is live. HTML,
+       not canvas — a <video> element is the only way to paint a
+       MediaStream cheaply — and pointer-events off: the canvas stays the
+       flight-control surface. The remote <video> also carries the voice
+       track, so it stays attached (and audible) while hidden. */
+    #mp-bubbles {
+      position: fixed;
+      top: calc(var(--inset-top) + 80px);
+      right: calc(var(--inset-right) + 12px);
+      display: none;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 8px;
+      pointer-events: none;
+      z-index: 9;
+    }
+    #mp-bubbles.on { display: flex; }
+    #mp-remote, #mp-local-bubble { display: none; }
+    #mp-bubbles.has-remote #mp-remote { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+    #mp-bubbles.has-local #mp-local-bubble { display: block; }
+    .mp-bubble {
+      border-radius: 50%;
+      overflow: hidden;
+      background: #000;
+      border: 2px solid var(--magenta);
+      box-shadow: 0 0 14px rgba(255, 60, 200, 0.55);
+    }
+    .mp-bubble video { display: block; width: 100%; height: 100%; object-fit: cover; }
+    #mp-remote-bubble { width: 96px; height: 96px; }
+    #mp-local-bubble {
+      width: 64px; height: 64px;
+      border-color: var(--cyan);
+      box-shadow: 0 0 12px rgba(52, 231, 255, 0.5);
+    }
+    #mp-local-bubble video, .mp-av-preview { transform: scaleX(-1); }
+    #mp-remote-name {
+      font: 700 11px var(--mono);
+      color: var(--magenta);
+      letter-spacing: 0.1em;
+      text-shadow: 0 0 8px rgba(255, 60, 200, 0.6);
+    }
+    /* Lobby/host preview of your own camera (same mirrored treatment). */
+    .mp-av-preview-wrap {
+      width: 96px; height: 96px; margin: 2px auto 0;
+      border-radius: 50%; overflow: hidden; background: #000;
+      border: 2px solid var(--cyan); box-shadow: 0 0 12px rgba(52, 231, 255, 0.5);
+    }
+    .mp-av-preview { display: block; width: 100%; height: 100%; object-fit: cover; }
+
     /* Mid-race notice (opponent disconnected — race void): same fixed-toast
        idiom as #update-toast, magenta, non-interactive, auto-hides. */
     #mp-banner {
@@ -1399,6 +1450,12 @@
 
     <div class="screen" id="scr-pause">
       <div class="h2">PAUSED</div>
+      <!-- In a multiplayer room only (pegMP.syncBubbles toggles it): flip
+           the camera/mic mid-race — replaceTrack, no renegotiation. -->
+      <label class="setrow" id="pause-av-row" style="display:none">
+        <span>Camera &amp; mic</span>
+        <input type="checkbox" class="mp-av-toggle"><span class="tgl"></span>
+      </label>
       <div class="mbtn primary" id="btn-resume">Resume</div>
       <div class="mbtn" id="btn-exit">Exit to menu</div>
     </div>
@@ -1473,6 +1530,13 @@
            code exists. -->
       <div class="mbtn" id="btn-mp-share" style="display:none">Share invite link</div>
       <div class="hint" id="mp-host-status">Contacting mission control&hellip;</div>
+      <label class="setrow" id="mp-av-row-host">
+        <span>Camera &amp; mic</span>
+        <input type="checkbox" class="mp-av-toggle"><span class="tgl"></span>
+      </label>
+      <div class="mp-av-preview-wrap" style="display:none"><video class="mp-av-preview" autoplay playsinline muted></video></div>
+      <div class="hint">Your face and voice go straight to your opponent over the game link
+        &mdash; never to a server</div>
       <div class="mbtn primary" id="btn-mp-pick" style="display:none">Choose level</div>
       <div class="mbtn back" id="btn-mp-host-back">&#8249; Cancel</div>
     </div>
@@ -1491,6 +1555,13 @@
     <div class="screen" id="scr-mp-lobby">
       <div class="h2">LOBBY</div>
       <div class="hint" id="mp-lobby-status">Connecting&hellip;</div>
+      <label class="setrow" id="mp-av-row-lobby">
+        <span>Camera &amp; mic</span>
+        <input type="checkbox" class="mp-av-toggle"><span class="tgl"></span>
+      </label>
+      <div class="mp-av-preview-wrap" style="display:none"><video class="mp-av-preview" autoplay playsinline muted></video></div>
+      <div class="hint">Your face and voice go straight to your opponent over the game link
+        &mdash; never to a server</div>
       <div class="mbtn back" id="btn-mp-lobby-back">&#8249; Leave</div>
     </div>
 
@@ -1518,6 +1589,14 @@
   <!-- Multiplayer race-start countdown (over the frozen game) + the
        mid-race notice banner (opponent lost) — both purely visual. -->
   <div id="mp-countdown" aria-hidden="true"><span id="mp-count-num">3</span></div>
+  <!-- Multiplayer video/voice bubbles (see the #mp-bubbles CSS note). -->
+  <div id="mp-bubbles" aria-hidden="true">
+    <div id="mp-remote">
+      <div class="mp-bubble" id="mp-remote-bubble"><video id="mp-remote-video" autoplay playsinline></video></div>
+      <div id="mp-remote-name"></div>
+    </div>
+    <div class="mp-bubble" id="mp-local-bubble"><video id="mp-local-video" autoplay playsinline muted></video></div>
+  </div>
   <div id="mp-banner" aria-live="polite"></div>
 
   <script>
@@ -1945,6 +2024,9 @@
       if (id === "scr-scores") renderScores();
       if (id === "scr-about") renderBuildTime();
       syncWakeLock();
+      // Bubbles follow the canvas-live condition too (pegMP is declared
+      // later in this script — the try also covers its TDZ during boot).
+      try { pegMP.syncBubbles(); } catch (_) {}
       pegAnalytics.screen(id); // funnel signal (consecutive-deduped inside)
       syncHistory();
     }
@@ -1956,6 +2038,9 @@
       hudBtns.classList.add("on");
       setPause(0);
       syncWakeLock();
+      // Bubbles follow the canvas-live condition too (pegMP is declared
+      // later in this script — the try also covers its TDZ during boot).
+      try { pegMP.syncBubbles(); } catch (_) {}
       syncHistory();
     }
 
@@ -4667,6 +4752,183 @@
       let cand = { host: 0, srflx: 0, relay: 0, remote: 0 };
       const CONNECT_FAIL_MS = 25000; // past ICE's own give-up horizon
 
+      // --- Video/voice bubbles (#200 step 1: raw camera feed) -----------
+      // Both peers negotiate ONE audio + ONE video transceiver up front
+      // (host: addTransceiver before the offer; guest: flips the offered
+      // m-lines to sendrecv before answering), so switching a camera on or
+      // off later is sender.replaceTrack — no renegotiation, nothing added
+      // to #148's offer/answer flow. The media rides the SAME
+      // RTCPeerConnection as the input stream (P2P, TURN fallback); the
+      // signaling relay only ever sees the SDP. Opt-in per device
+      // (pegasus_mp_av), remembered; the DataChannel "av" message is the
+      // truth for the opponent's bubble (track mute events are only a
+      // belt-and-braces hide).
+      const AV_KEY = "pegasus_mp_av";
+      const avToggles = Array.from(document.querySelectorAll(".mp-av-toggle"));
+      const avPreviews = Array.from(document.querySelectorAll(".mp-av-preview"));
+      const bubbles = document.getElementById("mp-bubbles");
+      const remoteVideo = document.getElementById("mp-remote-video");
+      const localVideo = document.getElementById("mp-local-video");
+      const remoteNameEl = document.getElementById("mp-remote-name");
+      const pauseAvRow = document.getElementById("pause-av-row");
+      let avWanted = false;
+      try { avWanted = localStorage.getItem(AV_KEY) === "1"; } catch (_) {}
+      let localStream = null;
+      let avAcquiring = false;
+      let remoteStream = null;
+      let remoteAv = { video: false, audio: false };
+      let audioTx = null, videoTx = null;
+
+      function avSupported() {
+        return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+      }
+      function inRoom() {
+        return state === "lobby" || state === "starting" || state === "racing"
+          || (state === "hosting" && dcOpened);
+      }
+      function syncAvToggles() {
+        for (const t of avToggles) t.checked = avWanted && !!localStream || (avWanted && avAcquiring);
+      }
+      // Bubble + preview visibility from current state; safe to call any
+      // time (showScreen/closeMenu call it — overlay changes matter).
+      function updateBubbles() {
+        try {
+          const room = inRoom();
+          pauseAvRow.style.display = room && avSupported() ? "" : "none";
+          const localOn = !!localStream;
+          bubbles.classList.toggle("on", room && overlay === null && (localOn || remoteAv.video));
+          bubbles.classList.toggle("has-remote", remoteAv.video);
+          bubbles.classList.toggle("has-local", localOn);
+          remoteNameEl.textContent = (peerName || "RIVAL").toUpperCase();
+          for (const v of avPreviews) v.parentElement.style.display = localOn ? "" : "none";
+          for (const t of avToggles) t.closest(".setrow").style.opacity = avSupported() ? "" : "0.4";
+        } catch (_) {}
+      }
+      function avAnnounce() {
+        dcSend({ t: "av",
+          video: !!(localStream && localStream.getVideoTracks().some(t => t.readyState === "live")),
+          audio: !!(localStream && localStream.getAudioTracks().some(t => t.readyState === "live")) });
+      }
+      // Put the local tracks on the negotiated transceivers (no-op until
+      // the peer connection exists) + cap the video bitrate: a 96 px
+      // bubble needs nothing like a default 2.5 Mbit/s, and TURN relays
+      // every byte when the direct path fails.
+      async function attachLocal() {
+        try {
+          if (!pc) return;
+          const v = localStream ? localStream.getVideoTracks()[0] || null : null;
+          const a = localStream ? localStream.getAudioTracks()[0] || null : null;
+          if (videoTx) {
+            await videoTx.sender.replaceTrack(v).catch(() => {});
+            try {
+              const p = videoTx.sender.getParameters();
+              if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+              p.encodings[0].maxBitrate = 200000;
+              p.encodings[0].maxFramerate = 15;
+              await videoTx.sender.setParameters(p);
+            } catch (_) {}
+          }
+          if (audioTx) await audioTx.sender.replaceTrack(a).catch(() => {});
+          avAnnounce();
+        } catch (_) {}
+      }
+      async function avStart() {
+        if (localStream || avAcquiring || !avSupported()) { updateBubbles(); return; }
+        avAcquiring = true;
+        syncAvToggles();
+        const video = { facingMode: "user", width: { ideal: 240 }, height: { ideal: 240 }, frameRate: { ideal: 15, max: 20 } };
+        const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+        try {
+          try {
+            localStream = await navigator.mediaDevices.getUserMedia({ video, audio });
+          } catch (e) {
+            // No usable mic (or mic denied) must not cost the camera.
+            console.log("[mp-av] camera+mic failed (" + (e && e.name) + "), retrying video-only");
+            localStream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+          }
+          for (const v of avPreviews) v.srcObject = localStream;
+          localVideo.srcObject = localStream;
+          for (const t of localStream.getTracks()) {
+            try { if (t.kind === "video" && "contentHint" in t) t.contentHint = "motion"; } catch (_) {}
+            // iOS ends the capture when the app is backgrounded — the
+            // visibilitychange handler below re-acquires.
+            t.addEventListener("ended", () => { if (avWanted) avStop(false); updateBubbles(); });
+          }
+          await attachLocal();
+          console.log("[mp-av] capture on: " + localStream.getTracks().map(t => t.kind).join("+"));
+        } catch (e) {
+          console.log("[mp-av] capture failed: " + (e && e.name));
+          avWanted = false;
+          try { localStorage.setItem(AV_KEY, "0"); } catch (_) {}
+          banner("CAMERA UNAVAILABLE — " + String(e && e.name || "error").toUpperCase());
+        }
+        avAcquiring = false;
+        syncAvToggles();
+        updateBubbles();
+      }
+      // forget=true is the user's choice (toggle off / room left); false
+      // keeps the preference so a backgrounded capture comes back.
+      function avStop(forget) {
+        try {
+          if (localStream) for (const t of localStream.getTracks()) t.stop();
+        } catch (_) {}
+        localStream = null;
+        try { localVideo.srcObject = null; for (const v of avPreviews) v.srcObject = null; } catch (_) {}
+        if (forget) {
+          avWanted = false;
+          try { localStorage.setItem(AV_KEY, "0"); } catch (_) {}
+        }
+        attachLocal(); // replaceTrack(null) + tells the peer
+        syncAvToggles();
+        updateBubbles();
+      }
+      // Room joined/hosted: a remembered opt-in switches the camera on by
+      // itself (the permission was granted before, so no prompt).
+      function avAutoStart() {
+        if (avWanted && !localStream) avStart();
+        updateBubbles();
+      }
+      // Link closed (teardownNet): drop the remote media, stop the local
+      // capture — leaving the room always turns the camera off — but keep
+      // the preference for the next room.
+      function avOnLinkClosed() {
+        remoteAv = { video: false, audio: false };
+        remoteStream = null;
+        try { remoteVideo.srcObject = null; } catch (_) {}
+        audioTx = videoTx = null;
+        if (localStream) avStop(false);
+        updateBubbles();
+      }
+      function onRemoteTrack(e) {
+        try {
+          if (!remoteStream) remoteStream = new MediaStream();
+          remoteStream.addTrack(e.track);
+          remoteVideo.srcObject = remoteStream;
+          remoteVideo.play().catch(() => {});
+          // Belt-and-braces: a video track that stops receiving (peer's
+          // camera off without an "av" message) hides the bubble.
+          if (e.track.kind === "video") {
+            e.track.onmute = () => { remoteAv.video = false; updateBubbles(); };
+            e.track.onunmute = () => { if (remoteAv.video) updateBubbles(); };
+          }
+        } catch (_) {}
+      }
+      for (const t of avToggles) {
+        t.addEventListener("change", () => {
+          avWanted = t.checked;
+          try { localStorage.setItem(AV_KEY, avWanted ? "1" : "0"); } catch (_) {}
+          if (avWanted) avStart(); else avStop(true);
+        });
+      }
+      document.addEventListener("visibilitychange", () => {
+        try {
+          if (document.visibilityState !== "visible" || !avWanted || !inRoom()) return;
+          const dead = !localStream || localStream.getTracks().some(t => t.readyState === "ended");
+          if (dead) { if (localStream) avStop(false); avStart(); }
+        } catch (_) {}
+      });
+      syncAvToggles();
+
       function banner(msg) {
         try {
           bannerEl.textContent = msg;
@@ -4743,6 +5005,7 @@
         ws = pc = dc = null;
         iceServers = null;
         pendingCands = [];
+        avOnLinkClosed();
         call("set_mp_active", 0);
         state = "idle";
         role = null;
@@ -4846,6 +5109,18 @@
       function makePeer() {
         pc = new RTCPeerConnection({ iceServers: iceServers || [] });
         dcOpened = false;
+        // Media m-lines from the very first offer (see the AV block): the
+        // host adds them here, the guest adopts them from the offer in
+        // onSignal. A browser without addTransceiver just races without
+        // bubbles.
+        audioTx = videoTx = null;
+        if (role === "host" && pc.addTransceiver) {
+          try {
+            audioTx = pc.addTransceiver("audio", { direction: "sendrecv" });
+            videoTx = pc.addTransceiver("video", { direction: "sendrecv" });
+          } catch (_) { audioTx = videoTx = null; }
+        }
+        pc.ontrack = onRemoteTrack;
         cand = { host: 0, srflx: 0, relay: 0, remote: 0 };
         try { hadTurn = /"turns?:/.test(JSON.stringify(iceServers || [])); } catch (_) { hadTurn = false; }
         // Setup watchdog: if the DataChannel hasn't opened by now, the
@@ -4911,6 +5186,16 @@
               await pc.addIceCandidate(c).catch(() => {});
             }
             if (payload.sdp.type === "offer") {
+              // Guest side of the AV block: answer the offered media
+              // m-lines sendrecv so our own camera can be attached later
+              // with replaceTrack alone.
+              try {
+                for (const t of pc.getTransceivers()) {
+                  const kind = t.receiver && t.receiver.track && t.receiver.track.kind;
+                  if (kind === "audio" && !audioTx) { audioTx = t; t.direction = "sendrecv"; }
+                  else if (kind === "video" && !videoTx) { videoTx = t; t.direction = "sendrecv"; }
+                }
+              } catch (_) {}
               await pc.setLocalDescription(await pc.createAnswer());
               wsSend({ action: "signal", payload: { sdp: pc.localDescription } });
             }
@@ -4930,11 +5215,13 @@
             hostStatus.textContent = "Waiting for a challenger…";
             shareBtn.textContent = "Share invite link";
             shareBtn.style.display = "";
+            avAutoStart();
             break;
           case "room_joined":
             iceServers = msg.iceServers;
             joinStatus.textContent = "Connected — establishing link…";
             makePeer(); // answerer: waits for the host's offer + channel
+            avAutoStart();
             break;
           case "peer_joined": // host side: the guest arrived — offer now
             hostStatus.textContent = "Challenger found — connecting…";
@@ -4969,6 +5256,8 @@
           clearTimeout(connectTimer);
           connectTimer = null;
           dcSend({ t: "hello", name: playerName() || "PILOT", build: wasmRev.startsWith("__") ? "dev" : wasmRev.slice(0, 8) });
+          attachLocal(); // camera already on (remembered opt-in) → send it
+          updateBubbles();
         };
         dc.onclose = () => onPeerGone();
         dc.onmessage = e => {
@@ -4986,6 +5275,7 @@
             peerName = String(m.name || "PILOT").slice(0, 24);
             peerBuild = String(m.build || "");
             pushTextToWasm(peerName, "set_mp_name");
+            updateBubbles();
             // Cross-build races lean on the keyframe snap — warn, don't block.
             if (peerBuild && !wasmRev.startsWith("__")
                 && peerBuild !== wasmRev.slice(0, 8)) {
@@ -5016,6 +5306,10 @@
           case "start": // guest: the host's gun
             if (role !== "guest") break;
             beginCountdown();
+            break;
+          case "av": // the opponent's camera/mic state (the bubble's truth)
+            remoteAv = { video: !!m.video, audio: !!m.audio };
+            updateBubbles();
             break;
           case "run_end": {
             // Persistent room: the peer's ended run is a moment, not a
@@ -5272,6 +5566,7 @@
         leaveRoom,
         // The room owns the post-run flow while a session is live.
         inRace: () => state === "racing" || state === "starting",
+        syncBubbles: updateBubbles,
       };
     })();
 

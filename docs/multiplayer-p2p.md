@@ -273,8 +273,12 @@ IaC toolchain whose state file would hold the secret.)
 ## Out of scope (do not build)
 
 Ship–ship collision / shared physics world, >2 players, matchmaking
-beyond room codes, spectating, voice/chat, TURN self-hosting, relaying
-game traffic through AWS.
+beyond room codes, spectating, text chat, TURN self-hosting, relaying
+game traffic through AWS. (Voice was on this list until 2026-09: the
+owner then asked for Mario-Kart-style camera + voice bubbles, issue #200
+— they ride the same RTCPeerConnection as media tracks, so the "no game
+traffic through AWS" rule still holds; see CLAUDE.md "Video & voice
+bubbles".)
 
 ## Left to the implementer
 

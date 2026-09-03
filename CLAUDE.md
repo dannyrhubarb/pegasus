@@ -2135,6 +2135,37 @@ backend-verification flow.
   FLYING SOLO" banner, feed torn down) — the local flight is never
   blocked by network state.
 
+- **Video & voice bubbles (2026-09, #200 step 1 — raw feed)**: opt-in
+  per device (`pegasus_mp_av`, remembered; `Camera & mic` toggle on the
+  host / lobby screens with a mirrored local preview, and on the pause
+  screen while in a room — `#pause-av-row`, shown by `syncBubbles`), the
+  selfie camera (240² @15 fps ideal, `maxBitrate` 200 kbit/s,
+  `maxFramerate` 15 on the sender) + mic (echo cancellation on) ride the
+  SAME `RTCPeerConnection` as the input stream as media tracks — P2P, TURN
+  fallback, nothing through AWS beyond the SDP. **Transceivers are
+  negotiated up front** (host `addTransceiver` audio+video before the
+  first offer; the guest flips the offered m-lines to `sendrecv` in
+  `onSignal` before answering), so switching a camera on/off later is
+  `sender.replaceTrack` — no renegotiation, #148's offer/answer flow is
+  untouched. A DataChannel `{t:"av", video, audio}` message is the truth
+  for the opponent's bubble (track `mute` is only a belt-and-braces hide).
+  HUD: `#mp-bubbles` (HTML, `pointer-events: none`, top-right under the
+  corner buttons) — the opponent 96 px magenta with callsign, own 64 px
+  cyan mirrored — shown only while in a room AND the canvas is live
+  (`showScreen`/`closeMenu` call `pegMP.syncBubbles()` next to
+  `syncWakeLock`; the try/catch covers pegMP's TDZ at boot). The remote
+  `<video>` carries the voice track too, so it stays attached (audible)
+  while hidden. Leaving the room / any teardown stops the capture but
+  keeps the preference; iOS ends the capture on backgrounding — the track
+  `ended` + `visibilitychange` handlers re-acquire. A failed
+  `getUserMedia` (denied, no camera) flips the preference off and shows a
+  banner; a combined camera+mic failure retries video-only. Shells: iOS
+  `NSCameraUsageDescription` + `NSMicrophoneUsageDescription` and the
+  `WKUIDelegate` media-capture callback (one system prompt per media
+  type, no WebKit sheet — see "iOS app"); Android `CAMERA` /
+  `RECORD_AUDIO` permissions + a `WebChromeClient.onPermissionRequest`
+  that forwards the runtime prompt and grants only the bundle origin.
+  Step 2 (face-tracked crop before sending) is the follow-up in #200.
 ## Physics notes
 
 The body has `angular_damping(3.0)` and `linear_damping(0.2)` (see Thrust /
