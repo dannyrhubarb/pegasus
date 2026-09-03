@@ -1202,7 +1202,6 @@
       </svg>
       <div class="mbtn primary" id="btn-fly">Fly</div>
       <div class="mbtn" id="btn-scores">High scores</div>
-      <div class="mbtn" id="btn-manual" data-goto="scr-manual">Flight manual</div>
       <div class="mbtn" data-goto="scr-settings">Settings</div>
       <div class="mbtn" data-goto="scr-about">About</div>
     </div>
@@ -1280,11 +1279,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">a94e2bb-pr-205</div>
+        <div class="info-value" id="git-rev">e4c73cd-pr-205</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-09-03T21:01:39Z</div>
+        <div class="info-value" id="build-time">2026-09-03T21:07:48Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -1302,6 +1301,7 @@
         device so returning players can be counted; switching it off deletes
         the id.
       </div>
+      <div class="mbtn" id="btn-manual" data-goto="scr-manual">Flight manual</div>
       <div class="mbtn" id="btn-whatsnew">What's new</div>
       <div class="mbtn" id="btn-bugreport">Report a bug</div>
       <a class="mbtn" href="third-party-licenses.html" target="_blank" rel="noopener">Third-party licenses</a>
@@ -1309,8 +1309,8 @@
       <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
     </div>
 
-    <!-- Flight manual: the rules of the game in player language — above
-         all the LANDING criteria, which are otherwise invisible. The
+    <!-- Flight manual (About → Flight manual): the rules of the game in
+         player language — above all the LANDING criteria, which are otherwise invisible. The
          numbers here mirror ruleset 2 (sim-core/src/sim.rs `ruleset_v2`,
          FOOT_TOUCH_M, CRASH_DV_*, FUEL_*): a ruleset change must update
          this page in the same commit (see CLAUDE.md "Flight manual"). -->
@@ -1387,7 +1387,7 @@
         Replays flown under older rules replay exactly as they were and
         show a "flown on" badge.</p>
       </div>
-      <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
+      <div class="mbtn back" data-goto="scr-about">&#8249; Back</div>
     </div>
 
     <!-- What's New: the deploy-generated changelog (whats-new.json =
@@ -2102,7 +2102,7 @@
           : ["scr-home", "scr-scores"]; // no manifest: boards open directly
         case "scr-settings": return ["scr-home", "scr-settings"];
         case "scr-about":    return ["scr-home", "scr-about"];
-        case "scr-manual":   return ["scr-home", "scr-manual"];
+        case "scr-manual":   return ["scr-home", "scr-about", "scr-manual"];
         case "scr-whatsnew": return ["scr-home", "scr-about", "scr-whatsnew"];
         case "scr-bugreport": return ["scr-home", "scr-about", "scr-bugreport"];
         case "game":         return ["scr-home", "game"];
@@ -2794,7 +2794,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "a94e2bb-pr-205";
+    const wasmRev = "e4c73cd-pr-205";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
