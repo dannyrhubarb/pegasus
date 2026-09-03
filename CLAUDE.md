@@ -101,6 +101,7 @@ push-retry loop for concurrent deploys):
 - `privacy.html` — standalone privacy policy served with the site (and bundled into both apps), written for the Play Store listing's required privacy-policy URL; same substance as the About screen's `#privacy-note` — keep the two in agreement when the analytics story changes
 - `app-policy.json` — the **checked-in update/config policy** every client fetches at launch (`{}` = no verdicts): **the remote lever over ALREADY-INSTALLED apps and stale web tabs** — commit a `config` override to repoint old installs at a moved backend with no store release, or a `minBuild`/`minWebBuildTime` wall for a genuinely breaking change. **Reach for this whenever a backend move or compatibility break is being planned** (it exists because the #171 migration had no such lever and drained for weeks — pegasus-backend#38); see "App update policy" under "Game menu"
 - `tools/gen-whats-new.py` + `tools/whats-new-backfill.json` + `tools/whats-new-overrides.json` — deploy-time generator for `whats-new.json`, the About screen's What's New changelog (see "What's new page" — **every user-facing commit needs a `Whats-new:` trailer**; the overrides file rewords already-merged entries)
+- `.github/labels.json` + `tools/sync-labels.py` + `.github/workflows/labels.yml` — the **checked-in issue-label convention** (`type:` / `area:` / `status:` groups); edit the JSON, never the GitHub UI — see "Git workflow"
 - `index.html` — web wrapper, safe-area insets, the **HTML game menu** (start / pause / game-over screens, level picker, settings, high scores, about — see "Game menu"), **gamepad polling**, and a **boot guard** (touch/stick input moved in-canvas — no touch handlers here any more): a small standalone `<script>` tag ahead of the bundle (script tags parse independently, so no error in the bundle/main script can kill it) that paints any script error on screen with file:line and offers a tap-to-reload if `wasm_exports` is missing 8 s after load. Keep it first and self-contained. It also pushes each reported error into a capped `window.__pegErrs` buffer (push-only — the guard never depends on anything) that the analytics module drains (see "Analytics"). It also wraps `console.error` (installed ahead of the bundle, so the wasm `console_error` import routes through it) and appends the last logged error to the banner when the error event is anonymous or attributed to the `.wasm` file — **a Rust panic reaches JS as an opaque trap** (`RuntimeError: unreachable`; iOS Safari mutes it further to a bare "Script error." with no filename, because wasm frames fail its same-origin check), and the only useful description is the panic-hook line logged just before the trap (`src/main.rs` installs `std::panic::set_hook` → `error!("{}", info)`; the *default* hook prints the useless Debug form `PanicHookInfo { payload: Any { .. }, … }`). Unhandled promise rejections get the same banner (skipped when `reason` is null). **Fully-anonymous errors (no filename AND no console.error trace) are deliberately ignored**: same-origin scripts always carry file:line and a wasm panic always logs via the hook first, so the only things that land there are Safari-injected third-party scripts — reproduced live on iOS: opening the **share sheet** runs share/action extensions' preprocessing JS in the page, and an error in any of them arrives as a muted "Script error." (this was the mystery banner of 2026-07-06, seen right after the Pegasus rename and initially blamed on it).
 - `mq_js_bundle.js` — **vendored** miniquad/quad-snd JS loader (from not-fl3/miniquad-samples). Pinned in-repo so deploys don't depend on a third-party host; includes the audio backend. Update it deliberately if macroquad is upgraded. **Gotcha**: it declares globals at top level (`const canvas`, `var gl`, `wasm_exports`, `function load`, …) that share the page's global scope — redeclaring any of them in `index.html`'s inline script is a SyntaxError that silently kills the *whole* inline script (no `load()` → no wasm, page shows only the HTML chrome). Pick distinct names and check the bundle before adding top-level identifiers.
 
@@ -2426,6 +2427,54 @@ which populates the registry cache) whenever `Cargo.lock` changes, and
 commit the refreshed page.
 
 ## Git workflow
+- **Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/)
+  (owner decision, 2026-09)**: `<type>(<scope>)!: <summary>` — imperative,
+  lower-case, no trailing period, ≤ 72 chars. Types: `feat`, `fix`, `perf`,
+  `refactor`, `docs`, `test`, `ci`, `build` (deps/toolchain/Cargo/Gradle/
+  Xcode bumps), `chore` (no code-behaviour change and none of the above,
+  e.g. an `app-policy.json` edit), `revert`. **Scopes are the `area:`
+  label names** (see "Issue labels" below): `sim`, `levels`, `editor`,
+  `ui`, `input`, `render`, `replay`, `scores`, `mp` (multiplayer),
+  `analytics`, `ios`, `android`, `ci` — plus `policy` (app-policy.json)
+  and `deps`; omit the scope when a change spans several. **`!` (plus a
+  `BREAKING CHANGE:` footer) marks a change that alters sim results or the
+  replay format** — exactly the changes that need the backend repin, so
+  `git log --grep '!:'` is the repin history; pair it with the
+  `status: needs-repin` label on the PR. The `Whats-new:` trailer is
+  unchanged and complementary: the subject is for developers, the trailer
+  is the player-language note (and stays in the trailer block, see "What's
+  new page"). Example:
+  ```
+  fix(input): claim the stick by touch id, not TouchPhase::Started
+
+  Android collapses touchstart+touchmove into one Moved entry, so …
+
+  Whats-new: Fixed: The touch stick no longer ignores every few touches on Android
+  Co-Authored-By: …
+  ```
+  PR titles use the same format (a squash merge takes the PR title as the
+  subject). History before 2026-09 is free-form and stays that way —
+  never rewrite it to fit.
+- **Issue labels are a checked-in convention**: `.github/labels.json` is
+  the source of truth, `tools/sync-labels.py` applies it (create / update /
+  rename-by-alias / `--prune`, stdlib only, runnable locally with a
+  `GITHUB_TOKEN`), and `.github/workflows/labels.yml` runs it on every
+  `main` push touching either — so a new label is a PR editing the JSON,
+  never a UI click (the workflow prunes UI-created labels). Three
+  prefixed groups — exactly one `type:` per issue, any number of `area:` /
+  `status:`: **`type:`** `bug` / `feature` / `idea` (design notes, not
+  committed to — e.g. the video-avatar write-up #200) / `chore` / `docs` /
+  `question`; **`area:`** the commit scopes above (all green — the
+  dimension, not the value, carries the colour); **`status:`** `blocked`
+  (waiting on something external) / `held` (parked on purpose — the
+  post-1.0 level PRs) / `needs-repin` (sim results or replay format
+  change; the backend must repin + deploy, see its CLAUDE.md). The GitHub
+  defaults were RENAMED into the groups (rename keeps existing issue
+  associations); `wontfix` / `duplicate` / `invalid` were dropped —
+  GitHub's close reasons carry that. **`test-apk` stays un-prefixed**: it
+  is a workflow trigger and `android-test-apk.yml` matches it by exact
+  name. pegasus-backend mirrors the scheme with its own `area:` set
+  (`verify` / `scores` / `analytics` / `signaling` / `infra` / `ci`).
 - **Keep version pins at latest stable (owner policy, 2026-08)**: GitHub
   Actions majors, runner images, Gradle/AGP/Kotlin/SDK levels, Xcode and
   dependencies should track the latest stable release. When a newer
