@@ -1273,6 +1273,19 @@
       </div>
       <div class="mbtn" id="btn-whatsnew">What's new</div>
       <div class="mbtn" id="btn-bugreport">Report a bug</div>
+      <!-- Debug-only (shown while the Debug HUD toggle is on): the camera
+           PROBE for the video-avatar idea (#200) — does getUserMedia work
+           on this origin (the iOS pegasus:// shell is the open question)?
+           Shows the raw selfie feed in a bubble + the probe verdict, and
+           logs the verdict so a bug report carries it. Nothing is sent
+           anywhere; tapping again stops the camera. -->
+      <div class="mbtn" id="cam-test" style="display:none">Camera test</div>
+      <div id="cam-panel" style="display:none;text-align:center">
+        <div class="hint" id="cam-status" style="margin:6px 0 10px;word-break:break-word"></div>
+        <div style="width:160px;height:160px;margin:0 auto;border-radius:50%;overflow:hidden;border:2px solid var(--cyan);box-shadow:0 0 14px var(--cyan);background:#000">
+          <video id="cam-video" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;transform:scaleX(-1)"></video>
+        </div>
+      </div>
       <a class="mbtn" href="third-party-licenses.html" target="_blank" rel="noopener">Third-party licenses</a>
       <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
       <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
@@ -1785,6 +1798,7 @@
       if (!walled && wallPolicy && id !== "scr-update") armWall(wallPolicy);
       if (walled && id !== "scr-update") id = "scr-update";
       if (overlay === "scr-bugreport" && id !== "scr-bugreport") bugReportLeft();
+      if (overlay === "scr-about" && id !== "scr-about") camTestStop();
       overlay = id;
       menuEl.classList.add("open");
       hudBtns.classList.remove("on");
@@ -1803,6 +1817,7 @@
     function closeMenu() {
       if (walled) { showScreen("scr-update"); return; }
       if (overlay === "scr-bugreport") bugReportLeft();
+      if (overlay === "scr-about") camTestStop();
       overlay = null;
       menuEl.classList.remove("open");
       hudBtns.classList.add("on");
@@ -4036,11 +4051,65 @@
     const debugToggle = document.getElementById("debug-toggle");
     debugToggle.checked = localStorage.getItem("pegasus_debug_hud") === "1";
     const resetConsentBtn = document.getElementById("reset-consent");
+    const camTestBtn = document.getElementById("cam-test");
     function applyDebugSetting() {
       call("set_debug_hud", debugToggle.checked ? 1 : 0);
-      // The consent-reset test button rides the same switch.
+      // The consent-reset test button and the camera probe ride the same switch.
       resetConsentBtn.style.display = debugToggle.checked ? "" : "none";
+      camTestBtn.style.display = debugToggle.checked ? "" : "none";
+      if (!debugToggle.checked) camTestStop();
     }
+    // Camera probe (#200): is this origin a secure context with
+    // navigator.mediaDevices, and does getUserMedia actually deliver a
+    // selfie-camera stream? Every step is logged via console.log so the
+    // verdict lands in pegLog / a bug report. Never sends anything.
+    const camPanel = document.getElementById("cam-panel");
+    const camStatus = document.getElementById("cam-status");
+    const camVideo = document.getElementById("cam-video");
+    let camStream = null;
+    function camTestStop() {
+      // Called from showScreen/closeMenu too — hoisted, so it must never
+      // throw (the consts above are in their TDZ until this block runs).
+      try {
+        if (camStream) camStream.getTracks().forEach(t => t.stop());
+        camStream = null;
+        camVideo.srcObject = null;
+        camPanel.style.display = "none";
+        camTestBtn.textContent = "Camera test";
+      } catch (e) { /* probe only — never break the menu */ }
+    }
+    async function camTestStart() {
+      const facts = `secureContext=${window.isSecureContext} mediaDevices=${!!navigator.mediaDevices} origin=${location.origin}`;
+      console.log("[cam-test] " + facts);
+      camPanel.style.display = "";
+      camStatus.textContent = facts + " — requesting…";
+      camTestBtn.textContent = "Stop camera";
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        camStatus.textContent = facts + " — getUserMedia UNAVAILABLE (not a secure context?)";
+        console.log("[cam-test] getUserMedia unavailable");
+        return;
+      }
+      try {
+        camStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user", width: { ideal: 320 }, height: { ideal: 320 } }, audio: false,
+        });
+        const track = camStream.getVideoTracks()[0];
+        const s = track ? track.getSettings() : {};
+        camVideo.srcObject = camStream;
+        const verdict = `OK ${s.width || "?"}x${s.height || "?"} @${s.frameRate || "?"}fps ${track ? track.label : ""}`;
+        camStatus.textContent = facts + " — " + verdict;
+        console.log("[cam-test] " + verdict);
+        track && track.addEventListener("ended", () => {
+          camStatus.textContent = facts + " — track ENDED (backgrounded?)";
+          console.log("[cam-test] track ended");
+        });
+      } catch (e) {
+        const msg = `FAILED ${e && e.name}: ${e && e.message}`;
+        camStatus.textContent = facts + " — " + msg;
+        console.log("[cam-test] " + msg);
+      }
+    }
+    camTestBtn.addEventListener("click", () => { camStream || camPanel.style.display !== "none" ? camTestStop() : camTestStart(); });
     resetConsentBtn.addEventListener("click", () => {
       pegAnalytics.resetConsent();
       resetConsentBtn.textContent = "Consent forgotten — crash to re-test";
