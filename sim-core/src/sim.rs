@@ -72,6 +72,10 @@ pub const FOOT_Y: f32 = -0.73;
 // (ruleset 2): contact slop only — a foot in the air is not on the pad. The
 // legacy rule's 0.3 m foot-line tolerance would let a ship tilted to the
 // settle limit count with one foot 13 cm up (found on the first probe).
+// THIS IS ALSO THE TILT LIMIT: with the feet 2·FOOT_X = 0.66 m apart, both
+// within 10 cm of the deck caps the tilt at atan(0.10/0.66) ≈ 8.6°, which is
+// why ruleset 2 has no separate upright check — loosen this and the
+// allowed landing angle grows with it.
 pub const FOOT_TOUCH_M: f32 = 0.10;
 
 // The exact simulation constants this build runs with, serialized into every
@@ -697,8 +701,7 @@ impl Sim {
             // deck) for PAD_LAND_TIME. First visit scores; parked ships
             // refuel and repair.
             let b = &self.bodies[self.ship];
-            let settled = b.rotation().angle().abs() < 0.30
-                && vx.abs() < 1.0
+            let settled = vx.abs() < 1.0
                 && vy.abs() < 1.0
                 && b.angvel().abs() < 0.5;
             let on_pad = settled
@@ -710,7 +713,8 @@ impl Sim {
                         // with the hull; each must sit inside the deck span
                         // and within FOOT_TOUCH_M of the deck top — a foot
                         // in the air (a one-foot tilted touchdown) does not
-                        // start the timer.
+                        // start the timer. No separate upright check: the
+                        // feet geometry caps the tilt at ~9° (FOOT_TOUCH_M).
                         let rot = b.rotation();
                         let (c, s) = (rot.re, rot.im);
                         let feet = [-FOOT_X, FOOT_X].map(|lx| {
@@ -725,13 +729,18 @@ impl Sim {
                                 .then_some(key)
                         })
                     } else {
-                        // Ruleset 1 (legacy): the ship's CENTRE over the
-                        // deck, the foot line near the deck top.
+                        // Ruleset 1 (legacy): upright within 0.30 rad, the
+                        // ship's CENTRE over the deck, the foot line near the
+                        // deck top. Verbatim — old replays resim under it.
                         let feet = y - 0.73;
-                        self.pads.iter().find_map(|(&key, pad)| {
-                            ((x - pad.cx).abs() <= PAD_HALF_W && (feet - pad.y).abs() < 0.3)
-                                .then_some(key)
-                        })
+                        (b.rotation().angle().abs() < 0.30)
+                            .then(|| {
+                                self.pads.iter().find_map(|(&key, pad)| {
+                                    ((x - pad.cx).abs() <= PAD_HALF_W && (feet - pad.y).abs() < 0.3)
+                                        .then_some(key)
+                                })
+                            })
+                            .flatten()
                     }
                 })
                 .flatten();
