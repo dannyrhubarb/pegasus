@@ -1011,6 +1011,16 @@ pub extern "C" fn set_ghost_enabled(on: i32) {
     GHOST_ON.store(on as u32, Ordering::Relaxed);
 }
 
+// "Landing ring" toggle (settings checkbox, on by default): whether the
+// settle ring is drawn while a landing registers. Presentation only — the
+// hold itself is unchanged, so the sim/replays/verification never see it.
+static LAND_RING: AtomicU32 = AtomicU32::new(1);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_land_ring(on: i32) {
+    LAND_RING.store(on as u32, Ordering::Relaxed);
+}
+
 // --- Bluetooth / USB game controller bridge (Web Gamepad API, see index.html) ---
 #[unsafe(no_mangle)]
 pub extern "C" fn set_pad_thrust(active: i32) {
@@ -3104,9 +3114,10 @@ async fn main() {
         // (land_progress is a presentation-only read). Hidden at 1.0 — the
         // beacon flip / visit flash takes over as the confirmation, and the
         // timer keeps counting while parked (refuel/repair), where a stuck
-        // full ring would just be noise.
+        // full ring would just be noise. Behind the "Landing ring" setting
+        // (LAND_RING, on by default).
         let land_p = world_sim.land_progress();
-        if ship_visible && land_p > 0.0 && land_p < 1.0 {
+        if LAND_RING.load(Ordering::Relaxed) != 0 && ship_visible && land_p > 0.0 && land_p < 1.0 {
             let c = w2s(cam_x, cam_y, sh, cam_x, cam_y); // camera is ship-centred
             let r = 1.05 * view_scale;
             // Faint full track so the fill reads as progress toward a goal.

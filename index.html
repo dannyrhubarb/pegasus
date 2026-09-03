@@ -1263,6 +1263,10 @@
         <span>Race best ghost</span>
         <input type="checkbox" id="ghost-toggle"><span class="tgl"></span>
       </label>
+      <label class="setrow" id="ring-toggle-row">
+        <span>Landing ring</span>
+        <input type="checkbox" id="ring-toggle"><span class="tgl"></span>
+      </label>
       <label class="setrow" id="debug-toggle-row">
         <span>Debug HUD</span>
         <input type="checkbox" id="debug-toggle"><span class="tgl"></span>
@@ -1326,8 +1330,9 @@
         <h3>Landing</h3>
         <p>A landing counts when the ship is sitting slow on a pad with
         <b>both feet on the deck</b> and stays that way for <b>0.4 s</b>.
-        The green ring around the ship fills while that timer runs &mdash;
-        lift off before it closes and the landing never happened.</p>
+        The green ring around the ship (Settings &rarr; Landing ring)
+        fills while that timer runs &mdash; lift off before it closes and
+        the landing never happened.</p>
         <ul>
           <li><b>Both feet on the deck</b> &mdash; each landing leg inside
           the pad and no more than 10 cm above it. A foot in the air or
@@ -4204,6 +4209,24 @@
       if (typeof wasm_exports !== "undefined" && wasm_exports.set_ghost_enabled) {
         applyGhostSetting();
         clearInterval(ghostTimer);
+      }
+    }, 200);
+
+    // "Landing ring" toggle (on by default): the green settle ring that
+    // fills around the ship while a landing registers. Presentation only.
+    const ringToggle = document.getElementById("ring-toggle");
+    ringToggle.checked = localStorage.getItem("pegasus_land_ring") !== "0";
+    function applyRingSetting() {
+      call("set_land_ring", ringToggle.checked ? 1 : 0);
+    }
+    ringToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_land_ring", ringToggle.checked ? "1" : "0");
+      applyRingSetting();
+    });
+    const ringTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_land_ring) {
+        applyRingSetting();
+        clearInterval(ringTimer);
       }
     }, 200);
 

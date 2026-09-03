@@ -360,7 +360,9 @@ fifth home button).
   `pegasus_split_controls`, **on by default** → `set_split_controls` →
   `SPLIT_CONTROLS`; left-half throttle button / right-half steering stick —
   see "Input sources"), **Race best ghost** (`#ghost-toggle-row`, on by
-  default), **Debug HUD** (`#debug-toggle-row`, `pegasus_debug_hud`, **off by
+  default), **Landing ring** (`#ring-toggle-row`, `pegasus_land_ring`,
+  **on by default** → `set_land_ring` → `LAND_RING`; the settle ring
+  drawn while a landing registers — presentation only), **Debug HUD** (`#debug-toggle-row`, `pegasus_debug_hud`, **off by
   default** → `set_debug_hud` → `DEBUG_HUD`; shows the telemetry text line —
   see "HUD") as styled toggles; same localStorage → export → atomic plumbing.
   Plus **Share anonymous returning-player id** (`#retid-toggle-row`) — JS-only, mirrors
@@ -1512,7 +1514,9 @@ keep running the legacy predicate verbatim, so old replays resim
 bit-exactly. First
 visit per (slot, layer) scores `PAD_POINTS = 100` (green "+100" flash); parked
 ships refuel at `PAD_REFUEL_PER_S = 25/s` ("REFUELING" shown while below max).
-**The settle hold is VISIBLE — the landing settle ring** (2026-09): while
+**The settle hold is VISIBLE — the landing settle ring** (2026-09;
+behind the **Landing ring** Settings toggle, `LAND_RING`, on by
+default — a pure draw gate, the hold is unchanged): while
 the timer runs, a green ring around the ship fills clockwise over the
 0.8 s; hold until it closes and the visit is yours. Driven by
 `Sim::land_progress()` (`land_timer / PAD_LAND_TIME`, capped at 1 — a
