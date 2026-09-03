@@ -366,7 +366,19 @@ while the wasm loads):
   downloadable/shareable text file — see "Client log & bug reports" under
   "Analytics") and the
   **⟳ Reload latest build** button (`#force-reload`, same `?fresh=<ts>`
-  bypass as the toast below).
+  bypass as the toast below). Debug-only (visible while the Debug HUD
+  toggle is on, like Settings' `#reset-consent`): the **Camera test**
+  button (`#cam-test`, 2026-09) — the `getUserMedia` PROBE for the
+  video-avatar idea (#200): logs `secureContext` / `mediaDevices` /
+  origin, requests the selfie camera AND the microphone (one combined
+  request, video-only fallback with the mic error named) and shows the
+  raw feed in a round bubble with a live mic-level bar (AnalyserNode RMS,
+  nothing played back) and the verdict (or the error name) beneath; every step goes
+  through `console.log` so a bug report zip carries it. Stops on leaving
+  the screen. Nothing is sent anywhere. **Verdict (2026-09-03, owner's
+  phone)**: the iOS `pegasus://app` origin IS a secure context —
+  `secureContext=true mediaDevices=true`, front camera 320×320 @30 fps in
+  the shell, same as the website — so #200 needs no origin change.
 - **scr-pause**: Resume / Exit to menu. **scr-gameover**: CRASHED + run
   distance + best, Fly again / Watch replay / "‹ Back" (`#btn-gomenu` —
   ends the run and opens the fly-mode level picker; home when there's no
@@ -2116,7 +2128,11 @@ re-acquired on the `visibilitychange` back while still wanted).
   xcodebuild, no secrets) and `ios-testflight.yml` (**manual dispatch
   ONLY** — automatic publish on `main` pushes is PAUSED since 2026-08,
   owner request; see the paused-trigger note under Android CI —
-  cloud-signed archive → TestFlight;
+  cloud-signed archive → TestFlight; its `distribution` input
+  (2026-09) = `public` (default: Beta App Review + the public group) or
+  `internal` (upload only — ASC team members under Internal Testing get
+  it automatically, the public group never sees it; used for shell
+  probes like the #200 camera test);
   needs the four `APP_STORE_CONNECT_API_*`/`APPLE_TEAM_ID` repo secrets
   and the ASC app record; build number = workflow run number). Both run on
   **`macos-26` and select the newest stable Xcode** — App Store Connect
@@ -2127,7 +2143,15 @@ re-acquired on the `visibilitychange` back while still wanted).
   on a fresh runner can't see locally auto-generated schemes — and
   `fetch-depth: 0` (What's New). `Info.plist` carries
   `ITSAppUsesNonExemptEncryption = false` so TestFlight builds skip the
-  per-upload compliance question. After the upload,
+  per-upload compliance question, and `NSCameraUsageDescription` (2026-09,
+  for the #200 camera probe — a missing key is a hard crash the moment
+  `getUserMedia` runs, not a denial); `GameViewController` implements the
+  `WKUIDelegate` media-capture permission callback (iOS 15+) — camera
+  requests from the bundle scheme are answered from
+  `AVCaptureDevice.requestAccess`, so the player sees ONE system dialog
+  naming Pegasus instead of that plus WebKit's own per-origin sheet (two
+  dialogs, seen on the first probe); microphone (`NSMicrophoneUsageDescription`)
+  goes through the same path, one system prompt per media type. After the upload,
   `ios/testflight-distribute.py` (ASC API, same key) waits out Apple's
   build processing, submits the build to Beta App Review and attaches it
   to the beta group named by the `TESTFLIGHT_GROUP_NAME` repo variable

@@ -1,3 +1,4 @@
+import AVFoundation
 import UIKit
 import WebKit
 
@@ -186,6 +187,51 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
             }
         }
         return nil
+    }
+}
+
+// Camera permission for getUserMedia (iOS 15+). Without this delegate
+// WebKit shows its OWN per-origin sheet ("pegasus://app" would like to
+// access the camera) on top of the iOS system prompt — two dialogs, seen
+// live on the first #200 camera probe (2026-09). Answer from the system
+// authorization instead: iOS asks once (the NSCameraUsageDescription
+// prompt; instant if already decided), and WebKit is granted or denied
+// accordingly, so the player sees one dialog naming Pegasus.
+extension GameViewController {
+    func webView(
+        _ webView: WKWebView,
+        requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+        initiatedByFrame frame: WKFrameInfo,
+        type: WKMediaCaptureType,
+        decisionHandler: @escaping (WKPermissionDecision) -> Void
+    ) {
+        // Only the bundled page (our own scheme) may capture; anything else
+        // that ever loads in here gets WebKit's default prompt.
+        guard origin.protocol == WebRootSchemeHandler.scheme else {
+            return decisionHandler(.prompt)
+        }
+        // Both usage strings live in Info.plist (requesting access without
+        // the matching key is a crash, not a denial — keep them paired).
+        let media: [AVMediaType]
+        switch type {
+        case .camera: media = [.video]
+        case .microphone: media = [.audio]
+        case .cameraAndMicrophone: media = [.video, .audio]
+        @unknown default: return decisionHandler(.prompt)
+        }
+        requestAccess(media) { granted in
+            DispatchQueue.main.async { decisionHandler(granted ? .grant : .deny) }
+        }
+    }
+
+    /// Sequential system authorization for each media type; false as soon
+    /// as one is refused. iOS shows one prompt per type, once per install.
+    private func requestAccess(_ media: [AVMediaType], _ completion: @escaping (Bool) -> Void) {
+        guard let first = media.first else { return completion(true) }
+        AVCaptureDevice.requestAccess(for: first) { granted in
+            guard granted else { return completion(false) }
+            self.requestAccess(Array(media.dropFirst()), completion)
+        }
     }
 }
 

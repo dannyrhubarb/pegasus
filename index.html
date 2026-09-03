@@ -1273,6 +1273,24 @@
       </div>
       <div class="mbtn" id="btn-whatsnew">What's new</div>
       <div class="mbtn" id="btn-bugreport">Report a bug</div>
+      <!-- Debug-only (shown while the Debug HUD toggle is on): the camera
+           PROBE for the video-avatar idea (#200) — does getUserMedia work
+           on this origin (the iOS pegasus:// shell is the open question)?
+           Shows the raw selfie feed in a bubble + the probe verdict, and
+           logs the verdict so a bug report carries it. Nothing is sent
+           anywhere; tapping again stops the camera. -->
+      <div class="mbtn" id="cam-test" style="display:none">Camera test</div>
+      <div id="cam-panel" style="display:none;text-align:center">
+        <div class="hint" id="cam-status" style="margin:6px 0 10px;word-break:break-word"></div>
+        <div style="width:160px;height:160px;margin:0 auto;border-radius:50%;overflow:hidden;border:2px solid var(--cyan);box-shadow:0 0 14px var(--cyan);background:#000">
+          <video id="cam-video" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;transform:scaleX(-1)"></video>
+        </div>
+        <!-- Microphone input level (RMS of the captured audio) — the only
+             way to SEE that the mic track is live; nothing is played back. -->
+        <div style="width:160px;height:6px;margin:10px auto 0;border-radius:3px;background:rgba(255,255,255,.12);overflow:hidden">
+          <div id="cam-level" style="width:0;height:100%;background:var(--green);transition:width 60ms linear"></div>
+        </div>
+      </div>
       <a class="mbtn" href="third-party-licenses.html" target="_blank" rel="noopener">Third-party licenses</a>
       <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
       <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
@@ -1785,6 +1803,7 @@
       if (!walled && wallPolicy && id !== "scr-update") armWall(wallPolicy);
       if (walled && id !== "scr-update") id = "scr-update";
       if (overlay === "scr-bugreport" && id !== "scr-bugreport") bugReportLeft();
+      if (overlay === "scr-about" && id !== "scr-about") camTestStop();
       overlay = id;
       menuEl.classList.add("open");
       hudBtns.classList.remove("on");
@@ -1803,6 +1822,7 @@
     function closeMenu() {
       if (walled) { showScreen("scr-update"); return; }
       if (overlay === "scr-bugreport") bugReportLeft();
+      if (overlay === "scr-about") camTestStop();
       overlay = null;
       menuEl.classList.remove("open");
       hudBtns.classList.add("on");
@@ -4036,11 +4056,110 @@
     const debugToggle = document.getElementById("debug-toggle");
     debugToggle.checked = localStorage.getItem("pegasus_debug_hud") === "1";
     const resetConsentBtn = document.getElementById("reset-consent");
+    const camTestBtn = document.getElementById("cam-test");
     function applyDebugSetting() {
       call("set_debug_hud", debugToggle.checked ? 1 : 0);
-      // The consent-reset test button rides the same switch.
+      // The consent-reset test button and the camera probe ride the same switch.
       resetConsentBtn.style.display = debugToggle.checked ? "" : "none";
+      camTestBtn.style.display = debugToggle.checked ? "" : "none";
+      if (!debugToggle.checked) camTestStop();
     }
+    // Camera probe (#200): is this origin a secure context with
+    // navigator.mediaDevices, and does getUserMedia actually deliver a
+    // selfie-camera stream? Every step is logged via console.log so the
+    // verdict lands in pegLog / a bug report. Never sends anything.
+    const camPanel = document.getElementById("cam-panel");
+    const camStatus = document.getElementById("cam-status");
+    const camVideo = document.getElementById("cam-video");
+    const camLevel = document.getElementById("cam-level");
+    let camStream = null;
+    let camAudioCtx = null;
+    let camLevelRaf = 0;
+    function camTestStop() {
+      // Called from showScreen/closeMenu too — hoisted, so it must never
+      // throw (the consts above are in their TDZ until this block runs).
+      try {
+        if (camLevelRaf) cancelAnimationFrame(camLevelRaf);
+        camLevelRaf = 0;
+        if (camAudioCtx) camAudioCtx.close().catch(() => {});
+        camAudioCtx = null;
+        if (camStream) camStream.getTracks().forEach(t => t.stop());
+        camStream = null;
+        camVideo.srcObject = null;
+        camLevel.style.width = "0";
+        camPanel.style.display = "none";
+        camTestBtn.textContent = "Camera test";
+      } catch (e) { /* probe only — never break the menu */ }
+    }
+    // Mic level meter: RMS of the time-domain samples → bar width. The
+    // click that started the probe is the user gesture the AudioContext
+    // needs; nothing is connected to the destination, so no playback.
+    function camMeterStart(stream) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return "no AudioContext";
+      camAudioCtx = new AC();
+      camAudioCtx.resume().catch(() => {});
+      const analyser = camAudioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      camAudioCtx.createMediaStreamSource(stream).connect(analyser);
+      const buf = new Uint8Array(analyser.fftSize);
+      let peak = 0;
+      const tick = () => {
+        analyser.getByteTimeDomainData(buf);
+        let sum = 0;
+        for (let i = 0; i < buf.length; i++) { const d = (buf[i] - 128) / 128; sum += d * d; }
+        const rms = Math.sqrt(sum / buf.length);
+        if (rms > peak) { peak = rms; if (peak > 0.02) console.log("[cam-test] mic level peak " + peak.toFixed(3)); }
+        camLevel.style.width = Math.min(100, rms * 300) + "%";
+        camLevelRaf = requestAnimationFrame(tick);
+      };
+      camLevelRaf = requestAnimationFrame(tick);
+      return "meter on";
+    }
+    async function camTestStart() {
+      const facts = `secureContext=${window.isSecureContext} mediaDevices=${!!navigator.mediaDevices} origin=${location.origin}`;
+      console.log("[cam-test] " + facts);
+      camPanel.style.display = "";
+      camStatus.textContent = facts + " — requesting…";
+      camTestBtn.textContent = "Stop camera";
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        camStatus.textContent = facts + " — getUserMedia UNAVAILABLE (not a secure context?)";
+        console.log("[cam-test] getUserMedia unavailable");
+        return;
+      }
+      const video = { facingMode: "user", width: { ideal: 320 }, height: { ideal: 320 } };
+      try {
+        // Camera + microphone in ONE request (one combined WebKit decision;
+        // iOS still shows its two system prompts, once each). A device or
+        // policy with no usable mic fails the whole call, so fall back to
+        // video-only and report the mic error rather than nothing.
+        let micNote;
+        try {
+          camStream = await navigator.mediaDevices.getUserMedia({ video, audio: true });
+        } catch (e) {
+          micNote = `mic FAILED ${e && e.name}`;
+          console.log("[cam-test] camera+mic request failed (" + (e && e.name) + "), retrying video-only");
+          camStream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+        }
+        const track = camStream.getVideoTracks()[0];
+        const mic = camStream.getAudioTracks()[0];
+        const s = track ? track.getSettings() : {};
+        camVideo.srcObject = camStream;
+        if (mic) micNote = `mic OK ${mic.label} (${camMeterStart(camStream)})`;
+        const verdict = `OK ${s.width || "?"}x${s.height || "?"} @${s.frameRate || "?"}fps ${track ? track.label : ""} · ${micNote}`;
+        camStatus.textContent = facts + " — " + verdict;
+        console.log("[cam-test] " + verdict);
+        track && track.addEventListener("ended", () => {
+          camStatus.textContent = facts + " — track ENDED (backgrounded?)";
+          console.log("[cam-test] track ended");
+        });
+      } catch (e) {
+        const msg = `FAILED ${e && e.name}: ${e && e.message}`;
+        camStatus.textContent = facts + " — " + msg;
+        console.log("[cam-test] " + msg);
+      }
+    }
+    camTestBtn.addEventListener("click", () => { camStream || camPanel.style.display !== "none" ? camTestStop() : camTestStart(); });
     resetConsentBtn.addEventListener("click", () => {
       pegAnalytics.resetConsent();
       resetConsentBtn.textContent = "Consent forgotten — crash to re-test";
