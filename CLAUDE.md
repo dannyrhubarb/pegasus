@@ -883,7 +883,17 @@ tunnels, five pads scattered through them (incl. a perch on the west
 tunnel's sill) plus a neutral `start` platform in the spawn chamber,
 **time-scored**: visit all five as fast as you can, the run ends on the
 last pad; its geometry-lint unit test asserts every chamber / tunnel /
-pad / start waypoint is open space via `Terrain::point_in_rock`).
+pad / start waypoint is open space via `Terrain::point_in_rock`),
+and **The Descent** (2026-08: the second hand-drawn level, The Hollows
+inverted — the spawn is at the TOP and all five pads are further DOWN a
+five-storey chasm joined by offset vertical shafts, so controlled falls
+and flip-and-burn braking are the core skill; one pad, the loft, is a
+pocket above the vault reached through a tight chimney. Time-scored like
+The Hollows. Its geometry was authored as probe-validated jittered slabs
+(generator stayed in scratch, like the ship-mesh scripts); beyond the
+waypoint lint it has a stronger per-pad test that PARKS the ship on each
+deck via a keyframe mask and asserts the landing registers and completes
+the run — a buried or pocket-blocked pad fails in CI, not on a phone).
 **The Caves** (the original shafted world) was retired 2026-07 with The
 Rift — its world survives as the compiled-in `Level::demo()` (`pads`
 scoring), which remains the no-manifest fallback and the fixture for the
