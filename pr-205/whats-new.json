@@ -1,5 +1,10 @@
 [
  {
+  "rev": "a94e2bb",
+  "date": "2026-09-03T21:00:28Z",
+  "note": "New: A Flight manual on the main menu — read exactly what makes a landing count before the pad tells you it didn't"
+ },
+ {
   "rev": "f7843f0",
   "date": "2026-09-03T20:43:55Z",
   "note": "New: A landing now counts once the ship has actually stopped — no more registering while skidding across the pad"
