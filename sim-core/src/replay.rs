@@ -83,7 +83,10 @@ pub const REPLAY_FORMAT_VERSION_V6: u16 = 6;
 // This build's rule-LOGIC capability level (see min_logic above). Bump it
 // when Sim::tick gains a mechanic older builds cannot re-simulate; a
 // parameter-only ruleset change must NOT bump it.
-pub const LOGIC_VERSION: u16 = 1;
+// History: 1 = the v6 baseline logic; 2 = the BOTH-FEET landing rule
+// (ruleset 2, pegasus#194 phase 4 — `land_rule`, a predicate older
+// clients don't implement).
+pub const LOGIC_VERSION: u16 = 2;
 
 // The distinguishable "too new" decode error: the blob is well-formed, this
 // build's sim logic just can't replay it. Callers compare against this to
@@ -252,6 +255,14 @@ pub struct SimParams {
     pub pad_refuel_per_s: f32,  // refuel rate while registered on a pad
     pub hull_repair_per_s: f32, // repair rate while registered on a pad
     pub fuel_out_end_secs: f32, // run ends this long after the tank empties
+    // Landing predicate selector (ext field 4, neutral default 0 = the
+    // legacy rule): 0 = ship CENTRE over the deck within PAD_HALF_W and the
+    // foot line within 0.3 m of the deck top; 1 = BOTH FEET TOUCHING the
+    // deck — each foot (the leg-pod tips, rotated with the hull) inside the
+    // deck span and within FOOT_TOUCH_M (10 cm) of its top, so a one-foot
+    // tilted touchdown doesn't count. A new predicate, not a number:
+    // rulesets using it stamp min_logic 2 (LOGIC_VERSION history above).
+    pub land_rule: f32,
     // Oldest client LOGIC_VERSION that can re-sim this ruleset bit-exactly.
     // Not a physics number: it rides serialization but is excluded from
     // "same ruleset" comparisons only in the sense that equal params imply
@@ -316,7 +327,7 @@ impl LevelParams {
 impl SimParams {
     const N_FIELDS: usize = 15;
     // v6 extension fields, in serialization order (append-only).
-    const N_EXT_FIELDS: usize = 4;
+    const N_EXT_FIELDS: usize = 5;
 
     fn to_array(self) -> [f32; Self::N_FIELDS] {
         [
@@ -344,6 +355,7 @@ impl SimParams {
         [
             self.pad_land_time, self.pad_refuel_per_s,
             self.hull_repair_per_s, self.fuel_out_end_secs,
+            self.land_rule,
         ]
     }
 
@@ -353,6 +365,7 @@ impl SimParams {
             1 => self.pad_refuel_per_s = v,
             2 => self.hull_repair_per_s = v,
             3 => self.fuel_out_end_secs = v,
+            4 => self.land_rule = v,
             _ => {} // future field this build doesn't know — min_logic decides
         }
     }
@@ -827,7 +840,7 @@ mod tests {
             crash_dv_soft: 2.5, crash_dv_hard: 6.0, hull_max: 100.0,
             pad_land_time: 0.8, pad_refuel_per_s: 25.0,
             hull_repair_per_s: 20.0, fuel_out_end_secs: 2.5,
-            min_logic: 1,
+            land_rule: 0.0, min_logic: 1,
         }
     }
 
