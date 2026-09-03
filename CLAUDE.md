@@ -373,8 +373,10 @@ while the wasm loads):
   origin, requests the selfie camera and shows the raw feed in a round
   bubble with the verdict (or the error name) beneath; every step goes
   through `console.log` so a bug report zip carries it. Stops on leaving
-  the screen. It exists to answer whether the iOS `pegasus://` origin is
-  a secure context — nothing is sent anywhere.
+  the screen. Nothing is sent anywhere. **Verdict (2026-09-03, owner's
+  phone)**: the iOS `pegasus://app` origin IS a secure context —
+  `secureContext=true mediaDevices=true`, front camera 320×320 @30 fps in
+  the shell, same as the website — so #200 needs no origin change.
 - **scr-pause**: Resume / Exit to menu. **scr-gameover**: CRASHED + run
   distance + best, Fly again / Watch replay / "‹ Back" (`#btn-gomenu` —
   ends the run and opens the fly-mode level picker; home when there's no
@@ -2141,7 +2143,13 @@ re-acquired on the `visibilitychange` back while still wanted).
   `ITSAppUsesNonExemptEncryption = false` so TestFlight builds skip the
   per-upload compliance question, and `NSCameraUsageDescription` (2026-09,
   for the #200 camera probe — a missing key is a hard crash the moment
-  `getUserMedia` runs, not a denial). After the upload,
+  `getUserMedia` runs, not a denial); `GameViewController` implements the
+  `WKUIDelegate` media-capture permission callback (iOS 15+) — camera
+  requests from the bundle scheme are answered from
+  `AVCaptureDevice.requestAccess`, so the player sees ONE system dialog
+  naming Pegasus instead of that plus WebKit's own per-origin sheet (two
+  dialogs, seen on the first probe); microphone is denied outright (no
+  usage key). After the upload,
   `ios/testflight-distribute.py` (ASC API, same key) waits out Apple's
   build processing, submits the build to Beta App Review and attaches it
   to the beta group named by the `TESTFLIGHT_GROUP_NAME` repo variable
