@@ -93,6 +93,9 @@ runs:
         else
           rm site/.well-known/apple-app-site-association
         fi
+        # Vendored JS libraries (TensorFlow.js + BlazeFace for the multiplayer
+        # video bubble's face crop), lazy-loaded by index.html; see vendor/README.md.
+        cp -r vendor site/
         # Shrink the wasm (~30% on top of the size-tuned release profile).
         wasm-opt -Oz -o site/pegasus.wasm target/wasm32-unknown-unknown/release/pegasus.wasm
         # Inject the build's git revision and timestamp into the info overlay.

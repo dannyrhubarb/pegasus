@@ -300,6 +300,7 @@ class MainActivity : Activity() {
             "ico" -> "image/x-icon"
             "css" -> "text/css"
             "woff2" -> "font/woff2"
+            "bin" -> "application/octet-stream" // BlazeFace weight shard (vendor/)
             // .level files, LICENSE (no extension) and anything else texty.
             else -> "text/plain"
         }
