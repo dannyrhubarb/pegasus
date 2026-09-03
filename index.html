@@ -690,6 +690,13 @@
       text-align: left;
     }
     #scores-list .pdate { color: var(--faint); font-size: 0.72em; white-space: nowrap; }
+    /* Ruleset versioning (#194): a row flown under a non-current ruleset is
+       tagged; a row whose replay this build can't decode is dimmed and has
+       no ▶ (the API withholds replayPath) — the #scores-hint line below the
+       list says why. */
+    #scores-list .vtag { color: var(--amber); margin-left: 0.6em; letter-spacing: 0.06em; }
+    #scores-list li.locked { opacity: 0.72; }
+    #scores-hint { color: var(--amber); max-width: 100%; }
     #scores-list .watch {
       font: 700 12px/1 var(--mono);
       letter-spacing: 0.08em;
@@ -1202,6 +1209,7 @@
       <ol class="rowlist" id="scores-list"></ol>
       <div class="hint" id="scores-status" style="display:none"></div>
       <div class="hint" id="scores-empty">No flights recorded yet</div>
+      <div class="hint" id="scores-hint" style="display:none"></div>
       <div class="mbtn back" id="btn-scores-back">&#8249; Back</div>
     </div>
 
@@ -3135,10 +3143,15 @@
     }
 
     function pushBytesToWasm(bytes, exportName) {
-      if (typeof wasm_exports === "undefined" || !wasm_exports[exportName]) return false;
+      return pushBytesToWasmCode(bytes, exportName) === 1;
+    }
+    // The export's raw result: 1 = accepted; watch_replay_blob also answers
+    // 2 = "needs a newer game version" (#194); anything else = unreadable.
+    function pushBytesToWasmCode(bytes, exportName) {
+      if (typeof wasm_exports === "undefined" || !wasm_exports[exportName]) return 0;
       const ptr = wasm_exports.blob_in_ptr(bytes.length);
       new Uint8Array(wasm_memory.buffer, ptr, bytes.length).set(bytes);
-      return wasm_exports[exportName](bytes.length) === 1;
+      return wasm_exports[exportName](bytes.length);
     }
     // UTF-8 text through the same blob_in_ptr buffer (set_best_name /
     // set_ghost_name — void consumers, so no return check).
@@ -3757,10 +3770,10 @@
     function applyGlobalRecord(file) {
       if (!backendCfg || !file || file !== currentLevelFile || isCustomLevel(file)) return;
       const stem = levelStem(file);
-      fetch(backendCfg.apiBaseUrl + "/v1/levels/" + encodeURIComponent(stem)
-            + "/scores?period=alltime", { cache: "no-store" })
+      fetch(scoresUrl(stem, "alltime"), { cache: "no-store" })
         .then(r => (r.ok ? r.json() : null))
         .then(data => {
+          if (data && data.currentRuleset) apiCurrentRuleset = data.currentRuleset;
           if (data) putBoard(stem, "alltime", data.scores || []);
           const scores = getBoard(stem, "alltime") || []; // fresh, else cached
           if (file !== currentLevelFile || !scores.length) return;
@@ -3817,10 +3830,37 @@
     // rebuild the DOM under an in-flight tap (same mis-tap hazard as the
     // level picker — see renderLevels).
     let renderedBoardJson = null;
+    // Ruleset versioning (#194): the newest shipped ruleset, as the API
+    // reports it (`currentRuleset` on every board response) — rows flown
+    // under any other ruleset get a "vN" tag. Falls back to this build's own
+    // registry until a response has arrived.
+    let apiCurrentRuleset = 0;
+    function currentRuleset() {
+      if (apiCurrentRuleset) return apiCurrentRuleset;
+      if (typeof wasm_exports !== "undefined" && wasm_exports.current_ruleset) {
+        return wasm_exports.current_ruleset();
+      }
+      return 0;
+    }
+    // Board fetch URL: `logic=` tells the API this build's rule-logic level
+    // so it withholds replays the build can't decode (`needsUpdate` rows)
+    // instead of letting a ▶ tap fail. Omitted until the wasm exports load
+    // (the API then treats the client as pre-v6, the safe default).
+    function scoresUrl(stem, period) {
+      let url = backendCfg.apiBaseUrl + "/v1/levels/" + encodeURIComponent(stem)
+        + "/scores?period=" + period;
+      if (typeof wasm_exports !== "undefined" && wasm_exports.logic_version) {
+        url += "&logic=" + wasm_exports.logic_version();
+      }
+      return url;
+    }
+    const scoresHint = document.getElementById("scores-hint");
     function renderBoardRows(scores) {
       renderedBoardJson = JSON.stringify(scores);
       scoresList.textContent = "";
       scoresEmpty.style.display = scores.length ? "none" : "";
+      const cur = currentRuleset();
+      let locked = 0;
       scores.forEach((s, i) => {
         const li = document.createElement("li");
         const rank = document.createElement("span");
@@ -3837,6 +3877,13 @@
         // date; it carries no replayPath, so it never grows a watch button.
         if (s.pending) { li.classList.add("pending"); when.textContent = "verifying…"; }
         else when.textContent = s.ts ? fmtDate(s.ts) : "";
+        if (s.ruleset && cur && s.ruleset !== cur) {
+          const tag = document.createElement("span");
+          tag.className = "vtag";
+          tag.textContent = "v" + s.ruleset;
+          when.appendChild(tag);
+        }
+        if (s.needsUpdate) { li.classList.add("locked"); locked++; }
         col.append(who, when);
         const dist = document.createElement("span");
         dist.className = "dist";
@@ -3854,7 +3901,21 @@
         }
         scoresList.appendChild(li);
       });
+      // Rows this build can't watch: say why, once, under the list. On the
+      // website the hint reloads to the latest build (the same bypass as
+      // the update toast); in the app shells the update is a store update.
+      if (locked) {
+        scoresHint.textContent = locked + (locked === 1 ? " replay needs" : " replays need")
+          + " a newer version — update to watch " + (locked === 1 ? "it" : "them");
+        scoresHint.style.display = "";
+      } else {
+        scoresHint.style.display = "none";
+      }
     }
+    scoresHint.addEventListener("click", () => {
+      if (window.PegasusApp || window.__pegAppBuild) return; // app shells update via the store
+      location.href = location.pathname + "?fresh=" + Date.now();
+    });
 
     let globalFetchSeq = 0;
     function renderGlobalScores() {
@@ -3889,14 +3950,14 @@
              scoresEmpty.style.display = "none"; }
       setLoading(true);
       const seq = ++globalFetchSeq;
-      const url = backendCfg.apiBaseUrl + "/v1/levels/"
-        + encodeURIComponent(stem) + "/scores?period=" + scoresPeriod;
+      const url = scoresUrl(stem, scoresPeriod);
       fetch(url, { cache: "no-store" })
         .then(r => (r.ok ? r.json() : null))
         .then(data => {
           if (seq !== globalFetchSeq) return;
           if (!data) throw new Error("bad response");
           setLoading(false);
+          if (data.currentRuleset) apiCurrentRuleset = data.currentRuleset;
           const scores = data.scores || [];
           putBoard(stem, scoresPeriod, scores); // cache the VERIFIED rows only
           const shown = mergePendingRow(stem, file, scores);
@@ -3927,11 +3988,11 @@
       for (const file of levelFiles) {
         if (isCustomLevel(file)) continue; // no board behind a draft
         const stem = levelStem(file);
-        fetch(backendCfg.apiBaseUrl + "/v1/levels/" + encodeURIComponent(stem) + "/scores?period=alltime",
-              { cache: "no-store" })
+        fetch(scoresUrl(stem, "alltime"), { cache: "no-store" })
           .then(r => (r.ok ? r.json() : null))
           .then(data => {
             if (!data) return;
+            if (data.currentRuleset) apiCurrentRuleset = data.currentRuleset;
             putBoard(stem, "alltime", data.scores || []);
             // In-place text update ONLY — never rebuild the rows from an
             // async callback (see renderLevels).
@@ -3998,7 +4059,11 @@
           } else if (typeof wasm_exports !== "undefined" && wasm_exports.watch_ghost_blob) {
             wasm_exports.watch_ghost_blob(0); // clear a stale pending ghost
           }
-          if (!pushBytesToWasm(new Uint8Array(buf), "watch_replay_blob")) {
+          const code = pushBytesToWasmCode(new Uint8Array(buf), "watch_replay_blob");
+          if (code === 2) {
+            throw new Error("this replay needs a newer game version — update to watch it");
+          }
+          if (code !== 1) {
             throw new Error("replay rejected by the game (build mismatch?)");
           }
           setLoading(false);

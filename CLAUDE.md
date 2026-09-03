@@ -1748,6 +1748,29 @@ for now:
   the forward-compat property, but leniency never reaches a board.
   Per-level knobs (the `fuel` key, see the Levels table) ride
   `LevelParams`, not the ruleset.
+  **Client side (#194 phase 3, 2026-09)**: boards are ONE per level,
+  merged across rulesets (owner decision — small tunings merge; a change
+  that makes scores incomparable ships as a new level stem instead, the
+  Trackmania model). Every board fetch goes through `scoresUrl(stem,
+  period)`, which appends `&logic=<LOGIC_VERSION>` (the `logic_version`
+  export) so the API withholds `replayPath` from rows this build can't
+  decode and marks them `needsUpdate`; `renderBoardRows` dims those
+  (`li.locked`, no ▶) and shows the `#scores-hint` line under the list
+  ("N replays need a newer version — update to watch them" — tap =
+  the `?fresh=` reload on the website, a no-op in the app shells, which
+  update via the store). Rows flown under a ruleset other than the API's
+  `currentRuleset` (`apiCurrentRuleset`, falling back to the
+  `current_ruleset` export) get an amber `.vtag` ("v1") after the date.
+  `watch_replay_blob` answers **2** for a blob whose `min_logic` is above
+  this build (`try_decode_recording` keeps `ERR_NEEDS_NEWER` distinct);
+  `watchGlobalReplay` reads the raw code (`pushBytesToWasmCode`) and says
+  "needs a newer game version" instead of "rejected". During replay
+  playback main.rs draws an amber **ruleset badge** top-centre under the
+  safe area — "FLOWN ON v1" for an older registry entry, "FLOWN ON A
+  NEWER VERSION" when the header matches no ruleset this build ships
+  (it still replays bit-exactly if parameter-only) — hidden when the
+  replay's ruleset is the current one. Verified headless against a
+  stubbed scores API (real `index.html` render path).
 - **Cosmetic trailer** (2026-08 — the format's FORWARD-compatibility
   channel): optional bytes after the last keyframe, any version — magic
   `PGXT` + TLV entries (tag u8, len u16, payload). Every parser ever
