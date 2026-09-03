@@ -306,6 +306,21 @@ while the wasm loads):
   `max-height:560px` so landscape phones keep the Fly button above the fold)
   + Fly / High scores / Settings / About. **No top-level Levels button** —
   level choice is a step inside Fly and High scores (see scr-levels).
+- **scr-manual** (`#btn-manual` on the About screen, 2026-09): the
+  **Flight manual** — a
+  left-aligned reading page (`.manual`, same `min(520px, 88vw)` +
+  `max-width: 100%` clamp as `.rowlist`) explaining the LANDING criteria
+  in player language (both feet on the deck ≤ 10 cm, slow < 1 m/s,
+  not turning, held 0.4 s, the settle ring, "let go and it rocks level",
+  falls over past ~25°), then touchdown/damage thresholds, fuel, controls
+  and level modes. Born from the ruleset-2 landing work: the rules were
+  invisible, so a failed landing read as the game cheating. **Per-commit
+  rule: the numbers on this page mirror `ruleset_v2()` / `FOOT_TOUCH_M` /
+  `CRASH_DV_*` / `FUEL_*` — a ruleset or threshold change updates the
+  manual in the same commit** (the markup comment says so too). Static
+  text, no fetch; histPath `[home, about, manual]`, `.mbtn.back` →
+hardware back (owner placement: under About with What's new, not a
+fifth home button).
 - **scr-levels**: the **shared level picker** — level rows (a **type icon**
   on the left — derived from the level's mode keys, see the `icon` row in
   the Levels table — then
@@ -361,7 +376,9 @@ while the wasm loads):
   `PegasusApp.appBuild()`, iOS the `window.__pegAppBuild` document-start
   user script; hidden on the plain website), the
   **What's new** button (`#btn-whatsnew` → **scr-whatsnew**, the changelog
-  screen — see "What's new page"), the **Report a bug** button
+  screen — see "What's new page"), the
+  **Flight manual** button (`#btn-manual` → **scr-manual**, the rules
+  page — see its bullet above), the **Report a bug** button
   (`#btn-bugreport` → **scr-bugreport**: message textarea + "Save report",
   bundling the message with the last hour of the client log into a
   downloadable/shareable text file — see "Client log & bug reports" under
@@ -1456,7 +1473,8 @@ boulder (checked via `obstacle_spec`) would overlap the deck — roughly every
 other slot survives. Pads replicate per layer like obstacles
 (`BTreeMap<(slot, layer), Pad>` in `Sim`, same sliding window).
 
-**Landing** = settled on a deck (|angle| < 0.3, |v| < 1 m/s, |ω| < 0.5) with
+**Landing** = settled on a deck (|angle| < 0.3 — ruleset 1 only, see
+below; |vx| and |vy| each under 1 m/s; |ω| < 0.5) with
 the ship ON the deck, held for the ruleset's `pad_land_time`. **Two rules
 exist, selected by the ruleset's `land_rule` (#194 phase 4, 2026-09)**:
 ruleset 1 (legacy, `land_rule` 0, hold `PAD_LAND_TIME = 0.8 s`) = the
@@ -1468,7 +1486,11 @@ FEET TOUCHING the deck** — each leg-pod tip (`FOOT_X = ±0.33`,
 and within `FOOT_TOUCH_M = 0.10` of its top (contact slop only — the
 first preview reused the legacy 0.3 tolerance, which let a one-foot
 tilted touchdown with the other foot 13 cm in the air run the timer;
-regression-tested). **Ruleset 2 also never lets the ship SLEEP**
+regression-tested). **Ruleset 2 has NO separate upright check**: the
+feet geometry caps the tilt at atan(0.10/0.66) ≈ 9° by itself, so the
+0.30 rad test could never be the failing one and was dropped (ruleset 1
+keeps it verbatim) — loosen `FOOT_TOUCH_M` and the landing angle grows
+with it. **Ruleset 2 also never lets the ship SLEEP**
 (`SimParams::ship_sleep` 0 → the body is built `can_sleep(false)`):
 Rapier's island manager freezes a body that stays under 0.4 m/s and
 0.5 rad/s for 2 s, and a crooked touchdown rocks back SLOWER than that —
