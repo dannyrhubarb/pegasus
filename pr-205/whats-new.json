@@ -1,5 +1,10 @@
 [
  {
+  "rev": "ccad171",
+  "date": "2026-09-03T19:36:20Z",
+  "note": "New: Land crooked and the ship now rocks onto both feet instead of freezing on one leg"
+ },
+ {
   "rev": "0575b06",
   "date": "2026-09-03T17:49:53Z",
   "note": "New: Landings count after 0.4 s now — but only with both feet on the pad, so no more heel-hanging"
