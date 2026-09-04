@@ -105,6 +105,20 @@ pub struct Level {
     // `terrain`). Physics-relevant (the finish decks are colliders) → rides
     // in LevelParams (replay format v5).
     pub goal_distance: f32,
+    // Per-level fuel: tank capacity AND the spawn fill, in fuel units (0 =
+    // inherit the ruleset's fuel_max — the game-wide default). The level
+    // file key is `fuel`. A LEVEL tunable, not a ruleset one: it rides
+    // LevelParams (replay format v6), so the verifier's shipped-level
+    // equality check pins it per stem — no free-form combinations reach a
+    // board (issue #194). Rendering reads `Sim::fuel_cap()`, never a const.
+    pub fuel_max: f32,
+    // More per-level tunables, same contract as `fuel_max` (0 = inherit the
+    // ruleset; ride LevelParams in v6; pinned per stem by the verifier):
+    pub gravity_y: f32,    // `gravity = <m/s²>` (file value is the downward magnitude; stored signed)
+    pub thrust_force: f32, // `thrust = <force>` — main engine at full throttle (TWR knob)
+    pub hull_max: f32,     // `hull = <points>` — fragile-ship levels
+    pub refuel_per_s: f32, // `refuel_rate = <units/s>` — slow pit stops
+    pub start_fuel: f32,   // `start_fuel = <units>` — spawn fill below capacity (launch on fumes)
     // `seed = random` in the level file: the frontend rolls a FRESH concrete
     // `seed` at every load/reset, so each attempt flies brand-new rock.
     // Metadata only — world generation reads `seed`, never this flag, and it
@@ -128,6 +142,12 @@ impl Level {
             terrain: None,
             time_limit_ticks: 0,
             goal_distance: 0.0,
+            fuel_max: 0.0,
+            gravity_y: 0.0,
+            thrust_force: 0.0,
+            hull_max: 0.0,
+            refuel_per_s: 0.0,
+            start_fuel: 0.0,
             random_seed: false,
         }
     }
@@ -191,6 +211,43 @@ impl Level {
                 "goal_distance" => {
                     if let Ok(f) = v.parse::<f32>() {
                         lvl.goal_distance = f.clamp(100.0, 20_000.0);
+                    }
+                }
+                // Tank capacity + spawn fill in fuel units (see the field
+                // doc); the floor keeps a level flyable at all, the cap
+                // keeps the gauge/percent math sane.
+                "fuel" => {
+                    if let Ok(f) = v.parse::<f32>() {
+                        lvl.fuel_max = f.clamp(5.0, 1000.0);
+                    }
+                }
+                // Downward magnitude in the file (1.62 = the moon), signed
+                // internally like the ruleset's gravity_y.
+                "gravity" => {
+                    if let Ok(f) = v.parse::<f32>() {
+                        lvl.gravity_y = -f.abs().clamp(0.2, 20.0);
+                    }
+                }
+                "thrust" => {
+                    if let Ok(f) = v.parse::<f32>() {
+                        lvl.thrust_force = f.clamp(1.0, 50.0);
+                    }
+                }
+                "hull" => {
+                    if let Ok(f) = v.parse::<f32>() {
+                        lvl.hull_max = f.clamp(5.0, 1000.0);
+                    }
+                }
+                "refuel_rate" => {
+                    if let Ok(f) = v.parse::<f32>() {
+                        lvl.refuel_per_s = f.clamp(1.0, 500.0);
+                    }
+                }
+                // Clamped again against the effective tank at spawn
+                // (Sim::spawn_fuel) — the file can't overfill.
+                "start_fuel" => {
+                    if let Ok(f) = v.parse::<f32>() {
+                        lvl.start_fuel = f.clamp(1.0, 1000.0);
                     }
                 }
                 "seed" => {
@@ -298,6 +355,12 @@ impl Level {
             terrain: self.terrain.clone(),
             time_limit_ticks: self.time_limit_ticks,
             goal_distance: self.goal_distance,
+            fuel_max: self.fuel_max,
+            gravity_y: self.gravity_y,
+            thrust_force: self.thrust_force,
+            hull_max: self.hull_max,
+            refuel_per_s: self.refuel_per_s,
+            start_fuel: self.start_fuel,
         }
     }
 
@@ -319,6 +382,12 @@ impl Level {
             terrain: p.terrain.clone(),
             time_limit_ticks: p.time_limit_ticks,
             goal_distance: p.goal_distance,
+            fuel_max: p.fuel_max,
+            gravity_y: p.gravity_y,
+            thrust_force: p.thrust_force,
+            hull_max: p.hull_max,
+            refuel_per_s: p.refuel_per_s,
+            start_fuel: p.start_fuel,
             // A replay is always of ONE concrete world — the rolled seed
             // above is that world; re-rolling would break resim.
             random_seed: false,

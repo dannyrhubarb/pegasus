@@ -86,7 +86,10 @@ impl ResimPlayer {
         if rec.ticks() <= k0.tick {
             return None;
         }
-        let mut s = sim::Sim::new(world::Level::from_params(&rec.level));
+        // Build the scratch sim FROM the recording's header ruleset (the
+        // format-v6 contract, issue #194): a replay re-runs under the rules
+        // it was flown with, whatever ruleset live play is on.
+        let mut s = sim::Sim::with_rules(world::Level::from_params(&rec.level), rec.params);
         s.restore(&k0);
         let prev_pose = s.ship_pose();
         Some(ResimPlayer {
@@ -207,7 +210,7 @@ impl ResimPlayer {
         if kf.tick >= self.end_tick {
             return; // nothing playable at or after this keyframe
         }
-        let mut s = sim::Sim::new(world::Level::from_params(&rec.level));
+        let mut s = sim::Sim::with_rules(world::Level::from_params(&rec.level), rec.params);
         s.restore(&kf);
         self.prev_pose = s.ship_pose();
         self.sim = s;
@@ -1819,7 +1822,7 @@ async fn main() {
         // turns the strongest impact of the frame into effects and, on
         // destruction, freezes the shareable recording.
         if let Some(imp) = &frame_impact {
-            shake = (shake + imp.damage / HULL_MAX + 0.25).min(1.0);
+            shake = (shake + imp.damage / sim.hull_cap() + 0.25).min(1.0);
             if imp.destroyed {
                 crash_timer = CRASH_DIALOG_DELAY;
                 // Debris burst at the crash site.
@@ -3030,6 +3033,38 @@ async fn main() {
                 p1 - perp * (5.0 * ui), speed_col);
         }
 
+        // Landing settle ring: while a landing is REGISTERING — settled on
+        // a pad but the PAD_LAND_TIME hold not yet elapsed — a green ring
+        // around the ship fills clockwise from 12 o'clock; hold until it
+        // closes and the visit is yours. Field lesson (bug report,
+        // 2026-09): a Hollows landing was aborted TWO TICKS before the
+        // 0.8 s hold registered, and with zero feedback during the hold the
+        // pilot read the silence as "the game ate my landing". Reads
+        // world_sim, so replays show the ring too; the sim never sees it
+        // (land_progress is a presentation-only read). Hidden at 1.0 — the
+        // beacon flip / visit flash takes over as the confirmation, and the
+        // timer keeps counting while parked (refuel/repair), where a stuck
+        // full ring would just be noise.
+        let land_p = world_sim.land_progress();
+        if ship_visible && land_p > 0.0 && land_p < 1.0 {
+            let c = w2s(cam_x, cam_y, sh, cam_x, cam_y); // camera is ship-centred
+            let r = 1.05 * view_scale;
+            // Faint full track so the fill reads as progress toward a goal.
+            draw_circle_lines(c.x, c.y, r, 1.5 * ui, Color::from_rgba(120, 140, 170, 60));
+            const SEGS: usize = 48;
+            let col = Color::from_rgba(110, 225, 130, 235); // the "landable" green
+            let mut prev = vec2(c.x, c.y - r); // 12 o'clock
+            for i in 1..=((land_p * SEGS as f32).ceil() as usize).min(SEGS) {
+                // The last segment is trimmed to the exact fraction so the
+                // arc tip moves smoothly instead of in 1/48 jumps.
+                let frac = (i as f32 / SEGS as f32).min(land_p);
+                let th = -std::f32::consts::FRAC_PI_2 + frac * std::f32::consts::TAU;
+                let p = vec2(c.x + r * th.cos(), c.y + r * th.sin());
+                draw_line(prev.x, prev.y, p.x, p.y, 3.5 * ui, col);
+                prev = p;
+            }
+        }
+
         smooth_fps += (get_fps() as f32 - smooth_fps) * 0.05;
         let cave_x = cam_x.rem_euclid(PERIOD);
         let debug_hud = DEBUG_HUD.load(Ordering::Relaxed) != 0;
@@ -3247,8 +3282,8 @@ async fn main() {
             let alpha = (pad_msg_timer / 1.8 * 255.0) as u8;
             draw_text(&msg, (sw - dims.width) / 2.0, sh * 0.38, fs,
                 Color::from_rgba(120, 255, 160, alpha));
-        } else if landed && (sim.fuel < FUEL_MAX || sim.hull < HULL_MAX) {
-            let msg = if sim.fuel < FUEL_MAX { "REFUELING" } else { "REPAIRING" };
+        } else if landed && (sim.fuel < sim.fuel_cap() || sim.hull < sim.hull_cap()) {
+            let msg = if sim.fuel < sim.fuel_cap() { "REFUELING" } else { "REPAIRING" };
             let fs = 36.0 * ui;
             let dims = measure_text(msg, None, fs as u16, 1.0);
             draw_text(msg, (sw - dims.width) / 2.0, sh * 0.38, fs,
@@ -3829,7 +3864,7 @@ async fn main() {
 
         // Fuel gauge (warm amber identity, red when low).
         let fg_y = mm_oy + mm_h + 8.0 * ui;
-        let frac = world_sim.fuel / FUEL_MAX;
+        let frac = world_sim.fuel / world_sim.fuel_cap();
         let fg_col = if frac > 0.5 {
             Color::from_rgba(250, 190, 70, 255)
         } else if frac > 0.25 {
@@ -3846,7 +3881,7 @@ async fn main() {
         // Hull gauge — red health identity (heart + bar); brighter red when
         // critically low. The bar length still shows how much is left.
         let hg_y = fg_y + fg_h + bar_gap;
-        let hfrac = world_sim.hull / HULL_MAX;
+        let hfrac = world_sim.hull / world_sim.hull_cap();
         let hg_col = if hfrac > 0.25 {
             Color::from_rgba(220, 65, 55, 255)
         } else {

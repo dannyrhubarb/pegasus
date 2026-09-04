@@ -91,6 +91,7 @@ push-retry loop for concurrent deploys):
   - `sim-core/src/sim.rs` — **the deterministic simulation core**: `Sim` owns all Rapier state, the sliding collider windows (BTreeMaps) and ship systems (fuel/hull/score/landing/crash), advanced ONLY by `tick(InputState) -> TickReport` at `PHYSICS_DT`; plus `resim(&Recording)` and all physics constants. Same inputs + same start keyframe → bit-identical trajectory (unit-tested). **Any new gameplay force/effect must go through `tick`** — frame-level physics mutation would break replay determinism.
   - `sim-core/src/world.rs` — deterministic world generation, parameterized by a **`Level`** (see "Levels"): cave curves, shafts, obstacles, pads and `stand_y` are all `Level` methods; plus **`Terrain`** (hand-drawn polygon worlds — see "Levels"), `Rng`/`hash_u32`, the world constants (`SEG_LEN`, `RESET_X`, `PERIOD`, `V_PERIOD`, …) and `shipped_levels()` — the stem → `Level` map of the compiled-in level files the backend verifier params-checks submissions against (kept in sync with `levels/manifest.json` by a unit test)
   - `sim-core/src/replay.rs` — the hybrid `Recording` format + blob codec (see "Hybrid recording")
+  - `sim-core/examples/landing_diag.rs` — **landing diagnostic**: re-sims a `.pgrec` blob (e.g. from a bug-report zip) and logs the landing predicate around every pad approach — which settle condition held/failed per tick and how far the registration timer got (`cargo run --release --example landing_diag -- blob.pgrec`). Built for "my landing didn't register" reports; the verifier-side twin is pegasus-backend's `verify_blob`
 - `src/render.rs` — radial light shader sources, faceted wall/shaft lattice (`lattice_point`, `shaft_lattice`, `facet_shade`), `draw_flat_mesh`, and `triangulate` (ear-clip fill for hand-drawn terrain polygons)
 - `src/ship_mesh.rs` — `SHIP_TRIS` / `SHIP_DETAILS` data tables extracted from the Flash SWF
 - `src/audio.rs` — in-memory WAV synthesis (`wav_from_samples`, `thruster_wav`, `boom_wav`)
@@ -851,6 +852,12 @@ generator — all world generation is `Level` methods, so a level IS the world:
 | `pad` | `x,y` | Hand-placed pad (deck centre x, deck top y) — terrain levels only; keyed `(index, 0)` in `Sim.pads`, same landing/refuel/score logic |
 | `start` | `x,y` | Terrain levels: a NEUTRAL start platform under the spawn — a plain high-friction deck NOT in `Sim.pads` (no visit/refuel/score fires there), so a Time level's launch spot isn't a freebie visit. Defines the spawn ground (`spawn_y = start.y`); drawn as a dimmer, light-less deck, grey on the minimap |
 | `spawn_y` | f32 | Terrain levels: ground y under the spawn at x = 0 (`stand_y` returns it + 0.78); overridden by `start`'s y when a start platform is present |
+| `fuel` | 5–1000 (clamped) | **Per-level tank** (2026-09, the first LEVEL tunable of #194): capacity AND spawn fill in fuel units; omitted = the ruleset's `fuel_max` (100). `Level.fuel_max` (0 = inherit) rides `LevelParams` in the header (**forces replay format v6**), so a stored run re-sims with its tank and the verifier's shipped-level equality check pins the value per stem — `Sim::fuel_cap()` is the effective capacity (spawn fill, refuel cap, HUD gauge + REFUELING banner — never a const). **Level tunables vs ruleset tunables**: a knob that should differ BETWEEN levels (tank, and candidates like gravity/thrust/hull) belongs in `Level`/`LevelParams` — predetermined per stem by the level file; a knob that changes the game FOR EVERY level (settle hold, crash thresholds, damping, PD gains) belongs in the ruleset registry (`ruleset_vN()`). Either way the verifier only accepts exact matches against compiled entries — no free-form combinations reach a board |
+| `gravity` | 0.2–20 (m/s², clamped) | Per-level gravity — the file value is the downward MAGNITUDE (`1.62` = the moon), stored signed as `Level.gravity_y`; 0 = inherit the ruleset. Same contract as `fuel` (v6 `LevelParams`, verifier-pinned per stem) |
+| `thrust` | 1–50 (clamped) | Per-level main-engine force at full throttle (the TWR knob); 0 = inherit (`THRUST_FORCE = 8`) |
+| `hull` | 5–1000 (clamped) | Per-level hull points — fragile-ship levels; `Sim::hull_cap()` is the effective value (spawn, repair cap, damage scaling — a scrape at `CRASH_DV_HARD` empties whatever the cap is — HUD gauge) |
+| `refuel_rate` | 1–500 (units/s, clamped) | Per-level pad refuel rate — slow pit stops; 0 = inherit (`PAD_REFUEL_PER_S = 25`) |
+| `start_fuel` | 1–1000 (clamped) | Spawn fill BELOW the tank capacity (launch on fumes, must refuel); clamped again to the effective tank at spawn (`Sim::spawn_fuel()`); 0 = full tank |
 
 `Level::parse` reads `key = value` lines (# comments; unknown keys ignored
 for forward compatibility; missing keys keep `Level::demo()` defaults — the
@@ -1453,6 +1460,22 @@ other slot survives. Pads replicate per layer like obstacles
 0.73 below origin — within 0.3 of deck top) for `PAD_LAND_TIME = 0.8 s`. First
 visit per (slot, layer) scores `PAD_POINTS = 100` (green "+100" flash); parked
 ships refuel at `PAD_REFUEL_PER_S = 25/s` ("REFUELING" shown while below max).
+**The settle hold is VISIBLE — the landing settle ring** (2026-09): while
+the timer runs, a green ring around the ship fills clockwise over the
+0.8 s; hold until it closes and the visit is yours. Driven by
+`Sim::land_progress()` (`land_timer / PAD_LAND_TIME`, capped at 1 — a
+presentation-only read; the sim never consumes it, so determinism/replays/
+verification are untouched, no repin), drawn from `world_sim` right after
+the velocity vector in main.rs, so replays show it too; hidden at 1.0
+(the beacon flip / visit flash is the confirmation, and the timer keeps
+counting while parked). Born from a field bug report (Hollows, 2026-09):
+a pilot lifted off TWO TICKS before the hold completed — with no feedback
+during the hold, the silently-uncounted landing read as "the game ate my
+landing"; the ring makes the wait visible instead of changing the
+mechanic (a `PAD_LAND_TIME`/grace change would alter `Sim::tick` and
+break stored replays + require the backend repin dance —
+`sim-core/examples/landing_diag.rs` is the diagnostic that pinned the
+report down, see the sim-core bullet).
 `score` is in the HUD text line. Beacons blink green until visited, then
 steady blue; the minimap draws a deck-width line (green → blue-grey).
 `stand_y` prefers a pad deck over the floor, so the spawn parks on pad 0
@@ -1675,11 +1698,56 @@ for now:
   `time_limit_ticks` u32 + `goal_distance` f32 right after the flags
   byte, written only by time-LIMITED or GOAL levels — The Flux Sprint /
   The Flux Dash — same per-recording rule, so v3/v4 blobs stay
-  byte-identical). **No backward
+  byte-identical; **v6** = the RULESET format, see "Ruleset versioning"
+  below — written only when the recording's ruleset differs from the
+  ruleset-1 baseline, so while live play flies ruleset 1 every new blob
+  stays byte-identical to v3–v5). **No backward
   compatibility while iterating** — `deserialize` rejects pre-v3
   versions, so older server blobs stop decoding (watch/ghost pushes
   no-op gracefully); add version-tolerant reads when the game is
   released.
+- **Ruleset versioning (format v6, issue #194 phase 1, 2026-09)**:
+  `SimParams` IS the ruleset — since v6 the sim is BUILT from the header
+  (`Sim::with_rules`; `resim`/`ResimPlayer` construct their scratch sims
+  from `rec.params`), so a replay re-runs under the rules it was flown
+  with whatever ruleset live play is on, and a client can bit-exactly
+  replay runs from rulesets it never shipped with as long as only
+  NUMBERS changed. The struct gained the behavioral constants v3–v5
+  never carried (`pad_land_time`, `pad_refuel_per_s`,
+  `hull_repair_per_s`, `fuel_out_end_secs`) — serialized in v6's
+  **length-prefixed extension block** right after the legacy 15 fields,
+  so future params can be APPENDED without a format bump (readers parse
+  the prefix they know, skip the rest; the append contract: a new
+  param's ruleset-1 value must be its neutral default) — plus
+  **`min_logic`**: the oldest client `LOGIC_VERSION` that can re-sim the
+  recording bit-exactly. Parameter-only tunings keep it put; a new
+  mechanic in `Sim::tick` bumps `LOGIC_VERSION` (replay.rs) and stamps
+  it, and older clients then refuse the blob with the distinguishable
+  `ERR_NEEDS_NEWER` (so the UI can say "update to watch" instead of
+  treating it as corrupt — the phase-3 UI work on #194). The rulesets
+  themselves are registry functions in sim.rs: **`ruleset_v1()` is the
+  FROZEN legacy baseline** (what every v3–v5 blob means; never edit it —
+  the module consts are its single source) and **`sim_params()` is what
+  live play flies** (currently = v1; a tuning change = add
+  `ruleset_v2()` and repoint, never edit v1). The racing ghost needs NO
+  ruleset gate: it is an independent lockstep re-sim of its own
+  recording under its own header rules (unlike the LEVEL gate, which
+  stays — the ghost renders in the live world's geometry).
+  `spawn_keyframe` keeps baseline maxima; `Sim` overlays its own
+  ruleset's tanks via the internal `spawn_kf`. **Backend caveat
+  unchanged for now (phase 2)**: the deployed verifier's pin predates
+  v6, so a v6 blob (i.e. any non-baseline-ruleset submission) is
+  silently discarded until the repin that also brings the
+  registry-instead-of-equality check and per-era boards — do NOT ship a
+  `ruleset_v2()` before that lands. **Predetermined tunings (owner
+  rule, 2026-09)**: submissions must match a compiled registry entry
+  EXACTLY — the full `SimParams` (legacy 15 + extension block) equal to
+  some `ruleset_vN()`, and `LevelParams` equal to the shipped level file
+  for known stems — so nobody boards an arbitrary combination; the
+  client-side decoder stays lenient (any numbers replay) because that IS
+  the forward-compat property, but leniency never reaches a board.
+  Per-level knobs (the `fuel` key, see the Levels table) ride
+  `LevelParams`, not the ruleset.
 - **Cosmetic trailer** (2026-08 — the format's FORWARD-compatibility
   channel): optional bytes after the last keyframe, any version — magic
   `PGXT` + TLV entries (tag u8, len u16, payload). Every parser ever
@@ -2437,7 +2505,11 @@ commit the refreshed page.
   `ui`, `input`, `render`, `replay`, `scores`, `mp` (multiplayer),
   `analytics`, `ios`, `android`, `ci` — plus `policy` (app-policy.json)
   and `deps`; omit the scope when a change spans several. **`!` (plus a
-  `BREAKING CHANGE:` footer) marks a change that alters sim results or the
+  `BREAKING-CHANGE:` footer — HYPHENATED: git's trailer parser rejects
+  the spaced `BREAKING CHANGE:` form, which un-trailers the whole block
+  and silently drops the commit's `Whats-new:` entry from the changelog;
+  the Conventional Commits spec allows both spellings) marks a change
+  that alters sim results or the
   replay format** — exactly the changes that need the backend repin, so
   `git log --grep '!:'` is the repin history; pair it with the
   `status: needs-repin` label on the PR. The `Whats-new:` trailer is
