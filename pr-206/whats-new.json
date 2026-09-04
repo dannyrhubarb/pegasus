@@ -1,33 +1,68 @@
 [
  {
-  "rev": "01f7417",
-  "date": "2026-09-03T18:44:19Z",
+  "rev": "5f9151b",
+  "date": "2026-09-04T04:10:27Z",
   "note": "New: Your race-cam bubble now keeps your face centred — only a small square around it ever leaves your phone"
  },
  {
-  "rev": "2160e8a",
-  "date": "2026-09-03T18:03:11Z",
+  "rev": "64359e7",
+  "date": "2026-09-04T04:09:30Z",
   "note": "New: In a race your rival's face now flies with their ship — the video bubble hovers over their hull and hugs the screen edge when they pull away"
  },
  {
-  "rev": "6d5a019",
-  "date": "2026-09-03T17:44:19Z",
+  "rev": "28fd4f8",
+  "date": "2026-09-04T04:09:30Z",
   "note": "New: Race face to face — flip on Camera & mic in a multiplayer room and your rival's video bubble (voice included) rides along on the flight"
  },
  {
-  "rev": "7121301",
-  "date": "2026-08-23T22:26:30Z",
+  "rev": "dd34523",
+  "date": "2026-09-04T04:09:15Z",
   "note": "New: Multiplayer rooms now last until you leave — crash or finish, and you respawn right back in with your rival"
  },
  {
-  "rev": "42711ca",
-  "date": "2026-08-23T22:26:30Z",
+  "rev": "c8cc787",
+  "date": "2026-09-04T04:09:15Z",
   "note": "Multiplayer invite links: hosts can share a tap-to-join link instead of reading the room code aloud"
  },
  {
-  "rev": "703f4e2",
-  "date": "2026-08-23T22:26:30Z",
+  "rev": "fa0fe53",
+  "date": "2026-09-04T04:09:15Z",
   "note": "Multiplayer: race a friend through the same cave — host a room code, they join from their phone, 3-2-1-GO"
+ },
+ {
+  "rev": "613e29b",
+  "date": "2026-09-02T21:06:37+02:00",
+  "note": "New: Outdated app versions now get a friendly update screen instead of silently losing online play"
+ },
+ {
+  "rev": "78e7efe",
+  "date": "2026-08-31T07:35:46+02:00",
+  "note": "Fixed: The level menu no longer wiggles sideways on smaller iPhones - menu screens stay on rails now"
+ },
+ {
+  "rev": "d618b09",
+  "date": "2026-08-30T09:39:59+02:00",
+  "note": "New: Pegasus has a new home — pegasusmoonlander.com (your old settings and callsign stayed behind on the launch pad; set them once more)"
+ },
+ {
+  "rev": "1784f15",
+  "date": "2026-08-27T21:54:04+02:00",
+  "note": "New: Found a bug? About -> Report a bug shares a zip with your message, an hour of flight logs and network chatter, your last five replays (even the two-second ones) and any files you attach"
+ },
+ {
+  "rev": "3393151",
+  "date": "2026-08-26T23:40:20+02:00",
+  "note": "New: Your freshly submitted run shows on the board right away, wearing a little \"verifying...\" badge while mission control checks the tapes"
+ },
+ {
+  "rev": "afee382",
+  "date": "2026-08-26T23:40:20+02:00",
+  "note": "Fixed: Marathon record runs no longer vanish on their way to the global board — salute to Janaki and Kulan for the sharp-eyed bug reports"
+ },
+ {
+  "rev": "16e0d98",
+  "date": "2026-08-24T01:32:25+02:00",
+  "note": "Fixed: The in-app licenses page now scrolls and keeps clear of the notch - reading the fine print is officially possible again"
  },
  {
   "rev": "412b89d",

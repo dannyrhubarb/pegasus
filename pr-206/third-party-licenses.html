@@ -1,6 +1,16 @@
-<meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>
+<meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1, viewport-fit=cover'>
 <title>Pegasus — third-party licenses</title><style>
-  body { margin: 0; padding: 24px 16px 64px; background: #060913; color: #cdd6e4;
+  :root {
+    --inset-top: max(env(safe-area-inset-top), var(--app-inset-top, 0px));
+    --inset-right: max(env(safe-area-inset-right), var(--app-inset-right, 0px));
+    --inset-bottom: max(env(safe-area-inset-bottom), var(--app-inset-bottom, 0px));
+    --inset-left: max(env(safe-area-inset-left), var(--app-inset-left, 0px));
+    color-scheme: dark;
+  }
+  body { margin: 0;
+         padding: calc(24px + var(--inset-top)) calc(16px + var(--inset-right))
+                  calc(64px + var(--inset-bottom)) calc(16px + var(--inset-left));
+         background: #060913; color: #cdd6e4;
          font: 14px/1.55 "Courier New", monospace; }
   main { max-width: 860px; margin: 0 auto; }
   h1 { color: #7df9ff; letter-spacing: 3px; text-shadow: 0 0 12px rgba(125,249,255,.55);

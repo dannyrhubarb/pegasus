@@ -11,6 +11,12 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Pegasus">
   <link rel="apple-touch-icon" href="./icon-180.png">
+  <!-- Safari's native Smart App Banner for the App Store app (App Store
+       Connect Apple ID). Safari renders nothing until the app is actually
+       purchasable in the viewer's storefront, so this is inert until the
+       App Store release and needs no gating. The Android twin is
+       manifest.json's related_applications (Chrome). -->
+  <meta name="apple-itunes-app" content="app-id=6792584910">
   <!-- Bundled menu font (see the @font-face below). Preloaded because the
        menu is the first paint; crossorigin is required on font preloads
        even same-origin or the browser fetches it twice. -->
@@ -375,6 +381,12 @@
       width: 100%;
       max-height: 100%;
       overflow-y: auto;
+      /* overflow-y: auto makes overflow-x COMPUTE to auto as well, so any
+         child even 1px wider than the padded content box turns the screen
+         into a horizontal scroller — which iOS rubber-bands (field bug:
+         sideways-bouncy level picker on <400px-wide iPhones, where the
+         88vw rowlist beat 100vw - 48px padding). Clip the axis for good. */
+      overflow-x: hidden;
       padding: max(var(--inset-top), 28px) 24px max(var(--inset-bottom), 28px);
       text-align: center;
     }
@@ -535,6 +547,7 @@
        (see #scr-announce). */
     .announce-msg {
       width: min(520px, 88vw);
+      max-width: 100%; /* same narrow-phone clamp as .rowlist */
       padding: 18px 20px;
       border: 1.5px solid var(--amber);
       border-radius: 10px;
@@ -553,7 +566,11 @@
       display: flex;
       flex-direction: column;
       gap: 8px;
+      /* max-width keeps the list inside .screen's 24px side padding on
+         narrow phones, where 88vw > 100vw - 48px (the sideways-bounce bug
+         — see the .screen overflow-x note). */
       width: min(440px, 88vw);
+      max-width: 100%;
     }
     /* The board can hold 50 entries — scroll the LIST itself (keeping the
        title, period chips and Back button fixed) rather than the whole
@@ -588,8 +605,20 @@
       flex-direction: column;
       align-items: flex-end;
       gap: 2px;
+      /* Flex min-width defaults to auto, so the nowrap "by <pilot>" line
+         below would refuse to shrink and shove the row wider than its card
+         on narrow phones (record names go up to 24 chars) — let it shrink
+         and ellipsize instead. */
+      min-width: 0;
     }
-    .rowlist .row .lbest-by { color: var(--faint); font-size: 0.78em; white-space: nowrap; }
+    .rowlist .row .lbest-by {
+      color: var(--faint);
+      font-size: 0.78em;
+      white-space: nowrap;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     .rowlist .row .lbest-by:empty { display: none; }
     /* Drill-down chevron (scores-mode picker: a row opens that level's board) */
     .rowlist .row .chev { color: var(--cyan); font-size: 1.25em; line-height: 1; opacity: 0.65; }
@@ -673,6 +702,11 @@
       text-shadow: 0 0 8px rgba(70, 255, 156, 0.6);
     }
     #scores-list .watch:hover { background: rgba(70, 255, 156, 0.28); }
+    /* Own just-submitted entry, merged in locally while the backend's
+       async verification runs (see mergePendingRow) — dimmed, with an
+       amber "verifying…" where the date will be. */
+    #scores-list li.pending { opacity: 0.55; }
+    #scores-list li.pending .pdate { color: var(--amber); }
     #scores-list .pname {
       max-width: 100%;
       text-align: left;
@@ -757,6 +791,53 @@
       box-shadow: 0 0 12px rgba(210, 222, 240, 0.3), inset 0 0 10px rgba(210, 222, 240, 0.1);
     }
     .name-input::placeholder { color: var(--faint); text-shadow: none; }
+    /* Bug report message box: the name-input look, textarea-shaped */
+    .bug-input {
+      width: min(420px, 88vw);
+      min-height: 7em;
+      resize: vertical;
+      background: rgba(4, 10, 24, 0.9);
+      border: 1.5px solid rgba(200, 210, 226, 0.45);
+      border-radius: 8px;
+      padding: 12px 13px;
+      font: 500 clamp(14px, 3.4vw, 16px)/1.4 var(--mono);
+      letter-spacing: 0.03em;
+      text-align: left;
+      color: var(--cyan);
+      caret-color: var(--cyan);
+      outline: none;
+    }
+    .bug-input:focus {
+      border-color: rgba(235, 241, 250, 0.9);
+      box-shadow: 0 0 12px rgba(210, 222, 240, 0.3), inset 0 0 10px rgba(210, 222, 240, 0.1);
+    }
+    .bug-input::placeholder { color: var(--faint); }
+    /* Attached-file rows: name + a small neon ✕ to remove it */
+    #bug-files { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+    .bug-file {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      max-width: min(340px, 80vw);
+      padding: 4px 6px 4px 10px;
+      border: 1px solid rgba(200, 210, 226, 0.35);
+      border-radius: 6px;
+    }
+    .bug-file > span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .bug-file-x {
+      font: 700 12px/1 var(--mono);
+      color: var(--amber);
+      background: none;
+      border: 1px solid rgba(255, 193, 84, 0.5);
+      border-radius: 4px;
+      padding: 4px 6px;
+      cursor: pointer;
+    }
+    .bug-file-x:hover { background: rgba(255, 193, 84, 0.15); }
 
     /* Settings rows: custom neon toggle switches, no native checkboxes */
     .setrow {
@@ -1315,11 +1396,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">01f7417-pr-206</div>
+        <div class="info-value" id="git-rev">5f9151b-pr-206</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-09-03T18:46:06Z</div>
+        <div class="info-value" id="build-time">2026-09-04T04:12:29Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -1338,6 +1419,7 @@
         the id.
       </div>
       <div class="mbtn" id="btn-whatsnew">What's new</div>
+      <div class="mbtn" id="btn-bugreport">Report a bug</div>
       <a class="mbtn" href="third-party-licenses.html" target="_blank" rel="noopener">Third-party licenses</a>
       <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
       <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
@@ -1350,6 +1432,29 @@
       <div class="h2">WHAT'S NEW</div>
       <ul class="rowlist" id="wn-list"></ul>
       <div class="hint" id="wn-status" style="display:none"></div>
+      <div class="mbtn back" data-goto="scr-about">&#8249; Back</div>
+    </div>
+
+    <!-- Bug report: the player's message + the last hour of pegLog + the
+         last five run replays + any attached files, bundled into a ZIP they
+         share/download themselves — nothing is uploaded (see "Bug reports"
+         in CLAUDE.md). -->
+    <div class="screen" id="scr-bugreport">
+      <div class="h2">REPORT A BUG</div>
+      <div class="hint">
+        Describe what happened. The report zip bundles your message with
+        this device's game log from the last hour, your last five replays
+        and anything you attach &mdash; you share the file with the
+        developer yourself; nothing is uploaded.
+      </div>
+      <textarea class="bug-input" id="bug-input" maxlength="2000"
+                spellcheck="false"
+                placeholder="What went wrong? What did you expect?"></textarea>
+      <div class="mbtn" id="btn-bug-attach">Attach files</div>
+      <div class="hint" id="bug-files" style="display:none"></div>
+      <input type="file" id="bug-file-input" multiple style="display:none">
+      <div class="mbtn primary" id="btn-bug-save">Share report</div>
+      <div class="hint" id="bug-status" style="display:none"></div>
       <div class="mbtn back" data-goto="scr-about">&#8249; Back</div>
     </div>
 
@@ -1400,6 +1505,17 @@
              placeholder="YOUR CALLSIGN">
       <div class="mbtn primary" id="btn-name-submit">Submit</div>
       <div class="mbtn back" id="btn-name-skip">Skip</div>
+    </div>
+
+    <!-- Forced-update wall (app shells only, #190): shown when
+         app-policy.json declares this build too old — see the policy block
+         in the script. Deliberately NO .mbtn.back and no other exit:
+         uiBack's generic branch finds nothing, and showScreen/closeMenu
+         redirect here while walled, so the wall cannot be dismissed. -->
+    <div class="screen" id="scr-update">
+      <div class="h2">UPDATE REQUIRED</div>
+      <div class="hint" id="update-msg"></div>
+      <div class="mbtn primary" id="btn-store">Update</div>
     </div>
 
     <!-- Multiplayer (P2P shadow race — see docs/multiplayer-p2p.md): host /
@@ -1589,6 +1705,123 @@
           show("Game failed to start (wasm not running after 8 s).");
         }
       }, 8000);
+    })();
+  </script>
+  <script>
+    // Client-side rolling log (window.pegLog) — its OWN tag, after the boot
+    // guard (so a bug here can never kill it) and before the bundle (so the
+    // console wrappers see everything the wasm logs). Feeds the About
+    // screen's bug report: a ring buffer of console output, script errors
+    // and game events (the analytics module mirrors its events in), kept to
+    // the LAST HOUR and persisted to localStorage (throttled) so a report
+    // filed after a reload still carries the crash that preceded it.
+    // Strictly local — nothing here ever leaves the device unless the
+    // player downloads/shares a bug report themselves. Every path is
+    // try/caught: logging must never break the game.
+    (function () {
+      var KEY = "pegasus_log", MAX = 500, HOUR = 3600e3;
+      var buf = [];
+      try {
+        var prev = JSON.parse(localStorage.getItem(KEY) || "[]");
+        if (Array.isArray(prev)) {
+          buf = prev.filter(function (e) {
+            return e && typeof e.t === "number" && Date.now() - e.t < HOUR;
+          });
+        }
+      } catch (_) { buf = []; }
+      var dirty = false;
+      function add(lvl, msg) {
+        try {
+          buf.push({ t: Date.now(), l: lvl, m: String(msg).slice(0, 300) });
+          if (buf.length > MAX) buf.splice(0, buf.length - MAX);
+          dirty = true;
+        } catch (_) { /* never let logging break the game */ }
+      }
+      function flush() {
+        if (!dirty) return;
+        dirty = false;
+        try { localStorage.setItem(KEY, JSON.stringify(buf)); }
+        catch (_) { /* quota — the log is best-effort */ }
+      }
+      setInterval(flush, 10000);
+      addEventListener("pagehide", flush);
+      document.addEventListener("visibilitychange", function () {
+        if (document.visibilityState === "hidden") flush();
+      });
+      // Chain-wrap the console: the boot guard already wrapped
+      // console.error (for the panic banner), so wrapping whatever is
+      // installed NOW keeps its behavior intact underneath ours.
+      ["log", "info", "warn", "error"].forEach(function (lvl) {
+        var orig = console[lvl];
+        console[lvl] = function () {
+          try {
+            add(lvl, Array.prototype.map.call(arguments, String).join(" "));
+          } catch (_) {}
+          return orig.apply(console, arguments);
+        };
+      });
+      addEventListener("error", function (e) {
+        add("error", (e.message || "error") +
+          (e.filename ? " @" + e.filename.split("/").pop() + ":" + e.lineno : ""));
+      });
+      addEventListener("unhandledrejection", function (e) {
+        if (e.reason != null) add("error", "unhandled rejection: " + String(e.reason));
+      });
+      // Network lines: wrap fetch so every request logs method, URL, status
+      // and duration — plus the first bytes of the response body on a
+      // non-ok status (the API's error text is the diagnosis). Installed
+      // before the bundle, so the wasm/level/config fetches are covered
+      // too. Request/response BODIES are never logged on the happy path
+      // (a submit body carries the whole replay blob). The wrapper must be
+      // transparent: the caller gets the ORIGINAL promise, and our
+      // observer branch swallows its own rejection so it can't spawn
+      // duplicate unhandled-rejection noise.
+      if (window.fetch) {
+        var shortUrl = function (u) {
+          try {
+            // Relative only — no domains in the log, whatever the origin
+            // (the log rides bug reports; paths identify every request the
+            // game makes without carrying host names along).
+            var parsed = new URL(String(u), location.href);
+            u = parsed.pathname + parsed.search;
+            return u.length > 140 ? u.slice(0, 140) + "…" : u;
+          } catch (_) { return "?"; }
+        };
+        var origFetch = window.fetch;
+        window.fetch = function (input, init) {
+          var line = "?";
+          try {
+            var method = ((init && init.method) ||
+              (input && typeof input === "object" && input.method) || "GET").toUpperCase();
+            line = method + " " + shortUrl((input && typeof input === "object" && input.url) || input);
+          } catch (_) {}
+          var t0 = Date.now();
+          var p = origFetch.apply(this, arguments);
+          try {
+            p.then(function (res) {
+              var done = line + " → " + res.status + " (" + (Date.now() - t0) + "ms)";
+              if (res.ok) { add("net", done); return; }
+              // Failed response: the body text is the useful part.
+              res.clone().text().then(
+                function (t) { add("net", done + " body: " + String(t).slice(0, 120)); },
+                function () { add("net", done); }
+              );
+            }, function (err) {
+              add("net", line + " ✗ " + String(err).slice(0, 120) + " (" + (Date.now() - t0) + "ms)");
+            });
+          } catch (_) { /* observing must never break the request */ }
+          return p;
+        };
+      }
+      add("log", "boot " + location.pathname + location.search);
+      window.pegLog = {
+        add: add,
+        // Entries from the last hour, oldest first (for the bug report).
+        snapshot: function () {
+          var cut = Date.now() - HOUR;
+          return buf.filter(function (e) { return e.t >= cut; });
+        },
+      };
     })();
   </script>
   <script>
@@ -1782,7 +2015,18 @@
       }
     }, 200);
 
+    // Forced-update wall latches (#190, set by the app-policy block further
+    // down). `walled` = the wall is up: every navigation lands back on
+    // scr-update, and only a fresh policy verdict lifts it — never the UI.
+    // `wallPolicy` = a standing "too old" verdict whose wall hasn't been
+    // raised yet because the canvas was live when it arrived (a wall must
+    // never interrupt a play); the next screen raises it here.
+    let walled = false;
+    let wallPolicy = null;
     function showScreen(id) {
+      if (!walled && wallPolicy && id !== "scr-update") armWall(wallPolicy);
+      if (walled && id !== "scr-update") id = "scr-update";
+      if (overlay === "scr-bugreport" && id !== "scr-bugreport") bugReportLeft();
       overlay = id;
       menuEl.classList.add("open");
       hudBtns.classList.remove("on");
@@ -1802,6 +2046,8 @@
       syncHistory();
     }
     function closeMenu() {
+      if (walled) { showScreen("scr-update"); return; }
+      if (overlay === "scr-bugreport") bugReportLeft();
       overlay = null;
       menuEl.classList.remove("open");
       hudBtns.classList.add("on");
@@ -2022,6 +2268,7 @@
         case "scr-settings": return ["scr-home", "scr-settings"];
         case "scr-about":    return ["scr-home", "scr-about"];
         case "scr-whatsnew": return ["scr-home", "scr-about", "scr-whatsnew"];
+        case "scr-bugreport": return ["scr-home", "scr-about", "scr-bugreport"];
         case "game":         return ["scr-home", "game"];
         case "scr-pause":    return ["scr-home", "game", "scr-pause"];
         case "scr-gameover": return levelFiles.length
@@ -2455,10 +2702,280 @@
         });
     });
 
+    // --- Bug report (About) ---
+    // A ZIP archive — report.txt (the player's message + device context +
+    // the last hour of the pegLog ring buffer), the last five run replays
+    // (replays/<n>.pgrec, played-at timestamps in the filename and index)
+    // and any files the player attached (attachments/…). Delivery is
+    // explicitly user-driven — share sheet where file sharing exists
+    // (mobile), else a download, else the clipboard, which can only carry
+    // report.txt (the Android app shell has neither share nor a download
+    // manager) — the game itself never uploads a report.
+    const bugInput = document.getElementById("bug-input");
+    const bugStatus = document.getElementById("bug-status");
+    const bugFileInput = document.getElementById("bug-file-input");
+    const bugFilesEl = document.getElementById("bug-files");
+    // Typing must never reach the game (same rule as the callsign input).
+    bugInput.addEventListener("keydown", e => e.stopPropagation());
+    document.getElementById("btn-bugreport").addEventListener("click", () => {
+      bugStatus.style.display = "none";
+      showScreen("scr-bugreport");
+    });
+    // Attachments ACCUMULATE across picker openings (a file input's own
+    // list replaces on every pick, so the files are collected into
+    // bugAttachments and the input is reset — that also lets the same
+    // file be re-added after a remove). Each row carries a ✕ to drop it.
+    let bugAttachments = [];
+    // A DELIVERED report clears the form when the player leaves the screen
+    // (showScreen/closeMenu call bugReportLeft) — the next report starts
+    // fresh. An unsent draft survives backing out on purpose: stepping
+    // away to check something mustn't eat a half-written message.
+    let bugShared = false;
+    function bugReportLeft() {
+      if (!bugShared) return;
+      bugShared = false;
+      bugInput.value = "";
+      bugAttachments = [];
+      renderBugAttachments();
+      bugStatus.textContent = "";
+      bugStatus.style.display = "none";
+    }
+    document.getElementById("btn-bug-attach").addEventListener("click", () => {
+      bugFileInput.click();
+    });
+    bugFileInput.addEventListener("change", () => {
+      bugAttachments.push(...Array.from(bugFileInput.files || []));
+      bugFileInput.value = ""; // next pick fires change even for the same file
+      renderBugAttachments();
+    });
+    function renderBugAttachments() {
+      bugFilesEl.textContent = "";
+      bugFilesEl.style.display = bugAttachments.length ? "" : "none";
+      bugAttachments.forEach((f, i) => {
+        const row = document.createElement("span");
+        row.className = "bug-file";
+        const name = document.createElement("span");
+        name.textContent = f.name;
+        const x = document.createElement("button");
+        x.className = "bug-file-x";
+        x.textContent = "✕";
+        x.setAttribute("aria-label", "Remove " + f.name);
+        x.addEventListener("click", () => {
+          bugAttachments.splice(i, 1);
+          renderBugAttachments();
+        });
+        row.append(name, x);
+        bugFilesEl.appendChild(row);
+      });
+    }
+
+    // Minimal ZIP writer — STORE entries only, deliberately: the replay
+    // blobs are already deflate-compressed and screenshots/photos are
+    // already compressed formats, so a compressor would buy nothing.
+    // Local headers + central directory + EOCD + CRC-32, UTF-8 names
+    // (general-purpose flag bit 11). No dependencies, like everything
+    // else on this page.
+    const crc32 = (() => {
+      const table = new Uint32Array(256);
+      for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = (c & 1) ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+        table[n] = c >>> 0;
+      }
+      return bytes => {
+        let c = 0xFFFFFFFF;
+        for (let i = 0; i < bytes.length; i++) c = table[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+        return (c ^ 0xFFFFFFFF) >>> 0;
+      };
+    })();
+    function buildZip(entries) { // [{name, bytes, mtime}] → Uint8Array
+      const enc = new TextEncoder();
+      const parts = [], central = [];
+      let offset = 0;
+      const u16 = v => [v & 0xFF, (v >>> 8) & 0xFF];
+      const u32 = v => [v & 0xFF, (v >>> 8) & 0xFF, (v >>> 16) & 0xFF, (v >>> 24) & 0xFF];
+      for (const e of entries) {
+        const name = enc.encode(e.name);
+        const d = new Date(e.mtime || Date.now());
+        const dosTime = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+        const dosDate = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+        const crc = crc32(e.bytes);
+        const common = [
+          ...u16(20), ...u16(0x0800), ...u16(0), // version, UTF-8 flag, method STORE
+          ...u16(dosTime), ...u16(dosDate), ...u32(crc),
+          ...u32(e.bytes.length), ...u32(e.bytes.length), ...u16(name.length),
+        ];
+        parts.push(new Uint8Array([...u32(0x04034B50), ...common, ...u16(0)]), name, e.bytes);
+        central.push(new Uint8Array([
+          ...u32(0x02014B50), ...u16(20), ...common,
+          // extra len, comment len, disk start, internal attrs,
+          // external attrs, local-header offset
+          ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(offset),
+        ]), name);
+        offset += 30 + name.length + e.bytes.length;
+      }
+      const cdStart = offset;
+      let cdLen = 0;
+      for (const c of central) cdLen += c.length;
+      parts.push(...central, new Uint8Array([
+        ...u32(0x06054B50), ...u16(0), ...u16(0),
+        ...u16(entries.length), ...u16(entries.length),
+        ...u32(cdLen), ...u32(cdStart), ...u16(0),
+      ]));
+      const total = parts.reduce((n, p) => n + p.length, 0);
+      const out = new Uint8Array(total);
+      let at = 0;
+      for (const p of parts) { out.set(p, at); at += p.length; }
+      return out;
+    }
+    const bytesFromB64 = b64 => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    const compactTs = t => new Date(t).toISOString().replace(/[-:]/g, "").slice(0, 15);
+
+    function buildBugReport(message) {
+      const lines = ["PEGASUS BUG REPORT"];
+      const push = (k, v) => lines.push(k + ": " + v);
+      push("reported", new Date().toISOString());
+      push("build", wasmRev.startsWith("__") ? "dev (local build)" : wasmRev);
+      try {
+        if (window.PegasusApp && PegasusApp.appBuild) push("app-build", String(PegasusApp.appBuild()));
+        else if (window.__pegAppBuild) push("app-build", String(window.__pegAppBuild));
+      } catch (e) { /* a shell bridge must never break the game */ }
+      push("url", location.href);
+      push("user-agent", navigator.userAgent || "");
+      push("viewport", innerWidth + "x" + innerHeight + " @" + (devicePixelRatio || 1) + "x");
+      push("level", currentLevelFile || "(none)");
+      push("screen", overlay || "game");
+      // Settings & state: every pegasus_* localStorage key except the
+      // bulky ones and the anonymous device id (that stays on the device).
+      const skip = ["pegasus_device_id", "pegasus_log", "pegasus_board_cache",
+                    "pegasus_editor_doc", "pegasus_custom_level", "pegasus_date_locale",
+                    "pegasus_recent_runs"];
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (!k || !k.startsWith("pegasus_") || skip.includes(k)) continue;
+          push(k, String(localStorage.getItem(k)).slice(0, 60));
+        }
+      } catch (e) { /* storage blocked — report without settings */ }
+      lines.push("", "--- MESSAGE ---", message || "(none)",
+                 "", "--- REPLAYS (in this zip, oldest first) ---");
+      if (!recentRuns.length) lines.push("(none recorded yet)");
+      recentRuns.forEach((r, i) => {
+        lines.push("replays/" + replayFileName(r, i) +
+                   "  played " + new Date(r.t).toISOString() +
+                   "  score " + r.d);
+      });
+      lines.push("", "--- ATTACHMENTS (in this zip) ---");
+      const atts = bugAttachments;
+      if (!atts.length) lines.push("(none)");
+      for (const f of atts) lines.push("attachments/" + safeFileName(f.name) + " (" + f.size + " bytes)");
+      lines.push("", "--- LOG (last hour, oldest first) ---");
+      try {
+        const snap = (window.pegLog && window.pegLog.snapshot()) || [];
+        if (!snap.length) lines.push("(empty)");
+        for (const e of snap) {
+          lines.push(new Date(e.t).toISOString() + " [" + e.l + "] " + e.m);
+        }
+      } catch (e) { lines.push("(log unavailable: " + e + ")"); }
+      return lines.join("\n") + "\n";
+    }
+    const safeFileName = n =>
+      String(n || "file").replace(/[^\w.\- ]+/g, "_").slice(0, 80) || "file";
+    const replayFileName = (r, i) =>
+      (i + 1) + "-" + compactTs(r.t) + "-" + levelStem(r.file || "unknown") + ".pgrec";
+    // Assemble the zip: report.txt + the replay buffer + attachments.
+    // Attachment names are sanitized and deduped (a numeric prefix on
+    // collision); the total is capped so the share sheet gets something
+    // sendable rather than a phone video that dwarfs the report.
+    const BUG_ZIP_MAX_BYTES = 25 * 1024 * 1024;
+    async function buildBugZip(text) {
+      const entries = [{ name: "report.txt", bytes: new TextEncoder().encode(text), mtime: Date.now() }];
+      recentRuns.forEach((r, i) => {
+        try {
+          entries.push({ name: "replays/" + replayFileName(r, i), bytes: bytesFromB64(r.b), mtime: r.t });
+        } catch (e) { /* a corrupt stored blob must not sink the report */ }
+      });
+      const seen = new Set(entries.map(e => e.name));
+      for (const f of bugAttachments) {
+        let name = "attachments/" + safeFileName(f.name);
+        for (let i = 2; seen.has(name); i++) name = "attachments/" + i + "-" + safeFileName(f.name);
+        seen.add(name);
+        entries.push({ name, bytes: new Uint8Array(await f.arrayBuffer()), mtime: f.lastModified || Date.now() });
+      }
+      const total = entries.reduce((n, e) => n + e.bytes.length, 0);
+      if (total > BUG_ZIP_MAX_BYTES) return null; // caller reports the cap
+      return buildZip(entries);
+    }
+    async function deliverBugReport(name, zipBytes, text) {
+      // Mobile first: the share sheet sends the file anywhere (mail, chat)
+      // in one step. AbortError = the player closed the sheet, not a
+      // failure; anything else falls through to the next path.
+      try {
+        const file = new File([zipBytes], name, { type: "application/zip" });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          // The file ALONE — no title/text: Chrome on Android forwards
+          // those as separate shared text, and file-only share targets
+          // (Drive, Files, mail apps) materialize it as a stray text.txt
+          // next to the zip (seen in the field). The zip's filename
+          // already says what it is.
+          await navigator.share({ files: [file] });
+          return { ok: true, msg: "Shared — thanks, pilot!" };
+        }
+      } catch (e) {
+        if (e && e.name === "AbortError") return { ok: false, msg: "Sharing cancelled" };
+      }
+      // The Android app shell: no share API, and a WebView without a
+      // download manager silently ignores <a download> — the clipboard is
+      // the one path that works there, and it can only carry report.txt.
+      if (window.PegasusApp && navigator.clipboard) {
+        try {
+          await navigator.clipboard.writeText(text);
+          return { ok: true, msg: "Copied report text to clipboard (replays/attachments can't ride it) — paste it into a message to the developer" };
+        } catch (e) { /* fall through */ }
+      }
+      try {
+        const url = URL.createObjectURL(new Blob([zipBytes], { type: "application/zip" }));
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        return { ok: true, msg: "Report downloaded — send the file to the developer" };
+      } catch (e) { /* fall through */ }
+      try {
+        await navigator.clipboard.writeText(text);
+        return { ok: true, msg: "Copied report text to clipboard (replays/attachments can't ride it) — paste it into a message to the developer" };
+      } catch (e) { /* nothing worked */ }
+      return { ok: false, msg: "Couldn't save the report on this device" };
+    }
+    document.getElementById("btn-bug-save").addEventListener("click", async () => {
+      try {
+        const stamp = compactTs(Date.now());
+        const text = buildBugReport(bugInput.value.trim());
+        const zip = await buildBugZip(text);
+        if (!zip) {
+          bugStatus.textContent = "Attachments too large — keep the report under 25 MB";
+          bugStatus.style.display = "";
+          return;
+        }
+        if (window.pegLog) {
+          window.pegLog.add("evt", "bug report shared (" + zip.length + " bytes zipped)");
+        }
+        const res = await deliverBugReport("pegasus-bug-report-" + stamp + ".zip", zip, text);
+        if (res.ok) bugShared = true; // leaving the screen now clears the form
+        bugStatus.textContent = res.msg;
+      } catch (e) {
+        bugStatus.textContent = "Couldn't build the report: " + e;
+      }
+      bugStatus.style.display = "";
+    });
+
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "01f7417-pr-206";
+    const wasmRev = "5f9151b-pr-206";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -2787,6 +3304,7 @@
         const ptr = wasm_exports.level_buf_ptr(bytes.length);
         new Uint8Array(wasm_memory.buffer, ptr, bytes.length).set(bytes);
         wasm_exports.load_level(bytes.length); // also clears the in-game best
+        if (window.pegLog) window.pegLog.add("level", file);
         currentLevelFile = file;
         scoresFile = file; // the board defaults to the loaded level
         ghostLoadedPath = null; // the fresh start dropped the old ghost
@@ -2935,17 +3453,217 @@
       const seq = wasm_exports.run_seq();
       if (seq === lastRunSeq) return;
       lastRunSeq = seq;
-      if (!backendCfg) return; // offline: nowhere to submit
       const len = wasm_exports.run_blob_len();
       if (!len) return;
       const bytes = new Uint8Array(wasm_memory.buffer, wasm_exports.run_blob_ptr(), len).slice();
-      maybeSubmitOnline(currentLevelFile,
-        { d: wasm_exports.run_dist(), b: b64FromBytes(bytes) });
+      const dist = wasm_exports.run_dist();
+      recordRecentRun(currentLevelFile, dist, bytes); // bug-report replay buffer
+      if (!backendCfg) return; // offline: nowhere to submit
+      // The wasm publishes EVERY armed run (the replay buffer above wants
+      // short and non-scoring attempts too), so the submit gates live
+      // here now: blink-and-gone runs (< 2 s = 240 ticks, the old
+      // GHOST_MIN_SECS gate) and non-scorable runs (a time level's DNF or
+      // abandoned attempt — run_scorable()) never reach the submit dialog.
+      const ticks = wasm_exports.run_len_ticks ? wasm_exports.run_len_ticks() : 240;
+      if (ticks < 240) return;
+      const scorable = wasm_exports.run_scorable ? wasm_exports.run_scorable() !== 0 : true;
+      if (!scorable) return;
+      maybeSubmitOnline(currentLevelFile, { d: dist, b: b64FromBytes(bytes) });
+    }
+
+    // Last five finished runs, kept for bug reports (they ride the report
+    // zip as replays/<n>.pgrec with played-at timestamps). Persisted
+    // best-effort so a crash-then-reload report still carries the run that
+    // crashed; size-capped for localStorage quota, and always keeping at
+    // least the newest run even if it alone busts the byte cap.
+    const RECENT_RUNS_KEY = "pegasus_recent_runs";
+    const RECENT_RUNS_MAX = 5;
+    const RECENT_RUNS_MAX_B64 = 1_500_000; // ~1.1 MB of blobs
+    let recentRuns = [];
+    try { recentRuns = JSON.parse(localStorage.getItem(RECENT_RUNS_KEY) || "[]") || []; }
+    catch (e) { recentRuns = []; }
+    function recordRecentRun(file, dist, bytes) {
+      try {
+        recentRuns.push({ t: Date.now(), file, d: dist, b: b64FromBytes(bytes) });
+        while (recentRuns.length > RECENT_RUNS_MAX) recentRuns.shift();
+        while (recentRuns.length > 1 &&
+               recentRuns.reduce((n, r) => n + r.b.length, 0) > RECENT_RUNS_MAX_B64) {
+          recentRuns.shift();
+        }
+        localStorage.setItem(RECENT_RUNS_KEY, JSON.stringify(recentRuns));
+      } catch (e) { /* quota/blocked — the buffer is best-effort */ }
     }
     setInterval(() => {
       collectEndedRun();
       pegAnalytics.pollRuns();
     }, 500);
+
+    // --- App update policy (forced-update wall + config override, #190) -----
+    // Installed apps bake config.json at build time, so a backend move (the
+    // #171 account split) or a breaking change leaves old installs silently
+    // broken or pointing at infrastructure being retired — and a web tab
+    // parked open for weeks can be nearly as stale. The client fetches
+    // app-policy.json — the SHELLS from the LIVE SITE ORIGIN, absolute on
+    // purpose (more durable than any API host — it's the identity #157's RP
+    // ID makes permanent; GitHub Pages serves access-control-allow-origin:*
+    // — verified incl. the iOS custom scheme's opaque origin), the WEB
+    // relative (the same checked-in file at the root; a preview serves an
+    // inert copy — the preview page skips the feature entirely below) — at
+    // launch AND on a slow re-check (10 min + on foreground, throttled) so
+    // an app resumed from the switcher for weeks still sees a new verdict:
+    // - `minBuild` {android, ios} walls shell builds below it (CI run
+    //   number); `minWebBuildTime` (ISO instant) walls web pages whose
+    //   baked 2026-09-04T04:12:29Z predates it. A wall NEVER interrupts a live
+    //   play: a mid-flight/replay verdict latches in `wallPolicy` and
+    //   showScreen raises it at the next screen (pause, crash, game over,
+    //   exit) — boot is menu-open, so launch walls immediately. On the web
+    //   the wall's action is a RELOAD, not a store visit, and the first
+    //   verdict per build spends one SILENT self-reload (sessionStorage
+    //   latch — the reload usually IS the fix; the latch stops the
+    //   documented cache-wedge from looping it) before anything shows.
+    // - `config` overrides the baked config.json — the remote fix that
+    //   would have made the #171 drain a zero-day. SHELLS ONLY, enforced
+    //   at the apply site: the web's config.json is deploy-fresh at every
+    //   load, so a web override could only misroute the live site.
+    // FAIL OPEN, always (the analytics/logging philosophy): no file, bad
+    // JSON, offline, broken bridge, dev build ⇒ play normally; walling
+    // needs an explicit, well-formed "too old" verdict. The last-seen
+    // policy is cached so a known-stale client stays walled offline — but
+    // absence of information never walls, and a corrected policy lifts the
+    // wall in place.
+    const POLICY_URL = "https://pegasusmoonlander.com/app-policy.json";
+    const appShell = (function () {
+      try {
+        if (window.PegasusApp && PegasusApp.appBuild)
+          return { platform: "android", build: String(PegasusApp.appBuild()) };
+        if (window.__pegAppBuild)
+          return { platform: "ios", build: String(window.__pegAppBuild) };
+      } catch (e) { /* broken bridge — treat as web */ }
+      return null;
+    })();
+    // The web page's own version identity: the deploy-baked build instant
+    // (`rawBuildTime`, captured by the About block above BEFORE the dev
+    // fallback rewrites the element — reading the DOM here is too late).
+    // Placeholder = dev build = feature off; previews are excluded too
+    // (fresh by construction, and the root page's cached policy must not
+    // leak into them — same localStorage origin).
+    const webBuild = (function () {
+      if (appShell) return null;
+      try {
+        if (/\/pr-\d+\//.test(location.pathname)) return null;
+        return rawBuildTime && !rawBuildTime.startsWith("__")
+          ? { buildTime: rawBuildTime } : null;
+      } catch (e) { return null; }
+    })();
+    function policyWalls(p) {
+      // True only on an explicit, well-formed verdict for THIS platform.
+      try {
+        if (!p || typeof p !== "object") return false;
+        if (appShell) {
+          if (!p.minBuild) return false;
+          const min = p.minBuild[appShell.platform];
+          const m = appShell.build.match(/\((\d+)\)/); // "1.0 (42)" → 42
+          if (typeof min !== "number" || !isFinite(min) || !m) return false;
+          return parseInt(m[1], 10) < min;
+        }
+        if (!webBuild || typeof p.minWebBuildTime !== "string") return false;
+        const built = Date.parse(webBuild.buildTime);
+        const min = Date.parse(p.minWebBuildTime);
+        if (!isFinite(built) || !isFinite(min)) return false;
+        return built < min;
+      } catch (e) { return false; }
+    }
+    function policyConfig(p) {
+      // The override must be complete and https to outrank the baked
+      // config — a partial object falls through rather than half-applying.
+      const c = p && p.config;
+      return (c && typeof c.apiBaseUrl === "string" && c.apiBaseUrl.startsWith("https://") &&
+              typeof c.replayBaseUrl === "string" && c.replayBaseUrl.startsWith("https://"))
+        ? c : null;
+    }
+    const freshUrl = () => location.pathname + "?fresh=" + Date.now();
+    function armWall(p) {
+      // Turn the standing verdict into the visible wall. Web first: spend
+      // the build's one silent self-reload if it hasn't been — navigating
+      // away IS the fix when the CDN serves the new build; the latch keeps
+      // a cache-wedged client (the ?fresh= lesson) from reload-looping,
+      // and IT gets the visible wall with a manual Reload instead.
+      if (!appShell) {
+        try {
+          if (sessionStorage.getItem("pegasus_wall_reload") !== webBuild.buildTime) {
+            sessionStorage.setItem("pegasus_wall_reload", webBuild.buildTime);
+            location = freshUrl();
+            return; // navigating away — nothing to draw
+          }
+        } catch (e) { /* storage blocked — straight to the wall */ }
+      }
+      walled = true;
+      document.getElementById("update-msg").textContent =
+        (p && typeof p.message === "string" && p.message) || (appShell
+          ? "This version is out of date and can no longer play online. Update to keep flying."
+          : "This page is running an outdated build. Reload to get the latest version.");
+      const btn = document.getElementById("btn-store");
+      if (appShell) {
+        const url = p && p.storeUrls && typeof p.storeUrls[appShell.platform] === "string"
+          ? p.storeUrls[appShell.platform] : "";
+        btn.style.display = url ? "" : "none";
+        if (url) btn.onclick = () => { try { location.href = url; } catch (e) { /* shell rejects */ } };
+      } else {
+        btn.textContent = "Reload";
+        btn.style.display = "";
+        btn.onclick = () => { location = freshUrl(); };
+      }
+    }
+    function applyWall(p) {
+      if (!policyWalls(p)) {
+        wallPolicy = null;
+        if (walled) {
+          walled = false;
+          if (overlay === "scr-update") showScreen("scr-home"); // corrected policy lifts it
+        }
+        return;
+      }
+      wallPolicy = p;
+      if (overlay === null) return; // canvas live (flight/replay): never
+                                    // disturb a play — showScreen raises
+                                    // the latched verdict at the next screen
+      armWall(p);
+      if (walled) showScreen("scr-update"); // not walled ⇒ armWall navigated away
+    }
+    let cachedPolicy = null;
+    let lastPolicyCheck = 0;
+    function fetchPolicy() {
+      lastPolicyCheck = Date.now();
+      return fetch((appShell ? POLICY_URL : "app-policy.json") + "?nocache=" + Date.now(),
+        { cache: "no-store" })
+        .then(r => (r.ok ? r.json() : null))
+        .then(p => {
+          if (!p || typeof p !== "object") return cachedPolicy; // 404/malformed: last known stands
+          cachedPolicy = p;
+          try { localStorage.setItem("pegasus_app_policy", JSON.stringify(p)); } catch (e) { /* quota */ }
+          try { applyWall(p); } catch (e) { /* fail open */ }
+          return p;
+        })
+        .catch(() => cachedPolicy); // offline: last known policy (or none) stands
+    }
+    const policyPromise = (function () {
+      if (!appShell && !webBuild) return Promise.resolve(null); // dev / preview: feature off
+      try { cachedPolicy = JSON.parse(localStorage.getItem("pegasus_app_policy") || "null"); } catch (e) { /* fresh */ }
+      // Apply the cached verdict off the eval path (showScreen's helpers —
+      // pegAnalytics among them — are defined below this block).
+      setTimeout(() => { try { applyWall(cachedPolicy); } catch (e) { /* fail open */ } }, 0);
+      // Slow re-check while the page stays open: 10 min interval + on
+      // returning to the foreground (webviews fire visibilitychange too),
+      // throttled — an install resumed from the app switcher for weeks
+      // never cold-boots, and this is how it still meets a new verdict.
+      setInterval(() => { try { fetchPolicy(); } catch (e) { /* fail open */ } }, 600000);
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState !== "visible") return;
+        if (Date.now() - lastPolicyCheck < 300000) return;
+        try { fetchPolicy(); } catch (e) { /* fail open */ }
+      });
+      return fetchPolicy();
+    })();
 
     // --- Online high scores (dannyrhubarb/pegasus-backend) -----------------
     // config.json ({apiBaseUrl, replayBaseUrl}) is written at deploy time
@@ -3071,9 +3789,22 @@
       return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
     }
 
-    fetch("config.json?nocache=" + Date.now(), { cache: "no-store" })
-      .then(r => (r.ok ? r.json() : null))
-      .then(c => {
+    Promise.all([
+      fetch("config.json?nocache=" + Date.now(), { cache: "no-store" })
+        .then(r => (r.ok ? r.json() : null))
+        .catch(() => null), // offline build / no server: stays local below
+      policyPromise, // the config chain must not race the policy verdict
+    ])
+      .then(([baked, policy]) => {
+        // A complete policy `config` outranks the baked config.json IN THE
+        // APP SHELLS ONLY: their baked config is frozen at build time, and
+        // the override is the remote fix for it pointing at retired
+        // infrastructure (see the app-policy block above). The web page
+        // deliberately never applies it — its config.json is deploy-fresh
+        // at every load (a parked tab re-reads config only via a reload,
+        // which fetches fresh anyway), so an override could only ever
+        // misroute the live site during a shell-targeted policy window.
+        const c = (appShell && policyConfig(policy)) || baked;
         pegAnalytics.configure(c); // analytics needs only apiBaseUrl
         pegMP.configure(c);        // multiplayer needs only wsUrl
         if (!c || !c.apiBaseUrl || !c.replayBaseUrl) return;
@@ -3090,18 +3821,61 @@
       // The replay is mandatory: the server re-simulates it to verify the
       // claimed score before the run reaches any board (maybeSubmitOnline
       // guarantees entry.b exists and fits the 512 KiB decoded cap).
-      const body = {
+      const body = JSON.stringify({
         level: levelStem(file), name: playerName(), score: entry.d,
         replay: entry.b,
+      });
+      // A record run is unrepeatable, so one flaky mobile request must not
+      // lose it: transient failures (network error / 5xx) retry with
+      // backoff before giving up. The rare double-accept this can cause (a
+      // 201 whose response was lost in transit) just writes the same score
+      // twice under two runIds — cosmetic, and far better than a lost run.
+      const attempt = (triesLeft, delayMs) => {
+        if (window.pegLog) {
+          window.pegLog.add("submit",
+            "POST " + levelStem(file) + " score=" + entry.d + " triesLeft=" + triesLeft);
+        }
+        fetch(backendCfg.apiBaseUrl + "/v1/scores", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+        }).then(r => {
+          if (!r.ok) {
+            console.warn("score submit failed:", r.status);
+            if (r.status >= 500 && triesLeft > 0)
+              setTimeout(() => attempt(triesLeft - 1, delayMs * 2), delayMs);
+            return;
+          }
+          // Verification is asynchronous backend-side (the 201 predates
+          // the verdict by seconds): remember the accepted run so the
+          // board can show the submitter their own row as "verifying…"
+          // until the real entry lands (see mergePendingRow), and refresh
+          // the record now — usually a no-op — and once more after the
+          // resim has had time to land, so a fresh record becomes BEST +
+          // the racing ghost without a reload.
+          r.json().catch(() => null).then(res => {
+            if (window.pegLog) {
+              window.pegLog.add("submit",
+                "accepted runId=" + (res && res.runId ? res.runId : "(none)"));
+            }
+            if (res && res.runId) {
+              pendingVerify = {
+                stem: levelStem(file), name: playerName(), score: entry.d,
+                runId: res.runId, ts: new Date().toISOString(),
+                until: Date.now() + PENDING_VERIFY_MS,
+              };
+              renderGlobalScores(); // no-op unless the board is on screen
+            }
+            applyGlobalRecord(file); // a new record should race the next spawn
+            setTimeout(() => applyGlobalRecord(file), 20000);
+          });
+        }).catch(e => {
+          console.warn("score submit failed:", e);
+          if (triesLeft > 0)
+            setTimeout(() => attempt(triesLeft - 1, delayMs * 2), delayMs);
+        });
       };
-      fetch(backendCfg.apiBaseUrl + "/v1/scores", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      }).then(r => {
-        if (!r.ok) { console.warn("score submit failed:", r.status); return; }
-        applyGlobalRecord(file); // a new record should race the next spawn
-      }).catch(e => console.warn("score submit failed:", e));
+      attempt(3, 2000);
     }
 
     function maybeSubmitOnline(file, entry) {
@@ -3213,6 +3987,52 @@
       return c && c.length ? c[0] : null;
     }
 
+    // Own just-accepted submission, shown optimistically on the board while
+    // the backend's async verification runs. STRICTLY LOCAL and strictly
+    // visual: it is merged into the rendered rows only (never the cache,
+    // never the picker bests, never BEST/ghost), so only the submitter's
+    // own screen sees it and the shared board stays verified-only — a
+    // failed verification simply never materialises and the row quietly
+    // expires, preserving the backend's silent-discard (no rejection
+    // oracle) design. The window covers the worker's worst case (a 60-min
+    // recording resims in ~1–2 min).
+    const PENDING_VERIFY_MS = 3 * 60 * 1000;
+    let pendingVerify = null; // {stem, name, score, runId, ts, until}
+    function mergePendingRow(stem, file, scores) {
+      const p = pendingVerify;
+      if (!p || p.stem !== stem) return scores;
+      if (scores.some(s => s.runId === p.runId)) {
+        pendingVerify = null; // verified — the real row took over
+        return scores;
+      }
+      if (Date.now() > p.until) {
+        pendingVerify = null; // gave up (rejected, or verification is slow)
+        return scores;
+      }
+      const better = levelIsTime(file)
+        ? s => p.score < s.score   // time board: fastest first, lower wins
+        : s => p.score > s.score;  // distance board: highest first
+      let at = scores.findIndex(better);
+      if (at < 0) at = scores.length;
+      const merged = scores.slice();
+      merged.splice(at, 0, {
+        name: p.name, score: p.score, ts: p.ts, runId: p.runId, pending: true,
+      });
+      return merged;
+    }
+    // While a pending row is on screen, refetch the open board every few
+    // seconds so "verifying…" resolves into the real entry without the
+    // player having to leave and re-enter. The overlay check ends the loop
+    // when they leave; mergePendingRow ends it on verdict or expiry.
+    let pendingPollTimer = 0;
+    function schedulePendingPoll() {
+      clearTimeout(pendingPollTimer);
+      if (!pendingVerify || Date.now() > pendingVerify.until) return;
+      pendingPollTimer = setTimeout(() => {
+        if (overlay === "scr-scores") renderGlobalScores();
+      }, 6000);
+    }
+
     // The global all-time record drives the in-flight BEST readout and the
     // racing ghost: refresh the loaded level's all-time board, raise the
     // in-game best to the record, and push the record's replay blob in as
@@ -3303,7 +4123,10 @@
         who.textContent = s.name;
         const when = document.createElement("span");
         when.className = "pdate";
-        when.textContent = s.ts ? fmtDate(s.ts) : "";
+        // A pending own row (mergePendingRow) shows its state instead of a
+        // date; it carries no replayPath, so it never grows a watch button.
+        if (s.pending) { li.classList.add("pending"); when.textContent = "verifying…"; }
+        else when.textContent = s.ts ? fmtDate(s.ts) : "";
         col.append(who, when);
         const dist = document.createElement("span");
         dist.className = "dist";
@@ -3351,7 +4174,7 @@
       // load and the background refresh of a cached board.
       const cached = getBoard(stem, scoresPeriod);
       scoresStatus.style.display = "none";
-      if (cached) { renderBoardRows(cached); }
+      if (cached) { renderBoardRows(mergePendingRow(stem, file, cached)); }
       else { scoresList.textContent = ""; renderedBoardJson = null;
              scoresEmpty.style.display = "none"; }
       setLoading(true);
@@ -3365,10 +4188,13 @@
           if (!data) throw new Error("bad response");
           setLoading(false);
           const scores = data.scores || [];
-          putBoard(stem, scoresPeriod, scores);
+          putBoard(stem, scoresPeriod, scores); // cache the VERIFIED rows only
+          const shown = mergePendingRow(stem, file, scores);
           // Rebuild only when the data actually changed — a rebuild under an
-          // in-flight tap retargets it (see renderBoardRows).
-          if (JSON.stringify(scores) !== renderedBoardJson) renderBoardRows(scores);
+          // in-flight tap retargets it (see renderBoardRows). The pending
+          // flag rides the JSON, so verifying… → verified re-renders once.
+          if (JSON.stringify(shown) !== renderedBoardJson) renderBoardRows(shown);
+          schedulePendingPoll();
         })
         .catch(() => {
           if (seq !== globalFetchSeq) return;
@@ -3377,6 +4203,7 @@
           // error when there's nothing to show.
           if (!cached) { scoresStatus.textContent = "Couldn't reach the score server";
                          scoresStatus.style.display = ""; }
+          schedulePendingPoll(); // a blip mustn't strand "verifying…"
         });
     }
 
@@ -3554,6 +4381,10 @@
         try {
           queue.push({ seq: seq++, t: Date.now(), name, props: props || {} });
           if (queue.length > MAX_QUEUE) queue.shift(); // drop oldest
+          // Mirror every event into the local bug-report log (pegLog is a
+          // ring buffer, content-free enums/numbers like the event itself)
+          // — this is what gives a bug report its gameplay timeline.
+          if (window.pegLog) window.pegLog.add("evt", name + " " + JSON.stringify(props || {}));
         } catch (_) { /* never throw into game code */ }
       }
 

@@ -2,12 +2,22 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Pegasus — Privacy Policy</title>
   <style>
-    :root { color-scheme: dark; }
+    /* Safe-area rule (see CLAUDE.md): consume --inset-* — the max of env()
+       and the app shells' injected --app-inset-* — never env() directly. */
+    :root {
+      color-scheme: dark;
+      --inset-top: max(env(safe-area-inset-top), var(--app-inset-top, 0px));
+      --inset-right: max(env(safe-area-inset-right), var(--app-inset-right, 0px));
+      --inset-bottom: max(env(safe-area-inset-bottom), var(--app-inset-bottom, 0px));
+      --inset-left: max(env(safe-area-inset-left), var(--app-inset-left, 0px));
+    }
     body {
-      margin: 0 auto; max-width: 720px; padding: 32px 20px 64px;
+      margin: 0 auto; max-width: 720px;
+      padding: calc(32px + var(--inset-top)) calc(20px + var(--inset-right))
+               calc(64px + var(--inset-bottom)) calc(20px + var(--inset-left));
       background: #05060f; color: #cfd8e6;
       font-family: ui-monospace, Menlo, Consolas, monospace; line-height: 1.6;
     }
