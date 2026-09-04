@@ -1,8 +1,13 @@
 [
  {
-  "rev": "5f9151b",
-  "date": "2026-09-04T04:10:27Z",
+  "rev": "084017a",
+  "date": "2026-09-04T04:19:42Z",
   "note": "New: Your race-cam bubble now keeps your face centred — only a small square around it ever leaves your phone"
+ },
+ {
+  "rev": "05d384a",
+  "date": "2026-09-04T04:19:01Z",
+  "note": "New: Race-cam mics now start muted — tap the mic button under your bubble when you have something to say"
  },
  {
   "rev": "64359e7",
