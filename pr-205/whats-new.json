@@ -1,28 +1,18 @@
 [
  {
-  "rev": "e197e46",
-  "date": "2026-09-04T13:35:21Z",
-  "note": "New: The landing ring is now a Settings toggle — on by default, off for the purists"
+  "rev": "bd858c9",
+  "date": "2026-09-04T19:51:20Z",
+  "note": "New: Land crooked and the ship now rocks onto both feet instead of freezing on one leg"
  },
  {
-  "rev": "60bf9b0",
-  "date": "2026-09-04T13:35:21Z",
-  "note": "New: A Flight manual under About — read exactly what makes a landing count before the pad tells you it didn't"
+  "rev": "6b40a20",
+  "date": "2026-09-04T19:51:20Z",
+  "note": "New: Landings count after 0.4 s now — but only with both feet on the pad, so no more heel-hanging"
  },
  {
   "rev": "6e8094b",
   "date": "2026-09-04T13:35:20Z",
   "note": "New: High scores now show which game version a run was flown on — and tell you when a replay needs an update to watch"
- },
- {
-  "rev": "69f34d4",
-  "date": "2026-09-04T13:35:20Z",
-  "note": "New: Land crooked and the ship now rocks onto both feet instead of freezing on one leg"
- },
- {
-  "rev": "5dd40c3",
-  "date": "2026-09-04T13:35:20Z",
-  "note": "New: Landings count after 0.4 s now — but only with both feet on the pad, so no more heel-hanging"
  },
  {
   "rev": "7ceaa61",
