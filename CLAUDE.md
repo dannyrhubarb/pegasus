@@ -2135,6 +2135,60 @@ backend-verification flow.
   FLYING SOLO" banner, feed torn down) — the local flight is never
   blocked by network state.
 
+- **Video & voice bubbles (2026-09, #200 step 1 — raw feed)**: opt-in
+  per device (`pegasus_mp_av`, remembered; `Camera & mic` toggle on the
+  host / lobby screens with a mirrored local preview, and on the pause
+  screen while in a room — `#pause-av-row`, shown by `syncBubbles`), the
+  selfie camera (240² @15 fps ideal, `maxBitrate` 200 kbit/s,
+  `maxFramerate` 15 on the sender) + mic (echo cancellation on) ride the
+  SAME `RTCPeerConnection` as the input stream as media tracks — P2P, TURN
+  fallback, nothing through AWS beyond the SDP. **Transceivers are
+  negotiated up front** (host `addTransceiver` audio+video before the
+  first offer; the guest flips the offered m-lines to `sendrecv` in
+  `onSignal` before answering), so switching a camera on/off later is
+  `sender.replaceTrack` — no renegotiation, #148's offer/answer flow is
+  untouched. A DataChannel `{t:"av", video, audio}` message is the truth
+  for the opponent's bubble (track `mute` is only a belt-and-braces hide).
+  HUD: `#mp-bubbles` (HTML, `pointer-events: none`) — own bubble 64 px
+  cyan mirrored, parked top-right under the corner buttons; the
+  **opponent's 96 px magenta bubble FOLLOWS THEIR SHIP** (owner request
+  2026-09): the frame loop mirrors the silhouette's screen position +
+  `view_scale` out of the wasm (`mp_remote_pose` / `mp_remote_screen_x`
+  / `_y` / `mp_remote_px_per_m` — logical = CSS px, the space every HTML
+  overlay lays out in; written where the silhouette is drawn,
+  off-screen included), and a JS rAF loop (`followTick`, running only
+  while the remote bubble shows) places it ~1.1 m above the hull as a
+  compositor-only `transform`, clamped inside the safe-area viewport when
+  the opponent is off-screen (an edge hint toward them; the top-right
+  corner keeps clear of the corner buttons) and parked back in the
+  top-right stack — inline transform cleared, or the flex-positioned
+  bubble inherits the stale ship offset — when there is no pose (their
+  wreck, no room). The HTML callsign hides in follow mode (the in-canvas
+  label already sits under the silhouette). Shown only while in a room AND the canvas is live
+  (`showScreen`/`closeMenu` call `pegMP.syncBubbles()` next to
+  `syncWakeLock`; the try/catch covers pegMP's TDZ at boot). The remote
+  `<video>` carries the voice track too, so it stays attached (audible)
+  while hidden. Leaving the room / any teardown stops the capture but
+  keeps the preference; iOS ends the capture on backgrounding — the track
+  `ended` + `visibilitychange` handlers re-acquire. **Mics start MUTED
+  (owner direction 2026-09)**: the audio track is captured with the camera
+  (one permission flow, instant unmute) but `enabled = false` on every
+  capture start (`micLive`, deliberately not remembered); the round mic
+  button under your own bubble (`#mp-mute` — the one `pointer-events:
+  auto` element in the stack, wired through `onTap` so it swallows its
+  taps like the corner buttons; amber + slashed while muted) and the
+  "Microphone live" rows under each Camera & mic row (shown only while
+  capture is on) flip it via `setMic`; the `av` message reports
+  `audio: false` while muted, and the opponent's bubble shows an amber
+  mic-off badge (`#mp-remote-muted`, `.remote-muted`) while theirs is. A failed
+  `getUserMedia` (denied, no camera) flips the preference off and shows a
+  banner; a combined camera+mic failure retries video-only. Shells: iOS
+  `NSCameraUsageDescription` + `NSMicrophoneUsageDescription` and the
+  `WKUIDelegate` media-capture callback (one system prompt per media
+  type, no WebKit sheet — see "iOS app"); Android `CAMERA` /
+  `RECORD_AUDIO` permissions + a `WebChromeClient.onPermissionRequest`
+  that forwards the runtime prompt and grants only the bundle origin.
+  Step 2 (face-tracked crop before sending) is the follow-up in #200.
 ## Physics notes
 
 The body has `angular_damping(3.0)` and `linear_damping(0.2)` (see Thrust /

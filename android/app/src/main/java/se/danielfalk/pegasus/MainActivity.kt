@@ -1,18 +1,22 @@
 package se.danielfalk.pegasus
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
+import android.webkit.PermissionRequest
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
+import android.webkit.WebChromeClient
 import android.webkit.WebViewClient
 import androidx.webkit.WebViewAssetLoader
 import java.io.ByteArrayInputStream
@@ -28,6 +32,13 @@ import java.io.IOException
  */
 class MainActivity : Activity() {
     private lateinit var webView: WebView
+    // The page's getUserMedia request waiting on the runtime permission
+    // dialog (see onPermissionRequest); at most one in flight.
+    private var pendingCapture: PermissionRequest? = null
+
+    private companion object {
+        const val CAPTURE_PERMISSION_REQUEST = 0x5043 // "PC"
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -88,6 +99,28 @@ class MainActivity : Activity() {
                 } catch (e: ActivityNotFoundException) {
                     true
                 }
+            }
+        }
+
+        // getUserMedia (multiplayer video/voice bubbles): the WebView asks
+        // here for RESOURCE_VIDEO/AUDIO_CAPTURE; answer from the runtime
+        // permissions — prompt the user for whatever is still missing,
+        // then grant exactly what was allowed. Only the bundled page's own
+        // origin may capture. The page treats a denial as "camera
+        // unavailable" and races on without bubbles.
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onPermissionRequest(request: PermissionRequest) {
+                if (request.origin?.host != WebViewAssetLoader.DEFAULT_DOMAIN) {
+                    request.deny(); return
+                }
+                val wanted = request.resources.filter { captureManifestPermission(it) != null }
+                if (wanted.isEmpty()) { request.deny(); return }
+                val missing = wanted.map { captureManifestPermission(it)!! }
+                    .filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+                if (missing.isEmpty()) { request.grant(wanted.toTypedArray()); return }
+                pendingCapture?.deny()
+                pendingCapture = request
+                requestPermissions(missing.toTypedArray(), CAPTURE_PERMISSION_REQUEST)
             }
         }
 
@@ -184,6 +217,28 @@ class MainActivity : Activity() {
         } catch (e: Exception) {
             ""
         }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != CAPTURE_PERMISSION_REQUEST) return
+        val request = pendingCapture ?: return
+        pendingCapture = null
+        val granted = request.resources.filter { res ->
+            val perm = captureManifestPermission(res)
+            perm != null && checkSelfPermission(perm) == PackageManager.PERMISSION_GRANTED
+        }
+        if (granted.isEmpty()) request.deny() else request.grant(granted.toTypedArray())
+    }
+
+    private fun captureManifestPermission(resource: String): String? = when (resource) {
+        PermissionRequest.RESOURCE_VIDEO_CAPTURE -> Manifest.permission.CAMERA
+        PermissionRequest.RESOURCE_AUDIO_CAPTURE -> Manifest.permission.RECORD_AUDIO
+        else -> null
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
