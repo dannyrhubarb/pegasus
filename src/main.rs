@@ -768,8 +768,16 @@ pub extern "C" fn blob_in_ptr(len: u32) -> *const u8 {
 // Deflated bytes -> Recording (the watch_replay_blob / load_ghost_blob
 // decode path). Pure so the round trip is unit-testable.
 fn decode_recording(packed: &[u8]) -> Option<Recording> {
-    let raw = replay::decompress(packed)?;
-    Recording::deserialize(&raw).ok().map(|(rec, _build_id)| rec)
+    try_decode_recording(packed).ok()
+}
+
+// The distinguishing form: a blob this build's sim logic can't replay
+// (format v6 `min_logic` above LOGIC_VERSION) comes back as
+// `Err(ERR_NEEDS_NEWER)`, everything else corrupt/unreadable as another
+// error — so the UI can say "update to watch" instead of "unavailable".
+fn try_decode_recording(packed: &[u8]) -> Result<Recording, &'static str> {
+    let raw = replay::decompress(packed).ok_or("inflate failed")?;
+    Recording::deserialize(&raw).map(|(rec, _build_id)| rec)
 }
 
 fn decode_blob_in(len: u32) -> Option<Recording> {
@@ -778,15 +786,38 @@ fn decode_blob_in(len: u32) -> Option<Recording> {
     decode_recording(&b[..end])
 }
 
+// 1 = queued for playback, 2 = the replay needs a newer game version
+// (pegasus#194 — the boards normally withhold such rows, this is the
+// safety net for a stale board cache), 0 = unreadable.
 #[unsafe(no_mangle)]
 pub extern "C" fn watch_replay_blob(len: u32) -> i32 {
-    match decode_blob_in(len) {
-        Some(rec) => {
+    let decoded = {
+        let b = BLOB_IN.lock().unwrap();
+        let end = (len as usize).min(b.len());
+        try_decode_recording(&b[..end])
+    };
+    match decoded {
+        Ok(rec) => {
             *PENDING_WATCH.lock().unwrap() = Some(rec);
             1
         }
-        None => 0,
+        Err(e) if e == replay::ERR_NEEDS_NEWER => 2,
+        Err(_) => 0,
     }
+}
+
+// Ruleset versioning facts for the JS side (pegasus#194): the client's
+// rule-logic capability (sent as `?logic=` on board fetches so the API can
+// withhold replays it can't decode) and the newest ruleset it ships (the
+// number board rows are tagged against).
+#[unsafe(no_mangle)]
+pub extern "C" fn logic_version() -> i32 {
+    i32::from(replay::LOGIC_VERSION)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn current_ruleset() -> i32 {
+    sim::rulesets().len() as i32
 }
 
 #[unsafe(no_mangle)]
@@ -3005,6 +3036,35 @@ async fn main() {
             draw_text(&label, lx + 1.5 * ui, ly + 1.5 * ui,
                 fs, Color::from_rgba(26, 18, 8, 200));
             draw_text(&label, lx, ly, fs, Color::from_rgba(255, 214, 130, 240));
+        }
+
+        // Ruleset badge (pegasus#194): a replay flown under a ruleset other
+        // than this build's current one says so — "FLOWN ON v1" for an older
+        // registry entry, "FLOWN ON A NEWER VERSION" when the header
+        // matches none this build ships (parameter-only future rulesets
+        // still replay bit-exactly, see Sim::with_rules). Top centre under
+        // the safe area: the minimap owns the top-left, the exit ✕ the
+        // top-right. Amber = the replay accent.
+        if mode == Mode::Replay {
+            let rec = watch_rec.as_ref().unwrap_or(&recorder);
+            let current = sim::rulesets().len() as u16;
+            let tag = match sim::ruleset_number(&rec.params) {
+                Some(n) if n == current => None,
+                Some(n) => Some(format!("FLOWN ON v{n}")),
+                None => Some("FLOWN ON A NEWER VERSION".to_string()),
+            };
+            if let Some(tag) = tag {
+                let fs = 26.0 * ui;
+                let dim = measure_text(&tag, None, fs as u16, 1.0);
+                let pad = 10.0 * ui;
+                let x = (sw - dim.width) / 2.0;
+                let y = safe_top + 16.0 * ui + fs;
+                draw_rectangle(x - pad, y - fs, dim.width + 2.0 * pad, fs + pad * 0.9,
+                    Color::from_rgba(20, 14, 4, 190));
+                draw_rectangle_lines(x - pad, y - fs, dim.width + 2.0 * pad, fs + pad * 0.9,
+                    2.0 * ui, Color::from_rgba(255, 214, 130, 140));
+                draw_text(&tag, x, y - pad * 0.15, fs, Color::from_rgba(255, 214, 130, 240));
+            }
         }
 
         // Speed danger color, shared by the HUD readout and the (optional)
