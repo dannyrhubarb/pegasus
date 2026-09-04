@@ -63,6 +63,20 @@ pub const FUEL_BURN_RCS: f32 = 1.2;  // units/s while an RCS nozzle fires
 // the timer) and cancels it. Detection only: no force depends on it, so
 // it isn't part of SimParams.
 pub const FUEL_OUT_END_SECS: f32 = 2.5;
+// The feet: the leg-pod capsule tips (±0.33, −0.64) plus their 0.09 radius,
+// in scaled ship-local units — where the both-feet landing rule (ruleset 2)
+// samples the ground, and the same −0.73 foot line the legacy rule uses.
+pub const FOOT_X: f32 = 0.33;
+pub const FOOT_Y: f32 = -0.73;
+// How far above the deck a foot may sit and still count as TOUCHING it
+// (ruleset 2): contact slop only — a foot in the air is not on the pad. The
+// legacy rule's 0.3 m foot-line tolerance would let a ship tilted to the
+// settle limit count with one foot 13 cm up (found on the first probe).
+// THIS IS ALSO THE TILT LIMIT: with the feet 2·FOOT_X = 0.66 m apart, both
+// within 10 cm of the deck caps the tilt at atan(0.10/0.66) ≈ 8.6°, which is
+// why ruleset 2 has no separate upright check — loosen this and the
+// allowed landing angle grows with it.
+pub const FOOT_TOUCH_M: f32 = 0.10;
 
 // The exact simulation constants this build runs with, serialized into every
 // replay blob so a recording can be re-run under the rules it was flown with.
@@ -94,16 +108,40 @@ pub fn ruleset_v1() -> SimParams {
         pad_refuel_per_s: PAD_REFUEL_PER_S,
         hull_repair_per_s: HULL_REPAIR_PER_S,
         fuel_out_end_secs: FUEL_OUT_END_SECS,
+        land_rule: 0.0,
+        ship_sleep: 1.0,
         min_logic: 1,
     }
 }
 
+// Ruleset 2 (pegasus#194 phase 4, 2026-09): the landing that grew out of
+// the "my landing didn't register" report — a HALVED settle hold (0.4 s,
+// the ring closes twice as fast) that only counts when BOTH FEET are on
+// the deck (land_rule 1; the old rule accepted a ship hanging a foot over
+// the edge as long as its centre was over the deck). The both-feet
+// predicate is new tick logic, so min_logic is 2: clients on logic 1
+// refuse these replays cleanly ("update to watch") instead of desyncing.
+// And the ship NEVER SLEEPS (`ship_sleep` 0): Rapier's 2 s sleep timer
+// used to freeze a crooked touchdown mid-rock on one leg — lunar gravity
+// rights the ship slower than the sleep thresholds — so the both-feet
+// rule could never be met without a nudge (see SimParams::ship_sleep).
+// Everything else is the v1 baseline. FROZEN like every registry entry.
+pub fn ruleset_v2() -> SimParams {
+    SimParams {
+        pad_land_time: 0.4,
+        land_rule: 1.0,
+        ship_sleep: 0.0,
+        min_logic: 2,
+        ..ruleset_v1()
+    }
+}
+
 // The ruleset LIVE PLAY runs — what the recorder stamps into new blobs and
-// what the backend verifier's registry must contain. Currently ruleset 1;
-// a tuning change means adding ruleset_v2() and pointing this at it (see
-// issue #194 — never editing ruleset_v1()).
+// what the backend verifier's registry must contain. Currently ruleset 2;
+// a tuning change means adding ruleset_vN() and pointing this at it (see
+// issue #194 — never editing a shipped entry).
 pub fn sim_params() -> SimParams {
-    ruleset_v1()
+    ruleset_v2()
 }
 
 // THE REGISTRY: every ruleset ever shipped, in order — index + 1 is the
@@ -112,7 +150,7 @@ pub fn sim_params() -> SimParams {
 // these exactly (predetermined tunings — owner rule, issue #194); the
 // newest entry must be what `sim_params()` returns. Append-only.
 pub fn rulesets() -> Vec<SimParams> {
-    vec![ruleset_v1()]
+    vec![ruleset_v1(), ruleset_v2()]
 }
 
 // The registry number of a header ruleset (1-based), None if it matches
@@ -266,6 +304,8 @@ impl Sim {
             // A whisper of drag: imperceptible at landing speeds but it caps
             // how much momentum can pile up on a long burn or free-fall.
             .linear_damping(rules.linear_damping)
+            // Ruleset 2: never sleep — see SimParams::ship_sleep.
+            .can_sleep(rules.ship_sleep > 0.0)
             .ccd_enabled(true)
             .build();
         let ship = bodies.insert(body);
@@ -661,17 +701,47 @@ impl Sim {
             // deck) for PAD_LAND_TIME. First visit scores; parked ships
             // refuel and repair.
             let b = &self.bodies[self.ship];
-            let settled = b.rotation().angle().abs() < 0.30
-                && vx.abs() < 1.0
+            let settled = vx.abs() < 1.0
                 && vy.abs() < 1.0
                 && b.angvel().abs() < 0.5;
             let on_pad = settled
                 .then(|| {
-                    let feet = y - 0.73;
-                    self.pads.iter().find_map(|(&key, pad)| {
-                        ((x - pad.cx).abs() <= PAD_HALF_W && (feet - pad.y).abs() < 0.3)
-                            .then_some(key)
-                    })
+                    if self.rules.land_rule >= 1.0 {
+                        // Ruleset 2: BOTH feet TOUCHING the deck. The feet
+                        // are the leg-pod tips (scaled-local ±FOOT_X, FOOT_Y
+                        // — the capsule endpoints plus their radius), rotated
+                        // with the hull; each must sit inside the deck span
+                        // and within FOOT_TOUCH_M of the deck top — a foot
+                        // in the air (a one-foot tilted touchdown) does not
+                        // start the timer. No separate upright check: the
+                        // feet geometry caps the tilt at ~9° (FOOT_TOUCH_M).
+                        let rot = b.rotation();
+                        let (c, s) = (rot.re, rot.im);
+                        let feet = [-FOOT_X, FOOT_X].map(|lx| {
+                            (x + lx * c - FOOT_Y * s, y + lx * s + FOOT_Y * c)
+                        });
+                        self.pads.iter().find_map(|(&key, pad)| {
+                            feet.iter()
+                                .all(|&(fx, fy)| {
+                                    (fx - pad.cx).abs() <= PAD_HALF_W
+                                        && (fy - pad.y).abs() < FOOT_TOUCH_M
+                                })
+                                .then_some(key)
+                        })
+                    } else {
+                        // Ruleset 1 (legacy): upright within 0.30 rad, the
+                        // ship's CENTRE over the deck, the foot line near the
+                        // deck top. Verbatim — old replays resim under it.
+                        let feet = y - 0.73;
+                        (b.rotation().angle().abs() < 0.30)
+                            .then(|| {
+                                self.pads.iter().find_map(|(&key, pad)| {
+                                    ((x - pad.cx).abs() <= PAD_HALF_W && (feet - pad.y).abs() < 0.3)
+                                        .then_some(key)
+                                })
+                            })
+                            .flatten()
+                    }
                 })
                 .flatten();
             if let Some(key) = on_pad {
@@ -1226,7 +1296,7 @@ mod tests {
         assert_eq!(sim.hull, 40.0, "hull spawns at the level's cap");
         assert_eq!(sim.hull_cap(), 40.0);
         // Parked on pad 0: refuel at 5/s (not 25) after the hold.
-        for _ in 0..((PAD_LAND_TIME + 2.0) / PHYSICS_DT) as u32 {
+        for _ in 0..((sim.rules.pad_land_time + 2.0) / PHYSICS_DT) as u32 {
             sim.tick(InputState::default());
         }
         assert!((sim.fuel - 40.0).abs() < 0.5, "2 s at 5/s ⇒ ~40, got {}", sim.fuel);
@@ -1248,6 +1318,90 @@ mod tests {
         assert_eq!(back.level.gravity_y, -3.0);
         assert_eq!(back.level.start_fuel, 30.0);
         for (a, b) in kfs.iter().zip(resim(&back).iter()) {
+            assert_physics_eq(a, b);
+        }
+    }
+
+    // Park a fresh sim with its centre `dx` metres from pad 0's centre and
+    // report whether a visit registered within 2 s.
+    fn parks_and_registers(rules: SimParams, dx: f32) -> bool {
+        let mut sim = Sim::with_rules(Level::demo(), rules);
+        let cx = sim.pads.values().map(|p| p.cx).min_by(|a, b| a.abs().total_cmp(&b.abs())).unwrap();
+        sim.reset(cx + dx);
+        (0..(2.0 / PHYSICS_DT) as u32).any(|_| sim.tick(InputState::default()).landed)
+    }
+
+    #[test]
+    fn ruleset_2_needs_both_feet_on_the_deck() {
+        // A ship parked with its centre 2.85 m off the pad centre is still
+        // "over the deck" for the legacy centre rule (≤ PAD_HALF_W), but its
+        // outer foot (±0.33 m) hangs past the edge: ruleset 1 registers,
+        // ruleset 2 does not. Fully on the deck both register — and
+        // ruleset 2 does it in 0.4 s.
+        assert!(parks_and_registers(ruleset_v1(), 2.85), "legacy rule: centre over the deck counts");
+        assert!(!parks_and_registers(ruleset_v2(), 2.85), "both-feet rule: a foot over the edge doesn't");
+        assert!(parks_and_registers(ruleset_v2(), 2.5), "both feet on the deck counts");
+        let mut sim = Sim::with_rules(Level::demo(), ruleset_v2());
+        let at = (0..120).position(|_| sim.tick(InputState::default()).landed).expect("registers");
+        assert!(((at + 1) as f32 * PHYSICS_DT) < 0.5, "ruleset 2 holds for 0.4 s");
+    }
+
+    #[test]
+    fn ruleset_2_does_not_start_the_timer_on_one_foot() {
+        // A tilted touchdown resting on ONE foot (0.2 rad, the other foot
+        // ~13 cm in the air — angular damping holds it there for a good
+        // while): "both feet touch" means the timer must NOT run. The legacy
+        // rule's 0.3 m foot-line tolerance would count it — the gap the
+        // owner spotted on the first ruleset-2 preview.
+        let mut sim = Sim::with_rules(Level::demo(), ruleset_v2());
+        let cx = sim.pads.values().map(|p| p.cx).min_by(|a, b| a.abs().total_cmp(&b.abs())).unwrap();
+        let pad_y = sim.pads.values().find(|p| p.cx == cx).unwrap().y;
+        let a = 0.2f32;
+        // The low (left) foot exactly on the deck: y + (−FOOT_X)·sin a + FOOT_Y·cos a = pad_y.
+        let y = pad_y - (-FOOT_X * a.sin() + FOOT_Y * a.cos());
+        let kf = Keyframe {
+            tick: 0, x: cx, y, rot_re: a.cos(), rot_im: a.sin(), vx: 0.0, vy: 0.0, angvel: 0.0,
+            fuel: 100.0, hull: 100.0, glow: 0.0, land_timer: 0.0, visited: 0, run_ticks: 0,
+        };
+        sim.restore(&kf);
+        for _ in 0..30 {
+            sim.tick(InputState::default());
+            let (_, y, ang) = sim.ship_pose();
+            let raised = y + FOOT_X * ang.sin() + FOOT_Y * ang.cos() - pad_y;
+            assert!(raised > 0.1, "the probe must still be on one foot ({raised} m)");
+            assert_eq!(sim.land_progress(), 0.0, "a foot in the air must not start the hold");
+        }
+        // The same pose under the legacy rule counts (the contrast the
+        // ruleset exists for).
+        let mut legacy = Sim::with_rules(Level::demo(), ruleset_v1());
+        legacy.restore(&kf);
+        legacy.tick(InputState::default());
+        assert!(legacy.land_progress() > 0.0, "the legacy centre rule tolerates a raised foot");
+    }
+
+    #[test]
+    fn the_registry_ships_two_rulesets_and_live_play_flies_the_newest() {
+        assert_eq!(rulesets().len(), 2);
+        assert_eq!(ruleset_number(&ruleset_v1()), Some(1));
+        assert_eq!(ruleset_number(&ruleset_v2()), Some(2));
+        assert_eq!(sim_params(), ruleset_v2());
+        assert_eq!(ruleset_v2().min_logic, 2, "a new predicate bumps the logic floor");
+        assert_eq!(ruleset_v1().min_logic, 1, "the baseline stays replayable by logic-1 clients");
+        // Live recordings are therefore v6 with min_logic 2; a ruleset-1
+        // recording keeps the legacy layout and still resims bit-exactly
+        // under its own header (the legacy predicate is kept verbatim).
+        let (rec, kfs) = record_scripted_flight(Level::demo(), 900);
+        let blob = rec.serialize(0);
+        assert_eq!(u16::from_le_bytes([blob[4], blob[5]]), 6);
+        assert_eq!(Recording::deserialize(&blob).unwrap().0.params.min_logic, 2);
+        for (a, b) in kfs.iter().zip(resim(&rec).iter()) {
+            assert_physics_eq(a, b);
+        }
+        let (rec1, kfs1) = record_scripted_flight_with(Level::demo(), 900, ruleset_v1());
+        let blob1 = rec1.serialize(0);
+        assert_eq!(u16::from_le_bytes([blob1[4], blob1[5]]), 3, "ruleset-1 runs stay v3");
+        let (back, _) = Recording::deserialize(&blob1).unwrap();
+        for (a, b) in kfs1.iter().zip(resim(&back).iter()) {
             assert_physics_eq(a, b);
         }
     }
@@ -1278,7 +1432,7 @@ mod tests {
 
         // Leaving the pad resets the timer: progress snaps back to zero.
         let mut sim = Sim::new(Level::demo());
-        for _ in 0..((PAD_LAND_TIME * 0.6) / PHYSICS_DT) as u32 {
+        for _ in 0..((sim.rules.pad_land_time * 0.6) / PHYSICS_DT) as u32 {
             sim.tick(InputState::default());
         }
         let mid = sim.land_progress();
@@ -1520,8 +1674,10 @@ mod tests {
             240..=299 => InputState::from_controls(0.5, 0, 0.0, 0.0, false),
             _ => InputState::default(),
         };
-        let mut sim = Sim::new(level.clone());
-        let mut rec = Recording::new(sim_params(), level.to_params(), u32::MAX);
+        // Under the BASELINE ruleset: this test pins the level-driven v5
+        // format choice (a ruleset-2 recording would be v6 regardless).
+        let mut sim = Sim::with_rules(level.clone(), ruleset_v1());
+        let mut rec = Recording::new(ruleset_v1(), level.to_params(), u32::MAX);
         rec.push_keyframe(sim.keyframe(0, 0.0));
         for t in 0..(8 * KEYFRAME_EVERY) {
             let input = script(t);
@@ -1573,7 +1729,7 @@ mod tests {
         let at = completed_at.expect("settling on the finish pad must end the run");
         assert!(sim.completed && !sim.crashed);
         assert!(
-            at as f32 * PHYSICS_DT >= PAD_LAND_TIME - 0.1,
+            at as f32 * PHYSICS_DT >= sim.rules.pad_land_time - 0.1,
             "landing registered before the settle time: tick {at}"
         );
         assert_eq!(sim.visited_mask(), 1, "the +x finish is mask bit 0");
@@ -1605,9 +1761,10 @@ mod tests {
             "name = D\nscoring = time\nshafts = off\nobstacles = on\n\
              endless = on\nseed = 9\ngoal_distance = 100",
         );
-        let mut sim = Sim::new(level.clone());
+        // Baseline ruleset: pins the level-driven v5 choice (see above).
+        let mut sim = Sim::with_rules(level.clone(), ruleset_v1());
         sim.restore(&spawn_keyframe(&level, 100.0));
-        let mut rec = Recording::new(sim_params(), level.to_params(), u32::MAX);
+        let mut rec = Recording::new(ruleset_v1(), level.to_params(), u32::MAX);
         rec.push_keyframe(sim.keyframe(0, 0.0));
         for _ in 0..(4 * KEYFRAME_EVERY) {
             let input = InputState::default();
@@ -1797,5 +1954,46 @@ mod tests {
         assert!(landed, "never registered as landed");
         assert_eq!(sim.score, PAD_POINTS);
         assert!(sim.fuel > 50.0, "no refuel happened");
+    }
+
+    // A ship placed on ONE foot at the given tilt, at rest, low foot exactly
+    // on the deck of the pad nearest the spawn.
+    fn one_foot_pose(sim: &Sim, a: f32) -> Keyframe {
+        let cx = sim.pads.values().map(|p| p.cx).min_by(|a, b| a.abs().total_cmp(&b.abs())).unwrap();
+        let pad_y = sim.pads.values().find(|p| p.cx == cx).unwrap().y;
+        let y = pad_y - (-FOOT_X * a.sin() + FOOT_Y * a.cos());
+        Keyframe {
+            tick: 0, x: cx, y, rot_re: a.cos(), rot_im: a.sin(), vx: 0.0, vy: 0.0, angvel: 0.0,
+            fuel: 100.0, hull: 100.0, glow: 0.0, land_timer: 0.0, visited: 0, run_ticks: 0,
+        }
+    }
+
+    #[test]
+    fn ruleset_2_ship_never_sleeps_so_gravity_finishes_a_crooked_touchdown() {
+        // 0.4 rad on one foot, just short of the tipping point: the righting
+        // torque is tiny, the rock-back takes > 2 s at < 0.5 rad/s, and
+        // under ruleset 1 Rapier's sleep timer FREEZES the ship mid-rock
+        // (measured: asleep at 0.188 rad after 2.0 s, one foot 12 cm up —
+        // the "stuck on one leg" report). Ruleset 2 builds the body with
+        // can_sleep(false): gravity keeps working, the ship comes level,
+        // both feet touch and the landing registers.
+        let mut legacy = Sim::with_rules(Level::demo(), ruleset_v1());
+        let kf = one_foot_pose(&legacy, 0.4);
+        legacy.restore(&kf);
+        for _ in 0..480 {
+            legacy.tick(InputState::default());
+        }
+        assert!(legacy.bodies[legacy.ship].is_sleeping(), "ruleset 1 keeps the legacy sleep");
+        assert!(legacy.ship_pose().2 > 0.15, "frozen mid-rock: {}", legacy.ship_pose().2);
+
+        let mut sim = Sim::with_rules(Level::demo(), ruleset_v2());
+        sim.restore(&kf);
+        let mut landed = false;
+        for _ in 0..720 {
+            landed |= sim.tick(InputState::default()).landed;
+            assert!(!sim.bodies[sim.ship].is_sleeping(), "ruleset 2 never sleeps");
+        }
+        assert!(sim.ship_pose().2.abs() < 0.02, "levelled by gravity alone: {}", sim.ship_pose().2);
+        assert!(landed, "the settled ship's landing registers");
     }
 }
