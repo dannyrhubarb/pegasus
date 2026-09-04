@@ -2170,7 +2170,17 @@ backend-verification flow.
   `<video>` carries the voice track too, so it stays attached (audible)
   while hidden. Leaving the room / any teardown stops the capture but
   keeps the preference; iOS ends the capture on backgrounding — the track
-  `ended` + `visibilitychange` handlers re-acquire. A failed
+  `ended` + `visibilitychange` handlers re-acquire. **Mics start MUTED
+  (owner direction 2026-09)**: the audio track is captured with the camera
+  (one permission flow, instant unmute) but `enabled = false` on every
+  capture start (`micLive`, deliberately not remembered); the round mic
+  button under your own bubble (`#mp-mute` — the one `pointer-events:
+  auto` element in the stack, wired through `onTap` so it swallows its
+  taps like the corner buttons; amber + slashed while muted) and the
+  "Microphone live" rows under each Camera & mic row (shown only while
+  capture is on) flip it via `setMic`; the `av` message reports
+  `audio: false` while muted, and the opponent's bubble shows an amber
+  mic-off badge (`#mp-remote-muted`, `.remote-muted`) while theirs is. A failed
   `getUserMedia` (denied, no camera) flips the preference off and shows a
   banner; a combined camera+mic failure retries video-only. Shells: iOS
   `NSCameraUsageDescription` + `NSMicrophoneUsageDescription` and the

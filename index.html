@@ -1015,6 +1015,41 @@
       box-shadow: 0 0 12px rgba(52, 231, 255, 0.5);
     }
     #mp-local-bubble video, .mp-av-preview { transform: scaleX(-1); }
+    /* Mic button under your own bubble (the one tappable thing in the
+       bubble stack — pointer-events re-enabled on it alone; it swallows
+       its own taps like the corner buttons). Mics start MUTED. */
+    #mp-mute {
+      pointer-events: auto;
+      width: 44px; height: 44px;
+      border-radius: 50%;
+      display: none;
+      align-items: center; justify-content: center;
+      background: rgba(8, 16, 34, 0.7);
+      border: 2px solid var(--cyan);
+      color: var(--cyan);
+      cursor: pointer;
+      user-select: none; -webkit-user-select: none;
+      touch-action: manipulation;
+      box-shadow: 0 0 8px rgba(52, 231, 255, 0.5);
+    }
+    #mp-bubbles.has-local #mp-mute { display: flex; }
+    #mp-mute svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    #mp-mute .slash { display: none; }
+    #mp-mute.muted { border-color: var(--amber); color: var(--amber); box-shadow: 0 0 8px rgba(255, 194, 75, 0.5); }
+    #mp-mute.muted .slash { display: block; }
+    /* Opponent's mic is off: a small amber badge on their bubble. */
+    #mp-remote-bubble { position: relative; }
+    #mp-remote-muted {
+      display: none;
+      position: absolute; right: 2px; bottom: 2px;
+      width: 24px; height: 24px; border-radius: 50%;
+      background: rgba(8, 16, 34, 0.85);
+      border: 1.5px solid var(--amber);
+      color: var(--amber);
+      align-items: center; justify-content: center;
+    }
+    #mp-remote-muted svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    #mp-bubbles.remote-muted #mp-remote-muted { display: flex; }
     #mp-remote-name {
       font: 700 11px var(--mono);
       color: var(--magenta);
@@ -1466,6 +1501,10 @@
         <span>Camera &amp; mic</span>
         <input type="checkbox" class="mp-av-toggle"><span class="tgl"></span>
       </label>
+      <label class="setrow mp-mic-row" id="pause-mic-row" style="display:none">
+        <span>Microphone live</span>
+        <input type="checkbox" class="mp-mic-toggle"><span class="tgl"></span>
+      </label>
       <div class="mbtn primary" id="btn-resume">Resume</div>
       <div class="mbtn" id="btn-exit">Exit to menu</div>
     </div>
@@ -1544,6 +1583,10 @@
         <span>Camera &amp; mic</span>
         <input type="checkbox" class="mp-av-toggle"><span class="tgl"></span>
       </label>
+      <label class="setrow mp-mic-row" id="mp-mic-row-host" style="display:none">
+        <span>Microphone live</span>
+        <input type="checkbox" class="mp-mic-toggle"><span class="tgl"></span>
+      </label>
       <div class="mp-av-preview-wrap" style="display:none"><video class="mp-av-preview" autoplay playsinline muted></video></div>
       <div class="hint">Your face and voice go straight to your opponent over the game link
         &mdash; never to a server</div>
@@ -1568,6 +1611,10 @@
       <label class="setrow" id="mp-av-row-lobby">
         <span>Camera &amp; mic</span>
         <input type="checkbox" class="mp-av-toggle"><span class="tgl"></span>
+      </label>
+      <label class="setrow mp-mic-row" id="mp-mic-row-lobby" style="display:none">
+        <span>Microphone live</span>
+        <input type="checkbox" class="mp-mic-toggle"><span class="tgl"></span>
       </label>
       <div class="mp-av-preview-wrap" style="display:none"><video class="mp-av-preview" autoplay playsinline muted></video></div>
       <div class="hint">Your face and voice go straight to your opponent over the game link
@@ -1602,10 +1649,13 @@
   <!-- Multiplayer video/voice bubbles (see the #mp-bubbles CSS note). -->
   <div id="mp-bubbles" aria-hidden="true">
     <div id="mp-remote">
-      <div class="mp-bubble" id="mp-remote-bubble"><video id="mp-remote-video" autoplay playsinline></video></div>
+      <div class="mp-bubble" id="mp-remote-bubble"><video id="mp-remote-video" autoplay playsinline></video>
+        <div id="mp-remote-muted" title="Opponent's mic is off"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/><path d="M4 4l16 16"/></svg></div>
+      </div>
       <div id="mp-remote-name"></div>
     </div>
     <div class="mp-bubble" id="mp-local-bubble"><video id="mp-local-video" autoplay playsinline muted></video></div>
+    <div id="mp-mute" class="muted" role="button" aria-label="Microphone"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/><path class="slash" d="M4 4l16 16"/></svg></div>
   </div>
   <div id="mp-banner" aria-live="polite"></div>
 
@@ -4788,6 +4838,24 @@
       let remoteStream = null;
       let remoteAv = { video: false, audio: false };
       let audioTx = null, videoTx = null;
+      // Mic gate: the audio track is captured with the camera (one
+      // permission flow, instant unmute) but starts DISABLED — every
+      // capture begins muted; the HUD button / "Microphone live" rows flip
+      // it. Not remembered on purpose.
+      let micLive = false;
+      const muteBtn = document.getElementById("mp-mute");
+      const micToggles = Array.from(document.querySelectorAll(".mp-mic-toggle"));
+      const micRows = Array.from(document.querySelectorAll(".mp-mic-row"));
+      function applyMic() {
+        try {
+          if (localStream) for (const t of localStream.getAudioTracks()) t.enabled = micLive;
+          muteBtn.classList.toggle("muted", !micLive);
+          muteBtn.setAttribute("aria-label", micLive ? "Mute microphone" : "Unmute microphone");
+          for (const t of micToggles) t.checked = micLive;
+        } catch (_) {}
+        avAnnounce();
+      }
+      function setMic(live) { micLive = !!live; applyMic(); }
 
       function avSupported() {
         return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
@@ -4809,6 +4877,9 @@
           bubbles.classList.toggle("on", room && overlay === null && (localOn || remoteAv.video));
           bubbles.classList.toggle("has-remote", remoteAv.video);
           bubbles.classList.toggle("has-local", localOn);
+          bubbles.classList.toggle("remote-muted", remoteAv.video && !remoteAv.audio);
+          const hasMic = localOn && localStream.getAudioTracks().length > 0;
+          for (const r of micRows) r.style.display = hasMic ? "" : "none";
           remoteNameEl.textContent = (peerName || "RIVAL").toUpperCase();
           for (const v of avPreviews) v.parentElement.style.display = localOn ? "" : "none";
           for (const t of avToggles) t.closest(".setrow").style.opacity = avSupported() ? "" : "0.4";
@@ -4878,7 +4949,7 @@
       function avAnnounce() {
         dcSend({ t: "av",
           video: !!(localStream && localStream.getVideoTracks().some(t => t.readyState === "live")),
-          audio: !!(localStream && localStream.getAudioTracks().some(t => t.readyState === "live")) });
+          audio: !!(micLive && localStream && localStream.getAudioTracks().some(t => t.readyState === "live")) });
       }
       // Put the local tracks on the negotiated transceivers (no-op until
       // the peer connection exists) + cap the video bitrate: a 96 px
@@ -4917,6 +4988,8 @@
             console.log("[mp-av] camera+mic failed (" + (e && e.name) + "), retrying video-only");
             localStream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
           }
+          micLive = false; // every capture starts muted
+          applyMic();
           for (const v of avPreviews) v.srcObject = localStream;
           localVideo.srcObject = localStream;
           for (const t of localStream.getTracks()) {
@@ -4991,6 +5064,8 @@
           if (avWanted) avStart(); else avStop(true);
         });
       }
+      onTap(muteBtn, () => setMic(!micLive));
+      for (const t of micToggles) t.addEventListener("change", () => setMic(t.checked));
       document.addEventListener("visibilitychange", () => {
         try {
           if (document.visibilityState !== "visible" || !avWanted || !inRoom()) return;
