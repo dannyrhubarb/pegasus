@@ -2,7 +2,7 @@
   "name": "Pegasus — Moon Lander",
   "short_name": "Pegasus",
   "description": "Moon lander game built with Rapier physics and WebAssembly",
-  "start_url": "/pegasus/",
+  "start_url": "./",
   "display": "fullscreen",
   "orientation": "landscape",
   "background_color": "#14141e",
@@ -10,5 +10,10 @@
   "icons": [
     { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
-  ]
+  ],
+  "related_applications": [
+    { "platform": "play", "id": "se.danielfalk.pegasus" },
+    { "platform": "itunes", "url": "https://apps.apple.com/app/id6792584910", "id": "6792584910" }
+  ],
+  "prefer_related_applications": true
 }
