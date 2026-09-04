@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "se.danielfalk.pegasus",
+      "sha256_cert_fingerprints": [
+        "AF:0A:5E:43:5C:B8:D7:49:D9:92:F2:AB:D9:2C:CE:C8:7E:BD:83:17:66:D0:BF:67:4B:E7:FC:F6:6F:A1:C5:47"
+      ]
+    }
+  }
+]

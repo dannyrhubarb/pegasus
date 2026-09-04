@@ -1,13 +1,18 @@
 [
  {
-  "rev": "058543f",
-  "date": "2026-09-03T16:58:30Z",
+  "rev": "ddafb27",
+  "date": "2026-09-04T04:10:12Z",
   "note": "New: High scores now show which game version a run was flown on — and tell you when a replay needs an update to watch"
  },
  {
-  "rev": "24459fa",
-  "date": "2026-09-01T07:44:32Z",
+  "rev": "633c1ef",
+  "date": "2026-09-04T04:10:11Z",
   "note": "New: Landings now charge up a green ring — keep her parked until it closes and the pad is yours"
+ },
+ {
+  "rev": "613e29b",
+  "date": "2026-09-02T21:06:37+02:00",
+  "note": "New: Outdated app versions now get a friendly update screen instead of silently losing online play"
  },
  {
   "rev": "78e7efe",
