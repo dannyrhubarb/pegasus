@@ -240,6 +240,15 @@ def build_page(entries, texts):
              "<a href='https://github.com/not-fl3/miniquad'>not-fl3/miniquad</a>) "
              "<span class='lic'>MIT</span>"
              "<div class='cc'>© 2019-2020 Fedor Logachev &lt;not.fl3@gmail.com&gt;</div></div>",
+             "<h2>VENDORED JAVASCRIPT LIBRARIES (vendor/, loaded only for the multiplayer video bubble)</h2>",
+             "<div class='crate'><b>TensorFlow.js</b> (vendor/tfjs/tf.min.js, "
+             "<a href='https://github.com/tensorflow/tfjs'>tensorflow/tfjs</a>) "
+             "<span class='lic'>Apache-2.0</span>"
+             "<div class='cc'>Copyright 2024 Google LLC</div></div>",
+             "<div class='crate'><b>BlazeFace</b> (vendor/blazeface/ — detector + graph model, "
+             "<a href='https://github.com/tensorflow/tfjs-models'>tensorflow/tfjs-models</a>) "
+             "<span class='lic'>Apache-2.0</span>"
+             "<div class='cc'>Copyright 2019 Google LLC</div></div>",
              "<h2>FONT</h2>",
              "<div class='crate'><b>JetBrains Mono</b> (fonts/jetbrains-mono.woff2, vendored from "
              "<a href='https://github.com/JetBrains/JetBrainsMono'>JetBrains/JetBrainsMono</a>) "
@@ -278,14 +287,20 @@ def main():
         needed.update(elected)
         ccs = copyright_lines(Path(pkg["manifest_path"]).parent, elected)
         entries.append((name, ver, spdx, elected, ccs))
-    # The vendored font's license text ships with the font itself.
+    # The vendored font's license text ships with the font itself; the
+    # vendored JS libraries are Apache-2.0 (text from vendor/tfjs/LICENSE
+    # if no crate already supplies it).
     needed.add("OFL-1.1")
+    needed.add("Apache-2.0")
     texts = {"OFL-1.1": (ROOT / "fonts/OFL.txt").read_text().strip()}
     for lic in needed:
         if lic in texts:
             continue
         if lic == "Apache-2.0":
-            texts[lic] = apache_text(index, deps)
+            try:
+                texts[lic] = apache_text(index, deps)
+            except (Exception, SystemExit):
+                texts[lic] = (ROOT / "vendor/tfjs/LICENSE").read_text().strip()
         elif lic in FULL_TEXTS and FULL_TEXTS[lic]:
             texts[lic] = FULL_TEXTS[lic]
         else:

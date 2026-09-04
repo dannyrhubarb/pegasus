@@ -26,6 +26,7 @@ touch "$DEST/.gitkeep"
 cp index.html manifest.json mq_js_bundle.js LICENSE third-party-licenses.html privacy.html "$DEST/"
 cp -R levels "$DEST/levels"
 cp -R fonts "$DEST/fonts"
+cp -R vendor "$DEST/vendor"
 
 WASM_SRC="target/wasm32-unknown-unknown/release/pegasus.wasm"
 if command -v wasm-opt >/dev/null; then

@@ -98,6 +98,7 @@ push-retry loop for concurrent deploys):
 - `fonts/` — the **vendored menu webfont**: `jetbrains-mono.woff2` (latin variable, wght 400–800) + its `OFL.txt`, loaded via `@font-face` by `index.html`/`editor.html` so every platform renders the same face (see the menu-font note under "Game menu"); in all three bundle copy lists
 - `editor.html` — the **standalone level editor** (issue #89 v1, 2026-07): draws hand-drawn `.level` worlds — the same `poly`/`pad`/`start` representation The Hollows uses — on a pan/zoom canvas. Self-contained like `index.html` (no CDNs), copied by `build-site`. **Deliberately UNLINKED from the game UI** (owner decision pre-merge): it lives at its own path with no menu button and no picker row; the game only meets it through the `?custom=1` test-fly handoff. **While it stays unlinked, editor commits carry NO `Whats-new:` trailers** (the changelog must not advertise an unannounced feature — the PR #110 branch had its trailers stripped before merge; give the editor one proper entry when it's linked up for real). See "Level editor & custom drafts" under "Levels"
 - `tools/gen-third-party-licenses.py` + `third-party-licenses.html` — the generated third-party attribution page served with the site and linked from the About screen; regenerate when `Cargo.lock` changes (see "License")
+- `vendor/` — **vendored JS libraries** (TensorFlow.js + BlazeFace, Apache-2.0, ~2 MB) for the multiplayer video bubble's face-tracked crop — lazy-loaded only when a camera goes on; pins + SHA-256 in `vendor/README.md`; in all three copy lists (see "Multiplayer" → "Video & voice bubbles")
 - `privacy.html` — standalone privacy policy served with the site (and bundled into both apps), written for the Play Store listing's required privacy-policy URL; same substance as the About screen's `#privacy-note` — keep the two in agreement when the analytics story changes
 - `app-policy.json` — the **checked-in update/config policy** every client fetches at launch (`{}` = no verdicts): **the remote lever over ALREADY-INSTALLED apps and stale web tabs** — commit a `config` override to repoint old installs at a moved backend with no store release, or a `minBuild`/`minWebBuildTime` wall for a genuinely breaking change. **Reach for this whenever a backend move or compatibility break is being planned** (it exists because the #171 migration had no such lever and drained for weeks — pegasus-backend#38); see "App update policy" under "Game menu"
 - `tools/gen-whats-new.py` + `tools/whats-new-backfill.json` + `tools/whats-new-overrides.json` — deploy-time generator for `whats-new.json`, the About screen's What's New changelog (see "What's new page" — **every user-facing commit needs a `Whats-new:` trailer**; the overrides file rewords already-merged entries)
@@ -2188,7 +2189,31 @@ backend-verification flow.
   type, no WebKit sheet — see "iOS app"); Android `CAMERA` /
   `RECORD_AUDIO` permissions + a `WebChromeClient.onPermissionRequest`
   that forwards the runtime prompt and grants only the bundle origin.
-  Step 2 (face-tracked crop before sending) is the follow-up in #200.
+  **Step 2 — face-tracked crop (2026-09)**: the raw frame never leaves
+  the device. It plays into the hidden `#mp-raw-video`; **BlazeFace on
+  TensorFlow.js** (Apache-2.0, vendored under `vendor/tfjs/` +
+  `vendor/blazeface/`, ~2 MB, **lazy-loaded the first time a camera goes
+  on** — `ensureFaceModel`, plain `<script>` tags + `blazeface.load({
+  modelUrl })`, WebGL backend with tfjs's own CPU fallback) finds the
+  face every `DETECT_MS` = 150 ms on a 160 px downscale (`detectFace`);
+  a smoothed square window follows it (`win`: eased centre/side, 2.1× the
+  face, dead-band against wobble, eases back to the full frame after
+  `FACE_LOST_MS` = 2 s without a face), and `cropFrame`
+  (`requestVideoFrameCallback`, rAF fallback) draws only that window
+  into a `CROP_PX` = 240² canvas whose `captureStream(15)` track is what
+  the sender AND the previews use (`outStream` = crop + raw audio;
+  `sendVideoTrack`). No model yet / model failed / no `captureStream` ⇒
+  the window is the centred full frame — step 1's feed, squared — so the
+  feature never depends on the download. **Why BlazeFace and not
+  pico.js** (evaluated first, 2026-09): pico's JS is MIT but its face
+  cascade is licensed no-commercial-use / no-military / citation-required
+  — incompatible with the GPL + commercial-exception plan (see
+  "License"); Viola-Jones-class alternatives (tracking.js, jsfeat) are
+  permissive but fail on the downward-tilted, screen-lit face of a phone
+  player. `vendor/README.md` records versions + SHA-256; the licenses page
+  lists both libraries (generator entries + `needed.add("Apache-2.0")`);
+  `vendor/` is in all three copy lists and both shells map `.bin` →
+  `application/octet-stream` (the weight shard).
 ## Physics notes
 
 The body has `angular_damping(3.0)` and `linear_damping(0.2)` (see Thrust /

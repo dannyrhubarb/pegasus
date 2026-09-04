@@ -1657,6 +1657,11 @@
     <div class="mp-bubble" id="mp-local-bubble"><video id="mp-local-video" autoplay playsinline muted></video></div>
     <div id="mp-mute" class="muted" role="button" aria-label="Microphone"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/><path class="slash" d="M4 4l16 16"/></svg></div>
   </div>
+  <!-- Raw selfie camera, read by the face-tracked crop (never shown, never
+       sent as-is): 2 px and transparent rather than display:none, which
+       makes some browsers stop decoding frames. -->
+  <video id="mp-raw-video" autoplay playsinline muted aria-hidden="true"
+         style="position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none"></video>
   <div id="mp-banner" aria-live="polite"></div>
 
   <script>
@@ -4857,6 +4862,155 @@
       }
       function setMic(live) { micLive = !!live; applyMic(); }
 
+      // --- Face-tracked crop (#200 step 2) ---------------------------------
+      // The raw camera frame never leaves the device: it plays into the
+      // hidden #mp-raw-video, BlazeFace (TensorFlow.js, vendored under
+      // vendor/ and loaded LAZILY the first time a camera goes on) finds
+      // the face ~6×/s on a 160 px downscale, a smoothed square window
+      // follows it (eased centre/size, dead-band against wobble, easing
+      // back to the full frame when the face is lost), and only that
+      // window — drawn into a 240² canvas whose captureStream() track is
+      // what the sender and the previews use — goes out. No model (still
+      // loading, failed, no captureStream) ⇒ the window is the centred
+      // full frame, i.e. step 1's raw feed, squared.
+      const CROP_PX = 240, DETECT_MS = 150, FACE_LOST_MS = 2000;
+      const rawVideo = document.getElementById("mp-raw-video");
+      let faceModel = null, faceModelLoading = null, faceModelFailed = false;
+      let cropCanvas = null, cropCtx = null, detCanvas = null, detCtx = null;
+      let cropStream = null, cropLoop = 0, lastDetect = 0, detecting = false;
+      let outStream = null; // cropped video + raw audio: previews + senders
+      let win = { cx: 0.5, cy: 0.5, s: 1, tx: 0.5, ty: 0.5, ts: 1, seen: 0 };
+
+      function loadScript(src) {
+        return new Promise((res, rej) => {
+          const s = document.createElement("script");
+          s.src = src;
+          s.onload = res;
+          s.onerror = () => rej(new Error("failed to load " + src));
+          document.head.appendChild(s);
+        });
+      }
+      function ensureFaceModel() {
+        if (faceModel || faceModelFailed) return Promise.resolve(faceModel);
+        if (!faceModelLoading) {
+          faceModelLoading = (async () => {
+            try {
+              if (typeof tf === "undefined") await loadScript("vendor/tfjs/tf.min.js");
+              if (typeof blazeface === "undefined") await loadScript("vendor/blazeface/blazeface.min.js");
+              try { await tf.ready(); } catch (_) {}
+              faceModel = await blazeface.load({
+                modelUrl: "vendor/blazeface/model.json", maxFaces: 1, scoreThreshold: 0.6 });
+              console.log("[mp-av] face model ready (" + tf.getBackend() + ")");
+            } catch (e) {
+              faceModelFailed = true;
+              console.log("[mp-av] face model unavailable — sending the plain frame: " + (e && e.message));
+            }
+            return faceModel;
+          })();
+        }
+        return faceModelLoading;
+      }
+      function cropStart() {
+        try {
+          if (!localStream || !localStream.getVideoTracks().length) return null;
+          if (!HTMLCanvasElement.prototype.captureStream) return null;
+          if (!cropCanvas) {
+            cropCanvas = document.createElement("canvas");
+            cropCanvas.width = cropCanvas.height = CROP_PX;
+            cropCtx = cropCanvas.getContext("2d");
+            detCanvas = document.createElement("canvas");
+            detCtx = detCanvas.getContext("2d", { willReadFrequently: true });
+          }
+          rawVideo.srcObject = localStream;
+          rawVideo.play().catch(() => {});
+          win = { cx: 0.5, cy: 0.5, s: 1, tx: 0.5, ty: 0.5, ts: 1, seen: 0 };
+          // Paint one frame up front so the track has content immediately.
+          cropCtx.fillStyle = "#000";
+          cropCtx.fillRect(0, 0, CROP_PX, CROP_PX);
+          cropStream = cropCanvas.captureStream(15);
+          ensureFaceModel();
+          scheduleCrop();
+          return cropStream.getVideoTracks()[0] || null;
+        } catch (e) {
+          console.log("[mp-av] crop unavailable — sending the plain frame: " + (e && e.message));
+          return null;
+        }
+      }
+      function scheduleCrop() {
+        if (rawVideo.requestVideoFrameCallback) cropLoop = rawVideo.requestVideoFrameCallback(cropFrame);
+        else cropLoop = requestAnimationFrame(cropFrame);
+      }
+      function cropFrame() {
+        cropLoop = 0;
+        if (!cropStream) return;
+        try {
+          const vw = rawVideo.videoWidth, vh = rawVideo.videoHeight;
+          if (vw && vh) {
+            const now = performance.now();
+            if (faceModel && !detecting && now - lastDetect > DETECT_MS) {
+              lastDetect = now;
+              detectFace(vw, vh);
+            }
+            if (win.seen && now - win.seen > FACE_LOST_MS) { win.tx = 0.5; win.ty = 0.5; win.ts = 1; }
+            const k = 0.18; // per-frame easing toward the target window
+            win.cx += (win.tx - win.cx) * k;
+            win.cy += (win.ty - win.cy) * k;
+            win.s += (win.ts - win.s) * k;
+            const side = Math.min(vw, vh) * win.s;
+            let sx = win.cx * vw - side / 2, sy = win.cy * vh - side / 2;
+            sx = Math.max(0, Math.min(vw - side, sx));
+            sy = Math.max(0, Math.min(vh - side, sy));
+            cropCtx.drawImage(rawVideo, sx, sy, side, side, 0, 0, CROP_PX, CROP_PX);
+          }
+        } catch (_) {}
+        scheduleCrop();
+      }
+      async function detectFace(vw, vh) {
+        detecting = true;
+        try {
+          const dw = 160, dh = Math.max(1, Math.round(160 * vh / vw));
+          if (detCanvas.width !== dw || detCanvas.height !== dh) { detCanvas.width = dw; detCanvas.height = dh; }
+          detCtx.drawImage(rawVideo, 0, 0, dw, dh);
+          const faces = await faceModel.estimateFaces(detCanvas, false, false, false);
+          if (faces && faces.length) {
+            const prob = f => Array.isArray(f.probability) ? f.probability[0]
+              : (typeof f.probability === "number" ? f.probability : 0);
+            const f = faces.reduce((a, b) => (prob(b) > prob(a) ? b : a));
+            const x1 = f.topLeft[0], y1 = f.topLeft[1], x2 = f.bottomRight[0], y2 = f.bottomRight[1];
+            const fw = (x2 - x1) / dw, fh = (y2 - y1) / dh;
+            const cx = (x1 + x2) / 2 / dw;
+            const cy = (y1 + y2) / 2 / dh - fh * 0.08; // a touch up: forehead in, less neck
+            // Window side = 2.1× the face, as a fraction of the frame's short side.
+            let s = Math.max(fw * vw, fh * vh) * 2.1 / Math.min(vw, vh);
+            s = Math.max(0.35, Math.min(1, s));
+            if (Math.abs(cx - win.tx) > 0.015 || Math.abs(cy - win.ty) > 0.015) { win.tx = cx; win.ty = cy; }
+            if (Math.abs(s - win.ts) > 0.05) win.ts = s;
+            win.seen = performance.now();
+          }
+        } catch (e) {
+          console.log("[mp-av] face detection failed: " + (e && e.message));
+        }
+        detecting = false;
+      }
+      function cropStop() {
+        try {
+          if (cropLoop) {
+            if (rawVideo.cancelVideoFrameCallback) rawVideo.cancelVideoFrameCallback(cropLoop);
+            cancelAnimationFrame(cropLoop);
+          }
+        } catch (_) {}
+        cropLoop = 0;
+        try { if (cropStream) cropStream.getTracks().forEach(t => t.stop()); } catch (_) {}
+        cropStream = null;
+        outStream = null;
+        try { rawVideo.srcObject = null; } catch (_) {}
+      }
+      function sendVideoTrack() {
+        const c = cropStream && cropStream.getVideoTracks()[0];
+        if (c && c.readyState === "live") return c;
+        return localStream ? localStream.getVideoTracks()[0] || null : null;
+      }
+
       function avSupported() {
         return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
       }
@@ -4958,7 +5112,7 @@
       async function attachLocal() {
         try {
           if (!pc) return;
-          const v = localStream ? localStream.getVideoTracks()[0] || null : null;
+          const v = sendVideoTrack();
           const a = localStream ? localStream.getAudioTracks()[0] || null : null;
           if (videoTx) {
             await videoTx.sender.replaceTrack(v).catch(() => {});
@@ -4990,8 +5144,11 @@
           }
           micLive = false; // every capture starts muted
           applyMic();
-          for (const v of avPreviews) v.srcObject = localStream;
-          localVideo.srcObject = localStream;
+          const cropTrack = cropStart();
+          outStream = new MediaStream(
+            [cropTrack || localStream.getVideoTracks()[0], ...localStream.getAudioTracks()].filter(Boolean));
+          for (const v of avPreviews) v.srcObject = outStream;
+          localVideo.srcObject = outStream;
           for (const t of localStream.getTracks()) {
             try { if (t.kind === "video" && "contentHint" in t) t.contentHint = "motion"; } catch (_) {}
             // iOS ends the capture when the app is backgrounded — the
@@ -4999,7 +5156,8 @@
             t.addEventListener("ended", () => { if (avWanted) avStop(false); updateBubbles(); });
           }
           await attachLocal();
-          console.log("[mp-av] capture on: " + localStream.getTracks().map(t => t.kind).join("+"));
+          console.log("[mp-av] capture on: " + localStream.getTracks().map(t => t.kind).join("+")
+            + (cropTrack ? " (face-tracked crop)" : " (plain frame)"));
         } catch (e) {
           console.log("[mp-av] capture failed: " + (e && e.name));
           avWanted = false;
@@ -5013,6 +5171,7 @@
       // forget=true is the user's choice (toggle off / room left); false
       // keeps the preference so a backgrounded capture comes back.
       function avStop(forget) {
+        cropStop();
         try {
           if (localStream) for (const t of localStream.getTracks()) t.stop();
         } catch (_) {}

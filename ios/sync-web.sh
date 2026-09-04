@@ -27,6 +27,7 @@ touch "$DEST/.gitkeep"
 cp index.html manifest.json mq_js_bundle.js LICENSE third-party-licenses.html privacy.html "$DEST/"
 cp -R levels "$DEST/levels"
 cp -R fonts "$DEST/fonts"
+cp -R vendor "$DEST/vendor"
 
 # wasm-opt (brew install binaryen) is optional locally — it only shrinks the
 # binary, same as the deploy.
