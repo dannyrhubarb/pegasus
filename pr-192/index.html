@@ -1249,11 +1249,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">9fed11e-pr-192</div>
+        <div class="info-value" id="git-rev">cd53dd0-pr-192</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-09-04T04:14:41Z</div>
+        <div class="info-value" id="build-time">2026-09-04T13:36:26Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -2703,7 +2703,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "9fed11e-pr-192";
+    const wasmRev = "cd53dd0-pr-192";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -3230,7 +3230,7 @@
     // an app resumed from the switcher for weeks still sees a new verdict:
     // - `minBuild` {android, ios} walls shell builds below it (CI run
     //   number); `minWebBuildTime` (ISO instant) walls web pages whose
-    //   baked 2026-09-04T04:14:41Z predates it. A wall NEVER interrupts a live
+    //   baked 2026-09-04T13:36:26Z predates it. A wall NEVER interrupts a live
     //   play: a mid-flight/replay verdict latches in `wallPolicy` and
     //   showScreen raises it at the next screen (pause, crash, game over,
     //   exit) — boot is menu-open, so launch walls immediately. On the web
