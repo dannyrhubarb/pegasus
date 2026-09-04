@@ -2505,7 +2505,11 @@ commit the refreshed page.
   `ui`, `input`, `render`, `replay`, `scores`, `mp` (multiplayer),
   `analytics`, `ios`, `android`, `ci` — plus `policy` (app-policy.json)
   and `deps`; omit the scope when a change spans several. **`!` (plus a
-  `BREAKING CHANGE:` footer) marks a change that alters sim results or the
+  `BREAKING-CHANGE:` footer — HYPHENATED: git's trailer parser rejects
+  the spaced `BREAKING CHANGE:` form, which un-trailers the whole block
+  and silently drops the commit's `Whats-new:` entry from the changelog;
+  the Conventional Commits spec allows both spellings) marks a change
+  that alters sim results or the
   replay format** — exactly the changes that need the backend repin, so
   `git log --grep '!:'` is the repin history; pair it with the
   `status: needs-repin` label on the PR. The `Whats-new:` trailer is
