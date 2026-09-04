@@ -543,6 +543,34 @@
     .mbtn.back:hover { background: rgba(127, 180, 221, 0.12); box-shadow: none; }
     .hint { font-size: 13px; color: var(--faint); letter-spacing: 0.08em; }
 
+    /* Flight manual (scr-manual): left-aligned reading page — the landing
+       rules in player language, plus controls/damage/modes. Same width
+       clamp as .rowlist so it can never widen the screen. */
+    .manual {
+      width: min(520px, 88vw);
+      max-width: 100%;
+      text-align: left;
+      font-size: clamp(14px, 3.4vw, 16px);
+      line-height: 1.45;
+      color: var(--text);
+    }
+    .manual h3 {
+      margin: 18px 0 6px;
+      font-size: clamp(13px, 3.2vw, 15px);
+      font-weight: 800;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--magenta);
+      text-shadow: 0 0 8px rgba(255, 84, 214, 0.5);
+    }
+    .manual h3:first-child { margin-top: 4px; }
+    .manual p { margin: 0 0 8px; }
+    .manual ul { margin: 0 0 8px; padding-left: 1.2em; }
+    .manual li { margin: 0 0 6px; }
+    .manual li::marker { color: var(--cyan); }
+    .manual b { color: var(--amber); font-weight: 800; }
+    .manual .note { color: var(--faint); font-size: 0.9em; }
+
     /* Dormant load-time announcement panel, kept for future messages
        (see #scr-announce). */
     .announce-msg {
@@ -1235,6 +1263,10 @@
         <span>Race best ghost</span>
         <input type="checkbox" id="ghost-toggle"><span class="tgl"></span>
       </label>
+      <label class="setrow" id="ring-toggle-row">
+        <span>Landing ring</span>
+        <input type="checkbox" id="ring-toggle"><span class="tgl"></span>
+      </label>
       <label class="setrow" id="debug-toggle-row">
         <span>Debug HUD</span>
         <input type="checkbox" id="debug-toggle"><span class="tgl"></span>
@@ -1257,11 +1289,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">bd858c9-pr-205</div>
+        <div class="info-value" id="git-rev">8361a22-pr-205</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-09-04T19:52:47Z</div>
+        <div class="info-value" id="build-time">2026-09-04T19:57:07Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -1280,10 +1312,93 @@
         the id.
       </div>
       <div class="mbtn" id="btn-whatsnew">What's new</div>
+      <div class="mbtn" id="btn-manual" data-goto="scr-manual">Flight manual</div>
       <div class="mbtn" id="btn-bugreport">Report a bug</div>
       <a class="mbtn" href="third-party-licenses.html" target="_blank" rel="noopener">Third-party licenses</a>
       <div class="mbtn" id="force-reload">&#10227; Reload latest build</div>
       <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
+    </div>
+
+    <!-- Flight manual (About → Flight manual): the rules of the game in
+         player language — above all the LANDING criteria, which are otherwise invisible. The
+         numbers here mirror ruleset 2 (sim-core/src/sim.rs `ruleset_v2`,
+         FOOT_TOUCH_M, CRASH_DV_*, FUEL_*): a ruleset change must update
+         this page in the same commit (see CLAUDE.md "Flight manual"). -->
+    <div class="screen" id="scr-manual">
+      <div class="h2">FLIGHT MANUAL</div>
+      <div class="manual">
+        <h3>Landing</h3>
+        <p>A landing counts when the ship is sitting slow on a pad with
+        <b>both feet on the deck</b> and stays that way for <b>0.4 s</b>.
+        The green ring around the ship (Settings &rarr; Landing ring)
+        fills while that timer runs &mdash; lift off before it closes and
+        the landing never happened.</p>
+        <ul>
+          <li><b>Both feet on the deck</b> &mdash; each landing leg inside
+          the pad and no more than 10 cm above it. A foot in the air or
+          hanging over the edge doesn't count, and it also means the ship
+          can't be tilted more than about 9&deg;.</li>
+          <li><b>Slow</b> &mdash; under 1 m/s in every direction. A gentle
+          skid on both feet still counts; pad friction stops it in well
+          under a second anyway.</li>
+          <li><b>Not turning</b> &mdash; rotating slower than about
+          30&deg;/s.</li>
+          <li><b>Held for 0.4 s</b> without a break &mdash; any condition
+          failing for even a moment restarts the timer.</li>
+        </ul>
+        <p>Landed crooked? Let go. The ship rocks onto both feet by itself
+        within a second or two and the ring starts filling. Past about
+        25&deg; of tilt it falls over instead.</p>
+        <p>A registered landing refuels and repairs the ship while it sits
+        there, scores the pad on its first visit, and ticks it off on time
+        trials.</p>
+
+        <h3>Touchdown &amp; damage</h3>
+        <ul>
+          <li>Hitting anything at under <b>2.5 m/s</b> is free.</li>
+          <li>Between <b>2.5 and 6 m/s</b> the hull takes damage in
+          proportion &mdash; a 6 m/s scrape empties it.</li>
+          <li>Harder than <b>6 m/s</b>, or any scrape that empties the hull,
+          destroys the ship.</li>
+          <li>The velocity vector (Settings) shows your speed in green,
+          amber or red by these thresholds.</li>
+        </ul>
+
+        <h3>Fuel</h3>
+        <p>Full throttle empties the tank in about <b>28 s</b>; steering
+        burns a little too. Run dry and the run ends <b>2.5 s</b> later
+        &mdash; unless a pad catches you first. Pads refuel and repair
+        the ship while it's landed.</p>
+
+        <h3>Controls</h3>
+        <ul>
+          <li><b>Touch</b> (split controls, the default): a finger on the
+          <b>left half</b> of the screen is the throttle &mdash; hold to
+          burn. A finger on the <b>right half</b> is the attitude stick:
+          push where the nose should point and the ship turns there. Turn
+          split controls off in Settings for one-handed flight, where
+          holding the stick also fires the engine.</li>
+          <li><b>Keyboard</b>: &darr; thrust, &larr; / &rarr; rotate,
+          R restart, Esc menu.</li>
+          <li><b>Gamepad</b>: A / R2 / D-pad up thrust, left stick or D-pad
+          to steer, Start or Y restart.</li>
+        </ul>
+
+        <h3>Levels</h3>
+        <ul>
+          <li><b>Distance</b> levels score how far from the start you get,
+          in either direction. The gold flag marks the record.</li>
+          <li><b>Time trials</b> (a stopwatch icon) score the clock: visit
+          every pad, or reach the finish pad, as fast as you can. Lowest
+          time wins; a crash or an empty tank is a DNF.</li>
+          <li><b>Sprints</b> (an hourglass) give you 60 seconds &mdash; as
+          far as you can before the horn.</li>
+        </ul>
+        <p class="note">These are the rules of the current game version.
+        Replays flown under older rules replay exactly as they were and
+        show a "flown on" badge.</p>
+      </div>
+      <div class="mbtn back" data-goto="scr-about">&#8249; Back</div>
     </div>
 
     <!-- What's New: the deploy-generated changelog (whats-new.json =
@@ -2020,6 +2135,7 @@
           : ["scr-home", "scr-scores"]; // no manifest: boards open directly
         case "scr-settings": return ["scr-home", "scr-settings"];
         case "scr-about":    return ["scr-home", "scr-about"];
+        case "scr-manual":   return ["scr-home", "scr-about", "scr-manual"];
         case "scr-whatsnew": return ["scr-home", "scr-about", "scr-whatsnew"];
         case "scr-bugreport": return ["scr-home", "scr-about", "scr-bugreport"];
         case "game":         return ["scr-home", "game"];
@@ -2711,7 +2827,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "bd858c9-pr-205";
+    const wasmRev = "8361a22-pr-205";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -3243,7 +3359,7 @@
     // an app resumed from the switcher for weeks still sees a new verdict:
     // - `minBuild` {android, ios} walls shell builds below it (CI run
     //   number); `minWebBuildTime` (ISO instant) walls web pages whose
-    //   baked 2026-09-04T19:52:47Z predates it. A wall NEVER interrupts a live
+    //   baked 2026-09-04T19:57:07Z predates it. A wall NEVER interrupts a live
     //   play: a mid-flight/replay verdict latches in `wallPolicy` and
     //   showScreen raises it at the next screen (pause, crash, game over,
     //   exit) — boot is menu-open, so launch walls immediately. On the web
@@ -4093,6 +4209,24 @@
       if (typeof wasm_exports !== "undefined" && wasm_exports.set_ghost_enabled) {
         applyGhostSetting();
         clearInterval(ghostTimer);
+      }
+    }, 200);
+
+    // "Landing ring" toggle (on by default): the green settle ring that
+    // fills around the ship while a landing registers. Presentation only.
+    const ringToggle = document.getElementById("ring-toggle");
+    ringToggle.checked = localStorage.getItem("pegasus_land_ring") !== "0";
+    function applyRingSetting() {
+      call("set_land_ring", ringToggle.checked ? 1 : 0);
+    }
+    ringToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_land_ring", ringToggle.checked ? "1" : "0");
+      applyRingSetting();
+    });
+    const ringTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_land_ring) {
+        applyRingSetting();
+        clearInterval(ringTimer);
       }
     }, 200);
 
