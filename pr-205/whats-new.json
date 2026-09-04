@@ -1,38 +1,28 @@
 [
  {
-  "rev": "e9a9410",
-  "date": "2026-09-03T21:12:16Z",
+  "rev": "9b20664",
+  "date": "2026-09-04T04:10:13Z",
   "note": "New: The landing ring is now a Settings toggle — on by default, off for the purists"
  },
  {
-  "rev": "a6139e1",
-  "date": "2026-09-03T21:06:43Z",
-  "note": "New: A Flight manual under About — read exactly what makes a landing count before the pad tells you it didn't"
- },
- {
-  "rev": "f7843f0",
-  "date": "2026-09-03T20:43:55Z",
-  "note": "New: A landing now counts once the ship has actually stopped — no more registering while skidding across the pad"
- },
- {
-  "rev": "ccad171",
-  "date": "2026-09-03T19:36:20Z",
-  "note": "New: Land crooked and the ship now rocks onto both feet instead of freezing on one leg"
- },
- {
-  "rev": "0575b06",
-  "date": "2026-09-03T17:49:53Z",
-  "note": "New: Landings count after 0.4 s now — but only with both feet on the pad, so no more heel-hanging"
- },
- {
-  "rev": "058543f",
-  "date": "2026-09-03T16:58:30Z",
+  "rev": "ddafb27",
+  "date": "2026-09-04T04:10:12Z",
   "note": "New: High scores now show which game version a run was flown on — and tell you when a replay needs an update to watch"
  },
  {
-  "rev": "24459fa",
-  "date": "2026-09-01T07:44:32Z",
+  "rev": "696246e",
+  "date": "2026-09-04T04:10:12Z",
+  "note": "New: A Flight manual under About — read exactly what makes a landing count before the pad tells you it didn't"
+ },
+ {
+  "rev": "633c1ef",
+  "date": "2026-09-04T04:10:11Z",
   "note": "New: Landings now charge up a green ring — keep her parked until it closes and the pad is yours"
+ },
+ {
+  "rev": "613e29b",
+  "date": "2026-09-02T21:06:37+02:00",
+  "note": "New: Outdated app versions now get a friendly update screen instead of silently losing online play"
  },
  {
   "rev": "78e7efe",
