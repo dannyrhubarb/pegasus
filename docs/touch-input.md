@@ -84,7 +84,12 @@ floating throttle button. Both claims run the same rule through
 decides where a touch *lands*; once claimed, a finger is followed by
 identity wherever it moves, across the midline included. The follow/release
 logic (`stick_touch_lost`) is shared verbatim, so the phase-collapse and
-recycled-id cases behave identically for both controls.
+recycled-id cases behave identically for both controls. Which half is
+whose comes from one pure predicate, `stick_half(x, half_x, swap)`: the
+stick's half is the right one by default and the left one under the
+"Swap control sides" setting (the left-handed layout); the throttle button
+always takes the complement, so the two zones stay an exact partition of
+the screen either way.
 
 ## The bug this came from
 
