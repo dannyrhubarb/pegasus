@@ -403,6 +403,20 @@ pub extern "C" fn set_split_controls(on: i32) {
     SPLIT_CONTROLS.store(on as u32, Ordering::Relaxed);
 }
 
+// "Swap control sides" (the left-handed layout): mirrors the split scheme's
+// halves — the throttle button claims the RIGHT half and the stick the LEFT —
+// and mirrors both widgets' parked homes (the stick parks bottom-left, the
+// button bottom-right) in every scheme, live and in replays. Presentation +
+// zone only: the resolved InputState is identical, so recordings never see
+// it and it needs no trailer entry. Set from the Settings toggle, persisted
+// in localStorage; off by default.
+static SWAP_SIDES: AtomicU32 = AtomicU32::new(0);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_swap_sides(on: i32) {
+    SWAP_SIDES.store(on as u32, Ordering::Relaxed);
+}
+
 // Runtime level loading (levels are DATA, not code — levels/*.level files
 // fetched by index.html): JS asks for a buffer with level_buf_ptr(len),
 // writes the UTF-8 level text into wasm memory, then calls load_level(len).
@@ -1153,6 +1167,14 @@ fn fresh_touch_in<'a>(
     })
 }
 
+// Which half of the screen the stick claims under split controls, for a
+// touch landing at logical x: the right half normally, the LEFT half with
+// "Swap control sides" (the left-handed layout). The throttle button owns
+// whichever half the stick does not.
+fn stick_half(x: f32, half_x: f32, swap: bool) -> bool {
+    (x >= half_x) != swap
+}
+
 // True when the stick's claimed touch is gone. `Started` counts as gone: the
 // finger that owned the stick was lifted and a new one landed on the recycled
 // id between frames, so the claim is dropped here and `fresh_touch` re-centres
@@ -1625,6 +1647,9 @@ async fn main() {
         // stick (which then steers only). The zone gates only where a
         // touch LANDS; a claimed finger is followed across the midline.
         let split = SPLIT_CONTROLS.load(Ordering::Relaxed) != 0;
+        // …mirrored by "Swap control sides" (left-handed layout): the stick
+        // takes the LEFT half and the throttle button the RIGHT.
+        let swap = SWAP_SIDES.load(Ordering::Relaxed) != 0;
         let half_x = screen_width() / 2.0;
         let frame_touches = touches();
         // Keep following / release the claimed stick touch.
@@ -1649,11 +1674,12 @@ async fn main() {
             throttle_btn.release();
         }
         // Claim a fresh touch — by identity, not by phase (see fresh_touch).
-        // Under split controls the stick only claims touches landing on the
-        // right half; the left half belongs to the throttle button below.
+        // Under split controls the stick only claims touches landing on its
+        // half (`stick_half`); the other half belongs to the throttle button
+        // below.
         let claim = if stick_active && stick.id.is_none() {
             if split {
-                fresh_touch_in(&frame_touches, &prev_touch_ids, |t| tpos(t).x >= half_x)
+                fresh_touch_in(&frame_touches, &prev_touch_ids, |t| stick_half(tpos(t).x, half_x, swap))
             } else {
                 fresh_touch(&frame_touches, &prev_touch_ids)
             }
@@ -1670,7 +1696,8 @@ async fn main() {
         if split
             && stick_active
             && throttle_btn.id.is_none()
-            && let Some(t) = fresh_touch_in(&frame_touches, &prev_touch_ids, |t| tpos(t).x < half_x)
+            && let Some(t) =
+                fresh_touch_in(&frame_touches, &prev_touch_ids, |t| !stick_half(tpos(t).x, half_x, swap))
         {
             throttle_btn.id = Some(t.id);
             throttle_btn.pos = tpos(t);
@@ -3071,18 +3098,28 @@ async fn main() {
         // translucent ghost otherwise. Only while flying — the dialog/replay
         // draw their own UI. Parked position uses the safe-area insets we
         // already have (approx bottom/right from the top/left-derived margins).
-        // Parked stick home (bottom-right), clear of the home indicator /
-        // browser toolbar via the bottom+right safe insets. Also where the
-        // replay draws the stick, animated by the recorded input.
+        // Corner x for a widget of radius `r` parked `margin` px in from
+        // the left or right edge, clear of the side safe insets. "Swap
+        // control sides" flips which corner each widget gets — the stick
+        // is right-handed by default, left-handed swapped — in every
+        // scheme, so a lefty's parked ghost also sits under the steering
+        // hand in the one-handed scheme.
+        let park_x = |r: f32, margin: f32, left: bool| {
+            if left { safe_left + r + margin } else { sw - safe_right - r - margin }
+        };
+        // Parked stick home (bottom-right, bottom-left swapped), clear of
+        // the home indicator / browser toolbar via the bottom safe inset.
+        // Also where the replay draws the stick, animated by the recorded
+        // input.
         let stick_park = vec2(
-            sw - safe_right - STICK_RADIUS - 24.0,
+            park_x(STICK_RADIUS, 24.0, swap),
             sh - safe_bottom - STICK_RADIUS - 28.0,
         );
-        // The throttle button's parked home (bottom-LEFT, mirroring the
-        // stick's park) — shared by live split-scheme flight and the
+        // The throttle button's parked home (the opposite corner, mirroring
+        // the stick's park) — shared by live split-scheme flight and the
         // GUI-hidden replay display of a split-scheme recording.
         let btn_park = vec2(
-            safe_left + THROTTLE_RADIUS + 24.0,
+            park_x(THROTTLE_RADIUS, 24.0, !swap),
             sh - safe_bottom - THROTTLE_RADIUS - 28.0,
         );
         if matches!(mode, Mode::Flying) && !crashed && !ui_paused {
@@ -3183,19 +3220,20 @@ async fn main() {
                 // Half size, tucked into the corner with tighter margins
                 // than the full-size park spot, and clear of the HTML replay
                 // bar (~154 CSS px incl. its bottom offset; logical px ==
-                // CSS px).
+                // CSS px). Sides follow the VIEWER's swap setting, like the
+                // parked homes — a recording carries no side preference.
                 let r = STICK_RADIUS * 0.5;
                 let replay_stick_home = vec2(
-                    sw - safe_right - r - 12.0,
+                    park_x(r, 12.0, swap),
                     sh - safe_bottom - r - 168.0,
                 );
                 draw_stick(replay_stick_home, vec2(isx, isy) * STICK_TRAVEL,
                     inp.stick_held != 0, 0.5);
                 if rp_split {
-                    // Mirrored bottom-left, same clearance over the bar.
+                    // The opposite corner, same clearance over the bar.
                     let br = THROTTLE_RADIUS * 0.5;
                     let replay_btn_home = vec2(
-                        safe_left + br + 12.0,
+                        park_x(br, 12.0, !swap),
                         sh - safe_bottom - br - 168.0,
                     );
                     draw_throttle(replay_btn_home, inp.throttle > 0, 0.5);
@@ -4136,6 +4174,28 @@ mod tests {
         let left_only = [touch_at(2, TouchPhase::Moved, 100.0)];
         assert!(fresh_touch_in(&left_only, &[], right).is_none());
         assert_eq!(fresh_touch_in(&left_only, &[], left).map(|t| t.id), Some(2));
+    }
+
+    // "Swap control sides" (the left-handed layout) mirrors the split: the
+    // stick claims the LEFT half and the throttle button the RIGHT. The two
+    // halves must stay an exact partition either way — a touch on the
+    // midline itself belongs to exactly one claimant.
+    #[test]
+    fn swap_sides_mirrors_the_split_halves_exactly() {
+        let half = 500.0;
+        for x in [0.0, 100.0, 499.9, 500.0, 500.1, 900.0] {
+            // Default: right half = stick.
+            assert_eq!(stick_half(x, half, false), x >= half, "x={x}");
+            // Swapped: left half = stick.
+            assert_eq!(stick_half(x, half, true), x < half, "x={x}");
+        }
+        // The full claim path under the swapped layout: a lone left-half
+        // touch reaches the stick's scan, not the throttle's.
+        let stick_zone = |t: &Touch| stick_half(t.position.x, half, true);
+        let throttle_zone = |t: &Touch| !stick_half(t.position.x, half, true);
+        let left_only = [touch_at(3, TouchPhase::Moved, 100.0)];
+        assert_eq!(fresh_touch_in(&left_only, &[], stick_zone).map(|t| t.id), Some(3));
+        assert!(fresh_touch_in(&left_only, &[], throttle_zone).is_none());
     }
 
     // The whole world is pure functions of (level, position/slot index).

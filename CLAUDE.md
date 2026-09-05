@@ -173,6 +173,20 @@ Four input paths feed the same physics, combined in the main loop:
     the half-size throttle button bottom-left (lit while the recorded
     throttle is up — under this scheme the throttle channel IS the
     button), mirroring the recorded-input stick.
+  - **Swap control sides** (the left-handed layout, `#swap-toggle-row`,
+    `pegasus_swap_sides` → `set_swap_sides` → `SWAP_SIDES`, **off by
+    default**, 2026-09): mirrors the split — the stick claims the LEFT
+    half and the throttle button the RIGHT (`stick_half(x, half_x, swap)`,
+    the pure zone predicate both claimants share, unit-tested) — and
+    flips both widgets' parked corners in EVERY scheme (`park_x` in the
+    frame loop: the stick parks bottom-left, the button bottom-right; the
+    one-handed scheme's parked ghost follows too, so it sits under the
+    steering hand). Replay widgets follow the VIEWER's setting — a
+    recording carries no side preference (the trailer's scheme entry is
+    untouched), and the resolved `InputState` is identical either way, so
+    nothing about replays or verification changes. The split row's label
+    names the throttle's current side ("throttle left/right") so the two
+    rows read consistently.
   - **Floating**: while flying, a fresh touch **anywhere on screen** spawns
     the stick centred under the finger and claims that touch id — the whole
     canvas is the flight-control surface (the pause/restart buttons are HTML
@@ -343,7 +357,10 @@ while the wasm loads):
   stick** (`#inv-toggle-row`), **Split controls** (`#split-toggle-row`,
   `pegasus_split_controls`, **on by default** → `set_split_controls` →
   `SPLIT_CONTROLS`; left-half throttle button / right-half steering stick —
-  see "Input sources"), **Race best ghost** (`#ghost-toggle-row`, on by
+  see "Input sources"), **Swap control sides** (`#swap-toggle-row`,
+  `pegasus_swap_sides`, **off by default** → `set_swap_sides` →
+  `SWAP_SIDES`; the left-handed layout — throttle right, stick left, parked
+  corners mirrored — see "Input sources"), **Race best ghost** (`#ghost-toggle-row`, on by
   default), **Debug HUD** (`#debug-toggle-row`, `pegasus_debug_hud`, **off by
   default** → `set_debug_hud` → `DEBUG_HUD`; shows the telemetry text line —
   see "HUD") as styled toggles; same localStorage → export → atomic plumbing.
@@ -2504,7 +2521,7 @@ commit the refreshed page.
 - **Always open a PR** after pushing a feature branch — standing instruction
   from the owner (no need to ask first). The PR also produces a phone-testable
   preview deployment at `pr-<n>/`.
-- Development branch: `claude/flux-one-minute-level-c3d5zy` (current); previous: `claude/frontend-ios-app-bundle-jhhqr6`
+- Development branch: `claude/throttle-steering-reversal-5sirm6` (current); previous: `claude/flux-one-minute-level-c3d5zy`
 - Merges to `main` via rebase PRs using the GitHub MCP tools (`mcp__github__create_pull_request`, `mcp__github__merge_pull_request`).
 - **Curate the branch before merging.** Rebase merges land every branch
   commit on `main` verbatim, so branch noise becomes permanent history.

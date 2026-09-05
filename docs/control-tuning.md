@@ -38,7 +38,11 @@ spawns a floating throttle button (hold = full throttle, instant; it rides
 the finger) and the right-half stick steers only. The § 3 gates exist to
 disambiguate steering from burning on the one-handed stick, so **none of
 them apply under split controls** — throttle there is an explicit command,
-like the keyboard.
+like the keyboard. **Swap control sides** (Settings toggle, off by default)
+is the left-handed layout: the halves mirror (stick left, throttle right)
+and both widgets' parked corners flip in every scheme. It changes only
+where touches land and where the widgets park — no feel knob, no change to
+the resolved input.
 
 ## 2. Heading controller (how the nose chases the stick)
 
@@ -127,8 +131,9 @@ the controller-picker below.
 
 ## 8. Toward a settings / controller pane
 
-The plumbing pattern already exists, with three working examples
-(velocity-vector, invert-stick and split-controls toggles) in `index.html`:
+The plumbing pattern already exists, with four working examples
+(velocity-vector, invert-stick, split-controls and swap-sides toggles) in
+`index.html`:
 
 1. Checkbox/slider in the info overlay (`stopPropagation`, **no**
    `preventDefault` — that kills checkbox clicks).

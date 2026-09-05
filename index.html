@@ -1220,8 +1220,12 @@
         <input type="checkbox" id="inv-toggle"><span class="tgl"></span>
       </label>
       <label class="setrow" id="split-toggle-row">
-        <span>Split controls (throttle left)</span>
+        <span id="split-toggle-label">Split controls (throttle left)</span>
         <input type="checkbox" id="split-toggle"><span class="tgl"></span>
+      </label>
+      <label class="setrow" id="swap-toggle-row">
+        <span>Swap control sides (left-handed)</span>
+        <input type="checkbox" id="swap-toggle"><span class="tgl"></span>
       </label>
       <label class="setrow" id="ghost-toggle-row">
         <span>Race best ghost</span>
@@ -2841,6 +2845,36 @@
       if (typeof wasm_exports !== "undefined" && wasm_exports.set_split_controls) {
         applySplitSetting();
         clearInterval(splitTimer);
+      }
+    }, 200);
+
+    // Swap-control-sides toggle (off by default — the left-handed layout):
+    // mirrors the split scheme's halves (throttle button RIGHT, stick LEFT)
+    // and both widgets' parked corners in every scheme. Pure presentation +
+    // touch-zone change — recordings are untouched. Forwarded to the WASM
+    // `set_swap_sides` export and persisted per device (same pattern as the
+    // split toggle). The split row's label names the throttle's side so the
+    // two rows read consistently.
+    const swapToggle = document.getElementById("swap-toggle");
+    const splitLabel = document.getElementById("split-toggle-label");
+    swapToggle.checked = localStorage.getItem("pegasus_swap_sides") === "1";
+    function syncSwapLabel() {
+      splitLabel.textContent =
+        "Split controls (throttle " + (swapToggle.checked ? "right" : "left") + ")";
+    }
+    syncSwapLabel();
+    function applySwapSetting() {
+      call("set_swap_sides", swapToggle.checked ? 1 : 0);
+    }
+    swapToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_swap_sides", swapToggle.checked ? "1" : "0");
+      syncSwapLabel();
+      applySwapSetting();
+    });
+    const swapTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_swap_sides) {
+        applySwapSetting();
+        clearInterval(swapTimer);
       }
     }, 200);
 
