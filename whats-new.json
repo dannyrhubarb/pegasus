@@ -1,5 +1,10 @@
 [
  {
+  "rev": "d5cdacd",
+  "date": "2026-09-05T23:03:29+02:00",
+  "note": "New: Lefties rejoice — a Settings toggle swaps the throttle and steering stick sides (thanks Hillevi for the suggestion!)"
+ },
+ {
   "rev": "613e29b",
   "date": "2026-09-02T21:06:37+02:00",
   "note": "New: Outdated app versions now get a friendly update screen instead of silently losing online play"
