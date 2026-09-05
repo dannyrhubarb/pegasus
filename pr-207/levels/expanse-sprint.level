@@ -1,0 +1,15 @@
+# Level — The Expanse Sprint: The Expanse under the hard one-minute clock
+# (`time_limit = 60`, same rules as The Flux Sprint: the run ends the tick
+# the clock hits zero, the score is the distance the minute allowed, and a
+# crash before the horn still posts what was banked). Fixed seed 0 = the
+# same legacy boulder tunnel every attempt — so unlike the Flux variants
+# the racing ghost works here: chase the record run through rock you can
+# learn.
+name = The Expanse Sprint
+description = The boulder tunnel with 60 seconds on the clock
+scoring = distance
+shafts = off
+obstacles = on
+pad_spacing = 130
+seed = 0
+time_limit = 60
