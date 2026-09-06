@@ -1,8 +1,8 @@
 [
  {
-  "rev": "83e3897",
-  "date": "2026-09-06T09:18:49Z",
-  "note": "New: Grinding a time trial? Flip on \"Auto fly again after a DNF\" in Settings and every wipeout respawns you the very frame you crash — no button mashing between attempts"
+  "rev": "0ae2c67",
+  "date": "2026-09-06T09:28:18Z",
+  "note": "New: Grinding a time trial? Flip on \"Auto fly again after a DNF\" in Settings and every wipeout respawns you instantly — no button mashing between attempts (thanks Don Limpo De La Vega for the suggestion!)"
  },
  {
   "rev": "d5cdacd",
