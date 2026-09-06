@@ -379,7 +379,61 @@ fifth home button).
   corners mirrored — see "Input sources"), **Race best ghost** (`#ghost-toggle-row`, on by
   default), **Landing ring** (`#ring-toggle-row`, `pegasus_land_ring`,
   **on by default** → `set_land_ring` → `LAND_RING`; the settle ring
-  drawn while a landing registers — presentation only), **Debug HUD** (`#debug-toggle-row`, `pegasus_debug_hud`, **off by
+  drawn while a landing registers — presentation only), **Auto fly again
+  after a DNF** (`#autofly-toggle-row`,
+  `pegasus_auto_fly_again`, **off by default**, 2026-09 →
+  `set_auto_fly_again` → `AUTO_FLY_AGAIN`: on a time-scored level, where
+  an unfinished attempt is a DNF that earns nothing, the GAME respawns
+  the run by itself — no game-over screen, no tap. A **crash** respawns
+  when the explosion has played out: the wreck-timer handover fires
+  `ui_do_reset` (the Fly again button's own flag, gated by
+  `auto_fly_again_dnf`) at `CRASH_DIALOG_DELAY` expiry IN PLACE OF the
+  crash dialog (owner call 2026-09, after trying the same-frame respawn:
+  the boom deserves its grace); a **fuel-out** has no explosion and
+  respawns the frame the run ends. **The wreck-timer handover and the
+  reset block sit right after the crash-flow section — ahead of the
+  `UI_STATE` mirror and every draw call** (moved there 2026-09: in its
+  old home after the world draw, the frame a reset fired in still
+  painted the wreck, the debris burst and the CRASHED banner once before
+  the respawn showed — a one-frame blink the owner spotted on the
+  preview), so the frame a reset fires in renders the fresh ship on the
+  spawn: no state 2, no dialog dim, no banner. The ordering holds for
+  every reset path — R key, pad, Fly again — so all of them draw the
+  fresh run on their own frame; keep the handover + reset block above
+  the draw section, handover first.
+  **Fresh-run sweep** (owner ask 2026-09, "everything from the previous
+  run is cleaned up"): the reset block and the level-load block both
+  clear every cosmetic the ended run left behind — `particles` (debris /
+  exhaust / sparks: an auto respawn lands the very frame the crash
+  bursts, so the explosion would otherwise fade around the fresh ship),
+  `pad_msg_timer` (the "+100" flash), `stick_thrust_t` + `flip_settling`
+  (the stick-hold engine ramp + flip latch), `replay_boom_timer` and
+  `phys_accum` — alongside the existing `glow`/`shake`/`crash_timer`/
+  `complete_timer` snaps — AND the frame's own already-resolved `input`
+  + `frame_heading_torque` (gathered before the reset; a throttle still
+  held otherwise fed the post-reset glow update, engine hum and
+  exhaust/RCS emission and painted one fading puff of thrust on the
+  fresh ship — the "thrust still dying out after the reset" preview
+  report), with the stick + throttle button released on the spot under
+  the auto respawn; a fresh run starts from nothing. Add any new
+  per-run cosmetic state to BOTH sites. **Release latch** (`await_release` in
+  the frame loop, set with the reset at both DNF sites): the pilot's
+  hands are still where the crash left them, so a held throttle/stick
+  finger, mouse button, thrust/rotate key or pad thrust would arm the
+  fresh run instantly and burn straight off the pad — every control must
+  be released once (`any_touch_down`, pure + unit-tested, ignores a
+  lifting finger's one-frame Ended/Cancelled entry) before input is read
+  again; until then `stick_active` is false (stick + throttle button drop
+  their claims) and the input resolves neutral, so the run stays
+  armed-but-idle; cleared on level load. JS GATES the value it pushes
+  (`applyAutoFlySetting`: off while the one-time consent ask is due or a
+  forced-update wall is latched — both need the game-over screen — and
+  re-pushed on the 500 ms run-collect poll since `consentDue()` flips
+  with the play count); the ui-state poll's state-2 branch keeps a
+  same-gated fallback that restarts via `ui_command(1)` for a DNF that
+  did reach state 2. Never fires on distance/pads levels, and a
+  completion always shows LEVEL COMPLETE),
+  **Debug HUD** (`#debug-toggle-row`, `pegasus_debug_hud`, **off by
   default** → `set_debug_hud` → `DEBUG_HUD`; shows the telemetry text line —
   see "HUD") as styled toggles; same localStorage → export → atomic plumbing.
   Plus **Share anonymous returning-player id** (`#retid-toggle-row`) — JS-only, mirrors
@@ -876,7 +930,7 @@ generator — all world generation is `Level` methods, so a level IS the world:
 | `name` | text | Cosmetic (picker label, not in replay headers) |
 | `description` | text | Cosmetic one-liner shown under the name in the level picker (JS-only — the wasm parser ignores it like any unknown key) |
 | `icon` | `stopwatch` / `hourglass` / `arrow` | Cosmetic picker-row TYPE glyph override (JS-only, like `description`) — normally omitted: the icon derives from the mode keys so levels of the same type share it (owner direction — the glyph classifies the game mode, not the level's personality): time-scored → stopwatch (Hollows, Dash — goal trials are clock-scored), `time_limit` → hourglass (Sprint), else double arrow (distance). Small inline SVGs in `index.html`'s `LEVEL_ICONS` (self-contained — no icon fonts), cyan for distance, **amber** for the clock modes (`AMBER_ICONS`). Only names in the map reach innerHTML — level text can't inject markup |
-| `scoring` | `pads` / `distance` / `time` | Pads: +100 per first landing. Distance: score = max \|x\| reached (`Sim::max_dist`; big HUD readout, `best` beneath). Time: visit EVERY pad — the run ENDS the tick the last pad's landing registers (`Sim.completed`, `TickReport::completed`); score = completion time in seconds (`Sim.run_ticks × PHYSICS_DT`, **lower is better**), HUD shows `visited/total` + a running `TIME m:ss.t` clock at near-headline size (the clock IS the score; frozen at completion), with `BEST m:ss.t` + the "by <pilot>" record attribution beneath (`BEST_TIME`, seeded from the global all-time record like the distance BEST — see "Online high scores"). A crash/fuel-out is a DNF — no board entry. Time levels are hand-drawn (finite pad set; `terrain.pads.len()` is the total) — or procedural with a `goal_distance` finish pad (see that row): there the HUD's big line is distance progress (`837/1000 m`) and ONLY the finish pad completes (regular pads register + refuel silently, no flash) |
+| `scoring` | `pads` / `distance` / `time` | Pads: +100 per first landing. Distance: score = max \|x\| reached (`Sim::max_dist`; big HUD readout, `best` beneath). Time: visit EVERY pad — the run ENDS the tick the last pad's landing registers (`Sim.completed`, `TickReport::completed`); score = completion time in seconds (`Sim.run_ticks × PHYSICS_DT`, **lower is better**), HUD shows `visited/total` + a running `TIME m:ss.t` clock at near-headline size (the clock IS the score; frozen at completion), with `BEST m:ss.t` + the "by <pilot>" record attribution beneath (`BEST_TIME`, seeded from the global all-time record like the distance BEST — see "Online high scores"). A crash/fuel-out is a DNF — no board entry (and, with the "Auto fly again after a DNF" setting on, no game-over screen either — see "Game menu"). Time levels are hand-drawn (finite pad set; `terrain.pads.len()` is the total) — or procedural with a `goal_distance` finish pad (see that row): there the HUD's big line is distance progress (`837/1000 m`) and ONLY the finish pad completes (regular pads register + refuel silently, no flash) |
 | `endless` | on/off | On: the cave's periodic harmonics (`cave_center`/`cave_half_width`) are replaced by hash-based **value noise** (`Level::vnoise`, smoothstep-interpolated lattice hashes) with the SAME amplitude bounds — the tunnel never wraps in x, every stretch is unique rock in both directions. The no-pinch / no-blowout guarantee carries over (unit-tested over ±34 km); C1-continuous so colliders/lattice stay seamless. Procedural only (ignored under `terrain`) |
 | `shafts` | on/off | Off: `seg_in_opening` is always false (sealed cave), no shaft colliders load, minimap skips the carve |
 | `obstacles` | on/off | Off: `obstacle_spec` returns None everywhere (pads then skip the boulder-overlap check) |
