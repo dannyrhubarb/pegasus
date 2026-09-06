@@ -1257,11 +1257,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">df75b72-pr-208</div>
+        <div class="info-value" id="git-rev">83e3897-pr-208</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-09-06T08:24:13Z</div>
+        <div class="info-value" id="build-time">2026-09-06T09:20:45Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -2180,15 +2180,15 @@
         // scr-gameover.
         collectEndedRun();
         pegAnalytics.pollRuns();
-        // Auto fly again (Settings, off by default): a DNF on a level where
-        // DNFs are possible — time-scored, the attempt is unfinished and
-        // nothing was submitted — restarts straight away, exactly what the
-        // Fly again button sends (the CRASHED / OUT OF FUEL banner has had
-        // its grace already; state 2 arrives after it). Falls through to
-        // the normal flow whenever a screen has a claim on this moment: a
-        // completion (the time IS the news), a pending submit (never
-        // discard a scorable run unseen), the one-time consent ask, or a
-        // latched forced-update wall that only a showScreen can raise.
+        // Auto fly again (Settings, off by default) — FALLBACK path: the
+        // game normally respawns a time level's DNF itself at the impact /
+        // fuel-out tick and never reaches state 2 (see applyAutoFlySetting);
+        // a DNF that did land here restarts with the Fly again button's own
+        // command. Falls through to the normal flow whenever a screen has
+        // a claim on this moment: a completion (the time IS the news), a
+        // pending submit (never discard a scorable run unseen), the
+        // one-time consent ask, or a latched forced-update wall that only
+        // a showScreen can raise — the same gates the pushed value obeys.
         if (autoFlyToggle.checked && !complete && levelIsTime(currentLevelFile)
             && !pendingSubmit && !pegAnalytics.consentDue() && !wallPolicy) {
           call("ui_command", 1);
@@ -2727,7 +2727,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "df75b72-pr-208";
+    const wasmRev = "83e3897-pr-208";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -3267,6 +3267,11 @@
     setInterval(() => {
       collectEndedRun();
       pegAnalytics.pollRuns();
+      // The play counter above can make the consent ask due; keep the
+      // game's auto-fly-again gate current (see applyAutoFlySetting).
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_auto_fly_again) {
+        applyAutoFlySetting();
+      }
     }, 500);
 
     // --- App update policy (forced-update wall + config override, #190) -----
@@ -3284,7 +3289,7 @@
     // an app resumed from the switcher for weeks still sees a new verdict:
     // - `minBuild` {android, ios} walls shell builds below it (CI run
     //   number); `minWebBuildTime` (ISO instant) walls web pages whose
-    //   baked 2026-09-06T08:24:13Z predates it. A wall NEVER interrupts a live
+    //   baked 2026-09-06T09:20:45Z predates it. A wall NEVER interrupts a live
     //   play: a mid-flight/replay verdict latches in `wallPolicy` and
     //   showScreen raises it at the next screen (pause, crash, game over,
     //   exit) — boot is menu-open, so launch walls immediately. On the web
@@ -4087,18 +4092,32 @@
 
     // "Auto fly again after a DNF" toggle (OFF by default): on a level where
     // an unfinished attempt earns nothing (time-scored — a crash or fuel-out
-    // is a DNF, no board entry), the run restarts by itself the moment it
-    // ends instead of parking on the game-over screen, so a grinding
-    // session doesn't spend a tap per attempt. JS-only — the restart is the
-    // same ui_command(1) as the Fly again button; the game-over screen
-    // still shows for completions and on every other level. Read by the
-    // ui-state poll's state-2 branch (an interval, so it runs long after
-    // this declaration).
+    // is a DNF, no board entry), the GAME respawns the run the very frame
+    // it ends (`set_auto_fly_again` → the wasm sets its own reset flag at
+    // the impact / fuel-out tick — no wreck grace, no game-over screen, no
+    // tap), so a grinding session restarts as fast as physics allows. The
+    // value pushed is GATED: a due consent ask or a latched forced-update
+    // wall needs the game-over screen to show, so while either is pending
+    // the game gets 0 and the ui-state poll's state-2 branch (which
+    // applies the same gates) takes over — it also remains the fallback
+    // path for a run that reached state 2 anyway. Re-pushed on the 500 ms
+    // run-collect cadence because consentDue() flips with the play count.
     const autoFlyToggle = document.getElementById("autofly-toggle");
     autoFlyToggle.checked = localStorage.getItem("pegasus_auto_fly_again") === "1";
+    function applyAutoFlySetting() {
+      const on = autoFlyToggle.checked && !pegAnalytics.consentDue() && !wallPolicy;
+      call("set_auto_fly_again", on ? 1 : 0);
+    }
     autoFlyToggle.addEventListener("change", () => {
       localStorage.setItem("pegasus_auto_fly_again", autoFlyToggle.checked ? "1" : "0");
+      applyAutoFlySetting();
     });
+    const autoFlyTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_auto_fly_again) {
+        applyAutoFlySetting();
+        clearInterval(autoFlyTimer);
+      }
+    }, 200);
 
     // "Debug HUD" toggle (OFF by default): shows the developer telemetry line
     // + the minimap. Same plumbing as the others.
