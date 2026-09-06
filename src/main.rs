@@ -1035,6 +1035,29 @@ pub extern "C" fn set_land_ring(on: i32) {
     LAND_RING.store(on as u32, Ordering::Relaxed);
 }
 
+// "Auto fly again after a DNF" toggle (settings checkbox, off by default):
+// on a time-scored level an unfinished attempt is a DNF that earns nothing,
+// so the run restarts the very frame it ends — the destroying impact / the
+// fuel-out tick sets the same reset flag the Fly again button does, and
+// the reset block below runs before the frame is drawn: no wreck grace, no
+// game-over dialog, no tap. JS gates the value it pushes (a pending consent
+// ask or forced-update wall keeps it off, since those need the game-over
+// screen to show), and every other level ignores it.
+static AUTO_FLY_AGAIN: AtomicU32 = AtomicU32::new(0);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_auto_fly_again(on: i32) {
+    AUTO_FLY_AGAIN.store(on as u32, Ordering::Relaxed);
+}
+
+/// Whether a run that just ended UNFINISHED on this level should respawn
+/// immediately under the auto-fly-again setting: only time-scored levels
+/// have DNFs (their crash/fuel-out attempts are unscorable), so nothing
+/// else ever auto-restarts.
+fn auto_fly_again_dnf(level: &Level) -> bool {
+    AUTO_FLY_AGAIN.load(Ordering::Relaxed) != 0 && level.scoring == Scoring::Time
+}
+
 // --- Bluetooth / USB game controller bridge (Web Gamepad API, see index.html) ---
 #[unsafe(no_mangle)]
 pub extern "C" fn set_pad_thrust(active: i32) {
@@ -1228,6 +1251,16 @@ fn stick_touch_lost(owned: Option<&Touch>) -> bool {
         owned.map(|t| t.phase),
         Some(TouchPhase::Stationary) | Some(TouchPhase::Moved)
     )
+}
+
+/// True while at least one finger is still on the screen: an entry whose
+/// phase is `Ended`/`Cancelled` is a finger that just LEFT (macroquad
+/// reports it for that one frame), so it doesn't count. The auto-fly-again
+/// release latch waits for this to go false.
+fn any_touch_down(frame: &[Touch]) -> bool {
+    frame
+        .iter()
+        .any(|t| !matches!(t.phase, TouchPhase::Ended | TouchPhase::Cancelled))
 }
 
 impl TouchStick {
@@ -1522,6 +1555,14 @@ async fn main() {
     // Touch ids that were on screen at the end of last frame — the stick's
     // fresh-touch gate (see fresh_touch: a phase test can't spot a new finger).
     let mut prev_touch_ids: Vec<u64> = Vec::new();
+    // Auto-fly-again release latch: after the game respawns a DNF by itself
+    // the pilot's hands are still where the crash left them — a finger on
+    // the throttle / a held key would arm the fresh run instantly and burn
+    // straight off the pad. So every control must be RELEASED once (no
+    // finger down, no mouse button, no thrust/rotate key, no pad thrust)
+    // before input is read again; until then the stick and button drop
+    // their claims and the run stays armed-but-idle.
+    let mut await_release = false;
     // Hand-drawn terrain: cached ear-clip triangulation + per-polygon world
     // bboxes for the rock fill (main view + minimap). Keyed on the RENDERED
     // level's terrain — world_sim can switch to a replay's scratch sim, so
@@ -1560,6 +1601,12 @@ async fn main() {
             mode = Mode::Flying;
             run_started = false;
             run_over = false;
+            await_release = false;
+            particles.clear(); // same fresh-run sweep as the reset block
+            pad_msg_timer = 0.0;
+            stick_thrust_t = 0.0;
+            flip_settling = false;
+            replay_boom_timer = 0.0;
             recorder = Recording::new(sim_params(), sim.level.to_params(),
                 (HYBRID_MAX_SECS / PHYSICS_DT) as u32);
             recorder.push_keyframe(sim.keyframe(0, 0.0));
@@ -1685,7 +1732,19 @@ async fn main() {
         let touch_dpi = screen_dpi_scale();
         let tpos = |t: &Touch| t.position / touch_dpi;
         let invert = INVERT_STICK.load(Ordering::Relaxed) != 0;
-        let stick_active = matches!(mode, Mode::Flying) && crash_timer <= 0.0 && !ui_paused;
+        let frame_touches = touches();
+        if await_release
+            && !any_touch_down(&frame_touches)
+            && !is_mouse_button_down(MouseButton::Left)
+            && !is_key_down(KeyCode::Down)
+            && !is_key_down(KeyCode::Left)
+            && !is_key_down(KeyCode::Right)
+            && PAD_THRUST.load(Ordering::Relaxed) == 0
+        {
+            await_release = false;
+        }
+        let stick_active =
+            matches!(mode, Mode::Flying) && crash_timer <= 0.0 && !ui_paused && !await_release;
         // Split controls: the screen halves at the midline — LEFT fresh
         // touches become the floating throttle button, RIGHT ones the
         // stick (which then steers only). The zone gates only where a
@@ -1695,7 +1754,6 @@ async fn main() {
         // takes the LEFT half and the throttle button the RIGHT.
         let swap = SWAP_SIDES.load(Ordering::Relaxed) != 0;
         let half_x = screen_width() / 2.0;
-        let frame_touches = touches();
         // Keep following / release the claimed stick touch.
         if let Some(id) = stick.id {
             match frame_touches.iter().find(|t| t.id == id) {
@@ -1806,7 +1864,7 @@ async fn main() {
         };
         // Inputs are commands — the fuel gate lives in the sim. A dead ship
         // (or a paused mode) commands nothing.
-        let input = if mode == Mode::Flying && crash_timer <= 0.0 && !ui_paused {
+        let mut input = if mode == Mode::Flying && crash_timer <= 0.0 && !ui_paused && !await_release {
             InputState::from_controls(throttle_cmd, rot, steer_x, steer_y, stick_held)
         } else {
             InputState::default()
@@ -1922,6 +1980,11 @@ async fn main() {
                     report_run_end(&recorder, sim.max_dist,
                         sim.level.scoring != Scoring::Time);
                     report_run_analytics(0, recorder.ticks(), sim.max_dist, sim.fuel, sim.hull);
+                    // Auto fly again: a crash DNF respawns once the
+                    // explosion has played out — the wreck-timer handover
+                    // below fires the reset in place of the dialog (owner
+                    // call: the boom deserves its grace; a fuel-out has no
+                    // explosion and respawns at once, see that site).
                 }
             } else {
                 // Survivable scrape: a spray of sparks + a quiet thud,
@@ -1988,16 +2051,141 @@ async fn main() {
                 sim.level.scoring != Scoring::Time);
             report_run_analytics(2, recorder.ticks(), sim.max_dist, sim.fuel, sim.hull);
             mode = Mode::CrashDialog;
+            // Auto fly again: a time level's fuel-out DNF respawns this
+            // frame instead of parking on the dialog (reset block below).
+            if auto_fly_again_dnf(&sim.level) {
+                ui_do_reset = true;
+                await_release = true;
+            }
         }
         // Wreck timer → once the explosion has played out, hand over to the
-        // crash dialog (fly again / watch replay). Respawn happens from there.
+        // crash dialog (fly again / watch replay) — or, under auto fly
+        // again on a time level (the crash was a DNF), fire the respawn
+        // itself: the reset block right below consumes it on THIS frame,
+        // so the expiry frame renders the fresh ship, never the dialog.
+        // Sits ahead of the reset block for exactly that reason.
         if crash_timer > 0.0 && !ui_paused {
             crash_timer -= get_frame_time();
             if crash_timer <= 0.0 {
                 crash_timer = 0.0;
-                mode = Mode::CrashDialog;
+                if sim.crashed && auto_fly_again_dnf(&sim.level) {
+                    ui_do_reset = true;
+                    await_release = true;
+                } else {
+                    mode = Mode::CrashDialog;
+                }
             }
         }
+        // Reset / respawn — placed HERE, right after the crash flow and the
+        // wreck-timer handover, ahead of the ui-state mirror and every draw
+        // call, so a frame that resets renders the FRESH run: with the
+        // block after the world draw (its old home), the frame the reset
+        // fired in still painted the ended run — the wreck, the debris
+        // burst and the CRASHED banner — for one frame before the respawn
+        // showed, which the auto-fly-again respawn made visible as a blink.
+        // Triggers: R key, gamepad Start/Y, or the dialog's FLY AGAIN
+        // button. Also the escape hatch out of the dialog and the replay.
+        // Respawn returns to the ORIGINAL spawn (not RESET_X): every run
+        // starts from the same place, which is what lets the ghost race you.
+        if is_key_pressed(KeyCode::R) || PAD_RESET.swap(0, Ordering::Relaxed) != 0 || ui_do_reset {
+            // FRESH Sim per run — never reuse the world across recorded runs.
+            // Rapier's contact solve depends on collider handle numbering: a
+            // reused sim's handle space carries the previous run's history,
+            // while a replay's sim is fresh, and under sustained multi-point
+            // contact (parked on a pad) the differing float summation order
+            // diverges → chaos amplifies → metres of replay drift (found
+            // 2026-07 from a real downloaded replay). A fresh sim makes live
+            // and resim identical operation sequences by construction.
+            // Runs ended by a manual reset while alive go to the highscore
+            // store too ("longest flights", not "longest crashes") — a
+            // crashed run was already published at the impact.
+            let ended_alive = !sim.crashed && !run_over;
+            let ended_dist = sim.max_dist;
+            let (ended_fuel, ended_hull) = (sim.fuel, sim.hull);
+            // A random-seed level re-rolls its world here too: every restart
+            // is a brand-new cave (the recorder below picks up the new seed).
+            sim = Sim::new(with_rolled_seed(sim.level.clone()));
+            // Snap the interpolation too, or the camera lerps across the
+            // teleport for a frame.
+            prev_ship = (SPAWN_X, sim.level.stand_y(SPAWN_X), 0.0);
+            crash_timer = 0.0;
+            complete_timer = 0.0;
+            shake = 0.0;
+            mode = Mode::Flying;
+            run_started = false;
+            run_over = false;
+            // Nothing of the ended run survives the respawn: its debris /
+            // exhaust / sparks (an auto-fly-again respawn lands the very
+            // frame the crash bursts, so the explosion would otherwise keep
+            // fading around the fresh ship), the "+100" flash, the
+            // stick-hold engine ramp + flip latch, and the accumulator —
+            // the fresh run starts armed-but-idle, from nothing.
+            particles.clear();
+            pad_msg_timer = 0.0;
+            stick_thrust_t = 0.0;
+            flip_settling = false;
+            replay_boom_timer = 0.0;
+            phys_accum = 0.0;
+            let ended = std::mem::replace(
+                &mut recorder,
+                Recording::new(sim_params(), sim.level.to_params(),
+                    (HYBRID_MAX_SECS / PHYSICS_DT) as u32),
+            );
+            if ended_alive {
+                // A crashed or fuel-out run was already published (both
+                // channels) when it ended — only alive resets report here.
+                // (The fresh sim carries the same level, so its clone is
+                // fine for the best-raise check.)
+                raise_best_dist(&sim.level, ended_dist);
+                // Time levels: an abandoned attempt has no score to submit
+                // — not scorable, still published for the bug-report
+                // buffer (reset-ended runs never pop the submit dialog on
+                // any level, so this changes nothing submit-side).
+                report_run_end(&ended, ended_dist,
+                    sim.level.scoring != Scoring::Time);
+                report_run_analytics(1, ended.ticks(), ended_dist, ended_fuel, ended_hull);
+            }
+            // A `seed = random` level just re-rolled its world — drop an
+            // adopted ghost flown on the previous roll's rock. One slips in
+            // exactly when YOU set the record: the submitted run comes back
+            // as the record ghost while the wreck still holds the seed it
+            // was flown on, passes the adoption equality, and without this
+            // re-check it would race through walls that don't exist in this
+            // attempt's world (and keep doing so every restart). Fixed-seed
+            // levels keep their ghost — the params still match.
+            if ghost_rec.as_ref().is_some_and(|g| g.level != sim.level.to_params()) {
+                ghost_rec = None;
+            }
+            // The ghost re-simulates the BEST run (the global record,
+            // pushed from JS) from its first keyframe, in lockstep with
+            // the new run.
+            ghost_player = if GHOST_ON.load(Ordering::Relaxed) != 0 {
+                ghost_rec.as_ref().and_then(ResimPlayer::new)
+            } else {
+                None
+            };
+            replay_player = None;
+            replay_ghost = None;
+            watch_rec = None;
+            glow = 0.0;
+            // This frame's RESOLVED input and the ended ticks' heading torque
+            // were gathered before the reset — a throttle still held at the
+            // crash would otherwise feed the glow update, the engine hum and
+            // the exhaust/RCS emission below and paint one puff of thrust on
+            // the fresh ship that then faded (seen on the preview: "the
+            // thrust is still dying out after the reset"). Neutralize both;
+            // the next frame gathers input afresh under the release latch.
+            input = InputState::default();
+            frame_heading_torque = 0.0;
+            if await_release {
+                // Auto respawn: drop the widgets' claims now, not next
+                // frame, so the stick doesn't draw held on the reset frame.
+                stick.release();
+                throttle_btn.release();
+            }
+            recorder.push_keyframe(sim.keyframe(0, 0.0));
+        }
+
         let crashed = crash_timer > 0.0;
 
         // Mirror the mode + run distance for the HTML overlay state machine
@@ -3246,8 +3434,9 @@ async fn main() {
         }
 
         // Crash dialog / replay overlay / status banners. `ui_do_reset` (the
-        // HTML UI's fly-again/restart command) is consumed by the reset block
-        // below, same path as the R key.
+        // HTML UI's fly-again/restart command) was consumed by the reset block
+        // ABOVE (same path as the R key), so a reset frame never gets here
+        // with a wreck to show.
         if mode == Mode::CrashDialog {
             // On web the HTML game-over screen (index.html) covers this and
             // drives the choices via ui_command; what's drawn here is the
@@ -3511,82 +3700,6 @@ async fn main() {
             p.y += p.vy * dt;
         }
         particles.retain(|p| p.life > 0.0);
-
-        // Reset / respawn: R key, gamepad Start/Y, or the dialog's FLY AGAIN
-        // button. Also the escape hatch out of the dialog and the replay.
-        // Respawn returns to the ORIGINAL spawn (not RESET_X): every run
-        // starts from the same place, which is what lets the ghost race you.
-        if is_key_pressed(KeyCode::R) || PAD_RESET.swap(0, Ordering::Relaxed) != 0 || ui_do_reset {
-            // FRESH Sim per run — never reuse the world across recorded runs.
-            // Rapier's contact solve depends on collider handle numbering: a
-            // reused sim's handle space carries the previous run's history,
-            // while a replay's sim is fresh, and under sustained multi-point
-            // contact (parked on a pad) the differing float summation order
-            // diverges → chaos amplifies → metres of replay drift (found
-            // 2026-07 from a real downloaded replay). A fresh sim makes live
-            // and resim identical operation sequences by construction.
-            // Runs ended by a manual reset while alive go to the highscore
-            // store too ("longest flights", not "longest crashes") — a
-            // crashed run was already published at the impact.
-            let ended_alive = !sim.crashed && !run_over;
-            let ended_dist = sim.max_dist;
-            let (ended_fuel, ended_hull) = (sim.fuel, sim.hull);
-            // A random-seed level re-rolls its world here too: every restart
-            // is a brand-new cave (the recorder below picks up the new seed).
-            sim = Sim::new(with_rolled_seed(sim.level.clone()));
-            // Snap the interpolation too, or the camera lerps across the
-            // teleport for a frame.
-            prev_ship = (SPAWN_X, sim.level.stand_y(SPAWN_X), 0.0);
-            crash_timer = 0.0;
-            complete_timer = 0.0;
-            shake = 0.0;
-            mode = Mode::Flying;
-            run_started = false;
-            run_over = false;
-            let ended = std::mem::replace(
-                &mut recorder,
-                Recording::new(sim_params(), sim.level.to_params(),
-                    (HYBRID_MAX_SECS / PHYSICS_DT) as u32),
-            );
-            if ended_alive {
-                // A crashed or fuel-out run was already published (both
-                // channels) when it ended — only alive resets report here.
-                // (The fresh sim carries the same level, so its clone is
-                // fine for the best-raise check.)
-                raise_best_dist(&sim.level, ended_dist);
-                // Time levels: an abandoned attempt has no score to submit
-                // — not scorable, still published for the bug-report
-                // buffer (reset-ended runs never pop the submit dialog on
-                // any level, so this changes nothing submit-side).
-                report_run_end(&ended, ended_dist,
-                    sim.level.scoring != Scoring::Time);
-                report_run_analytics(1, ended.ticks(), ended_dist, ended_fuel, ended_hull);
-            }
-            // A `seed = random` level just re-rolled its world — drop an
-            // adopted ghost flown on the previous roll's rock. One slips in
-            // exactly when YOU set the record: the submitted run comes back
-            // as the record ghost while the wreck still holds the seed it
-            // was flown on, passes the adoption equality, and without this
-            // re-check it would race through walls that don't exist in this
-            // attempt's world (and keep doing so every restart). Fixed-seed
-            // levels keep their ghost — the params still match.
-            if ghost_rec.as_ref().is_some_and(|g| g.level != sim.level.to_params()) {
-                ghost_rec = None;
-            }
-            // The ghost re-simulates the BEST run (the global record,
-            // pushed from JS) from its first keyframe, in lockstep with
-            // the new run.
-            ghost_player = if GHOST_ON.load(Ordering::Relaxed) != 0 {
-                ghost_rec.as_ref().and_then(ResimPlayer::new)
-            } else {
-                None
-            };
-            replay_player = None;
-            replay_ghost = None;
-            watch_rec = None;
-            glow = 0.0;
-            recorder.push_keyframe(sim.keyframe(0, 0.0));
-        }
 
         // --- Minimap + gauges (top-left) ---
         // Re-bound after the dialog/reset mutations above; during playback
@@ -4203,6 +4316,19 @@ mod tests {
 
     fn touch(id: u64, phase: TouchPhase) -> Touch {
         Touch { id, phase, position: vec2(10.0, 20.0) }
+    }
+
+    // The auto-fly-again release latch waits for EVERY finger to leave:
+    // a lifting finger's one-frame Ended/Cancelled entry doesn't count as
+    // down, while any Started/Moved/Stationary finger still holds the latch.
+    #[test]
+    fn any_touch_down_ignores_lifting_fingers() {
+        assert!(!any_touch_down(&[]));
+        assert!(!any_touch_down(&[touch(0, TouchPhase::Ended)]));
+        assert!(!any_touch_down(&[touch(0, TouchPhase::Cancelled), touch(1, TouchPhase::Ended)]));
+        assert!(any_touch_down(&[touch(0, TouchPhase::Stationary)]));
+        assert!(any_touch_down(&[touch(0, TouchPhase::Ended), touch(1, TouchPhase::Moved)]));
+        assert!(any_touch_down(&[touch(0, TouchPhase::Started)]));
     }
 
     // The regression test for the Android "only every few touches goes
