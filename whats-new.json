@@ -1,5 +1,10 @@
 [
  {
+  "rev": "fdcfb63",
+  "date": "2026-09-07T21:37:51+02:00",
+  "note": "New: High scores now show which game version a run was flown on — and tell you when a replay needs an update to watch"
+ },
+ {
   "rev": "8549eac",
   "date": "2026-09-07T21:19:39+02:00",
   "note": "New: Landings now charge up a green ring — keep her parked until it closes and the pad is yours"
