@@ -1,13 +1,18 @@
 [
  {
-  "rev": "6e8094b",
-  "date": "2026-09-04T13:35:20Z",
+  "rev": "029f1e2",
+  "date": "2026-09-07T19:20:09Z",
   "note": "New: High scores now show which game version a run was flown on — and tell you when a replay needs an update to watch"
  },
  {
-  "rev": "7ceaa61",
-  "date": "2026-09-04T04:10:11Z",
+  "rev": "8549eac",
+  "date": "2026-09-07T21:19:39+02:00",
   "note": "New: Landings now charge up a green ring — keep her parked until it closes and the pad is yours"
+ },
+ {
+  "rev": "d5cdacd",
+  "date": "2026-09-05T23:03:29+02:00",
+  "note": "New: Lefties rejoice — a Settings toggle swaps the throttle and steering stick sides (thanks Hillevi for the suggestion!)"
  },
  {
   "rev": "613e29b",
