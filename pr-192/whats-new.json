@@ -1,8 +1,13 @@
 [
  {
-  "rev": "7ceaa61",
-  "date": "2026-09-04T04:10:11Z",
+  "rev": "f1ed0fc",
+  "date": "2026-09-07T18:47:36Z",
   "note": "New: Landings now charge up a green ring — keep her parked until it closes and the pad is yours"
+ },
+ {
+  "rev": "d5cdacd",
+  "date": "2026-09-05T23:03:29+02:00",
+  "note": "New: Lefties rejoice — a Settings toggle swaps the throttle and steering stick sides (thanks Hillevi for the suggestion!)"
  },
  {
   "rev": "613e29b",
