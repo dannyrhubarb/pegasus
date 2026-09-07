@@ -1256,8 +1256,12 @@
         <input type="checkbox" id="inv-toggle"><span class="tgl"></span>
       </label>
       <label class="setrow" id="split-toggle-row">
-        <span>Split controls (throttle left)</span>
+        <span id="split-toggle-label">Split controls (throttle left)</span>
         <input type="checkbox" id="split-toggle"><span class="tgl"></span>
+      </label>
+      <label class="setrow" id="swap-toggle-row">
+        <span>Swap control sides (left-handed)</span>
+        <input type="checkbox" id="swap-toggle"><span class="tgl"></span>
       </label>
       <label class="setrow" id="ghost-toggle-row">
         <span>Race best ghost</span>
@@ -1289,11 +1293,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">8361a22-pr-205</div>
+        <div class="info-value" id="git-rev">c49aac4-pr-205</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-09-04T19:57:07Z</div>
+        <div class="info-value" id="build-time">2026-09-07T19:42:45Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -2827,7 +2831,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "8361a22-pr-205";
+    const wasmRev = "c49aac4-pr-205";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -2965,6 +2969,36 @@
       if (typeof wasm_exports !== "undefined" && wasm_exports.set_split_controls) {
         applySplitSetting();
         clearInterval(splitTimer);
+      }
+    }, 200);
+
+    // Swap-control-sides toggle (off by default — the left-handed layout):
+    // mirrors the split scheme's halves (throttle button RIGHT, stick LEFT)
+    // and both widgets' parked corners in every scheme. Pure presentation +
+    // touch-zone change — recordings are untouched. Forwarded to the WASM
+    // `set_swap_sides` export and persisted per device (same pattern as the
+    // split toggle). The split row's label names the throttle's side so the
+    // two rows read consistently.
+    const swapToggle = document.getElementById("swap-toggle");
+    const splitLabel = document.getElementById("split-toggle-label");
+    swapToggle.checked = localStorage.getItem("pegasus_swap_sides") === "1";
+    function syncSwapLabel() {
+      splitLabel.textContent =
+        "Split controls (throttle " + (swapToggle.checked ? "right" : "left") + ")";
+    }
+    syncSwapLabel();
+    function applySwapSetting() {
+      call("set_swap_sides", swapToggle.checked ? 1 : 0);
+    }
+    swapToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_swap_sides", swapToggle.checked ? "1" : "0");
+      syncSwapLabel();
+      applySwapSetting();
+    });
+    const swapTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_swap_sides) {
+        applySwapSetting();
+        clearInterval(swapTimer);
       }
     }, 200);
 
@@ -3359,7 +3393,7 @@
     // an app resumed from the switcher for weeks still sees a new verdict:
     // - `minBuild` {android, ios} walls shell builds below it (CI run
     //   number); `minWebBuildTime` (ISO instant) walls web pages whose
-    //   baked 2026-09-04T19:57:07Z predates it. A wall NEVER interrupts a live
+    //   baked 2026-09-07T19:42:45Z predates it. A wall NEVER interrupts a live
     //   play: a mid-flight/replay verdict latches in `wallPolicy` and
     //   showScreen raises it at the next screen (pause, crash, game over,
     //   exit) — boot is menu-open, so launch walls immediately. On the web
