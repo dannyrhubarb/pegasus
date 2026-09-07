@@ -1,5 +1,10 @@
 [
  {
+  "rev": "8549eac",
+  "date": "2026-09-07T21:19:39+02:00",
+  "note": "New: Landings now charge up a green ring — keep her parked until it closes and the pad is yours"
+ },
+ {
   "rev": "d5cdacd",
   "date": "2026-09-05T23:03:29+02:00",
   "note": "New: Lefties rejoice — a Settings toggle swaps the throttle and steering stick sides (thanks Hillevi for the suggestion!)"
