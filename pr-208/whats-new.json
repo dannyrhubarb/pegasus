@@ -1,5 +1,10 @@
 [
  {
+  "rev": "c75eb09",
+  "date": "2026-09-08T14:23:44Z",
+  "note": "Fixed: The camera no longer wanders off after a crash — the wreck stays put where it died"
+ },
+ {
   "rev": "fbd16ef",
   "date": "2026-09-08T14:13:44Z",
   "note": "New: Grinding a time trial? Flip on \"Auto fly again after a DNF\" in Settings and every wipeout respawns you instantly — no button mashing between attempts (thanks Don Limpo De La Vega for the suggestion!)"
