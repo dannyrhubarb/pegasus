@@ -1,8 +1,38 @@
 [
  {
-  "rev": "0ae2c67",
-  "date": "2026-09-06T09:28:18Z",
+  "rev": "a18415c",
+  "date": "2026-09-08T13:27:38Z",
   "note": "New: Grinding a time trial? Flip on \"Auto fly again after a DNF\" in Settings and every wipeout respawns you instantly — no button mashing between attempts (thanks Don Limpo De La Vega for the suggestion!)"
+ },
+ {
+  "rev": "3186523",
+  "date": "2026-09-07T22:38:12+02:00",
+  "note": "New: The landing ring is now a Settings toggle — on by default, off for the purists"
+ },
+ {
+  "rev": "1db8627",
+  "date": "2026-09-07T22:38:12+02:00",
+  "note": "New: A Flight manual under About — read exactly what makes a landing count before the pad tells you it didn't"
+ },
+ {
+  "rev": "595dd61",
+  "date": "2026-09-07T22:38:12+02:00",
+  "note": "New: Land crooked and the ship now rocks onto both feet instead of freezing on one leg"
+ },
+ {
+  "rev": "9ac4571",
+  "date": "2026-09-07T22:38:12+02:00",
+  "note": "New: Landings count after 0.4 s now — but only with both feet on the pad, so no more heel-hanging"
+ },
+ {
+  "rev": "fdcfb63",
+  "date": "2026-09-07T21:37:51+02:00",
+  "note": "New: High scores now show which game version a run was flown on — and tell you when a replay needs an update to watch"
+ },
+ {
+  "rev": "8549eac",
+  "date": "2026-09-07T21:19:39+02:00",
+  "note": "New: Landings now charge up a green ring — keep her parked until it closes and the pad is yours"
  },
  {
   "rev": "d5cdacd",
