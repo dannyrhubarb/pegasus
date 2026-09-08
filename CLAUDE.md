@@ -151,6 +151,30 @@ Four input paths feed the same physics, combined in the main loop:
     until the nose settles within `FLIP_DONE_RAD (~20°)` — the gate resets
     the ramp, so post-flip thrust also fades in. (There is no separate JET
     thrust-only button any more — stick-hold covers one-handed play.)
+    **Under the "Pro stick" setting they apply only until the touch's
+    engine is LIT** (`#prostick-toggle-row`, `pegasus_pro_stick` →
+    `set_stick_instant` → `STICK_INSTANT`, **off by default**, 2026-09;
+    `ProStick` in main.rs, a per-touch latch, pure + unit-tested): the
+    engine decides ONCE per touch — a finger that stays inside the
+    heading dead-zone (`STICK_DZ`, 9 px) for `STICK_CENTRE_LIGHT_S`
+    (0.06 s, ~4 frames; compile-time asserted below the flick grace) is
+    a PRESS and lights at full throttle on the spot — the split throttle
+    button's instant 1.0, a few frames late; a finger that steers first
+    keeps today's grace + ramp + flip gate verbatim (a nudge or a flick
+    never burns) and is lit once the ramp reaches full; a lit touch holds
+    full throttle through any steering or flip until release (the flip
+    gate is skipped while lit). The window is the one trade — a press
+    and a flick are the same event on their first frame. See
+    `docs/control-tuning.md` § 3 for the knob. Born
+    from Marcus's report that the split
+    throttle out-accelerated the one-handed stick against a ghost: the
+    grace + half the ramp forfeit ~0.2 s of full thrust on every burn
+    while the run clock arms on the bare touch (`stick_held` is
+    non-neutral), so the gap is real and permanent. **Frame-side only** —
+    the recorder stores the RESOLVED throttle and `Sim::tick` never reads
+    `stick_held` (it only arms the run and animates the replay stick), so
+    the toggle touches no replay format, ruleset or verifier and old
+    recordings replay unchanged. See `docs/control-tuning.md` § 3.
   - **Split controls** (two-handed scheme, `#split-toggle-row`,
     `pegasus_split_controls` → `set_split_controls` → `SPLIT_CONTROLS`,
     **on by default** since 2026-08 — turning it off restores the
@@ -376,7 +400,19 @@ fifth home button).
   see "Input sources"), **Swap control sides** (`#swap-toggle-row`,
   `pegasus_swap_sides`, **off by default** → `set_swap_sides` →
   `SWAP_SIDES`; the left-handed layout — throttle right, stick left, parked
-  corners mirrored — see "Input sources"), **Race best ghost** (`#ghost-toggle-row`, on by
+  corners mirrored — see "Input sources"), **Pro stick**
+  (`#prostick-toggle-row`, `pegasus_pro_stick`, **off by default** →
+  `set_stick_instant` → `STICK_INSTANT`; a still centre press lights
+  the engine at once and a lit touch stays lit while steering, steer-first
+  touches keep the soft start — see "Input sources";
+  **a sub-row directly under Split controls that slides out while split
+  is on** (`#prostick-wrap`, the `.subrow` collapsible: a `1fr→0fr`
+  grid-row transition + fade + a −14px top margin that swallows the
+  screen gap, armed by `.anim` only after first paint so boot never
+  animates; `syncProStickRow` toggles `.collapsed`; owner call — it only
+  means something for the one-handed scheme; the stored choice survives
+  the hide)),
+  **Race best ghost** (`#ghost-toggle-row`, on by
   default), **Landing ring** (`#ring-toggle-row`, `pegasus_land_ring`,
   **on by default** → `set_land_ring` → `LAND_RING`; the settle ring
   drawn while a landing registers — presentation only), **Auto fly again

@@ -154,7 +154,10 @@ pub struct InputState {
     pub rot: i8,        // manual rate command: -1 = left, +1 = right
     pub steer_x: i8,    // touch-stick vector × 127 (screen convention)
     pub steer_y: i8,
-    pub stick_held: u8, // 0/1 (drives the thrust-gating state machine)
+    pub stick_held: u8, // 0/1 — arms the run (a bare touch is non-neutral) and
+                        // animates the replay stick; the sim never reads it.
+                        // The stick-hold engine gating is FRAME-side (main.rs)
+                        // and resolved INTO `throttle` before recording.
 }
 
 impl InputState {

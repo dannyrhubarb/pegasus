@@ -896,6 +896,31 @@
        would otherwise centre its lines). */
     .setrow span:first-child { flex: 1; text-align: left; }
     .setrow input { display: none; }
+    /* A dependent setting that slides in under its parent row: a 1fr→0fr
+       grid-row collapse (the one CSS way to animate height:auto) plus a
+       fade and a negative top margin that swallows the screen's 14px gap,
+       so the rows below close up seamlessly. Transitions are armed only
+       after first paint (.anim, set by the script) so the boot state never
+       animates. One-shot on a toggle — not idle ambience, so the
+       compositor-only rule for menu animations doesn't apply. */
+    .subrow {
+      display: grid;
+      grid-template-rows: 1fr;
+      opacity: 1;
+    }
+    .subrow > div { min-height: 0; overflow: hidden; }
+    .subrow.collapsed {
+      grid-template-rows: 0fr;
+      opacity: 0;
+      margin-top: -14px;
+      pointer-events: none;
+    }
+    .subrow.anim {
+      transition: grid-template-rows 0.25s ease, opacity 0.2s ease, margin-top 0.25s ease;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .subrow.anim { transition: none; }
+    }
     .setrow .tgl {
       flex: 0 0 auto;
       width: 52px;
@@ -1259,6 +1284,18 @@
         <span id="split-toggle-label">Split controls (throttle left)</span>
         <input type="checkbox" id="split-toggle"><span class="tgl"></span>
       </label>
+      <!-- Sub-setting of Split controls: only meaningful with split OFF, so
+           it lives right under that row and slides in/out with it (.subrow,
+           collapsed in the markup — split is on by default; the script sets
+           the real state before enabling the transition). -->
+      <div class="subrow collapsed" id="prostick-wrap">
+        <div>
+          <label class="setrow" id="prostick-toggle-row">
+            <span>Pro stick (instant burn from centre)</span>
+            <input type="checkbox" id="prostick-toggle"><span class="tgl"></span>
+          </label>
+        </div>
+      </div>
       <label class="setrow" id="swap-toggle-row">
         <span>Swap control sides (left-handed)</span>
         <input type="checkbox" id="swap-toggle"><span class="tgl"></span>
@@ -1385,7 +1422,14 @@
           burn. A finger on the <b>right half</b> is the attitude stick:
           push where the nose should point and the ship turns there. Turn
           split controls off in Settings for one-handed flight, where
-          holding the stick also fires the engine.</li>
+          holding the stick also fires the engine &mdash; with a short
+          soft start, so a quick steering flick never burns. The
+          <b>Pro stick</b> setting keeps that for steering but makes a
+          plain press instant: touch and hold still and the engine fires
+          at once, exactly like the throttle button; steer straight from
+          the touch and you get the soft start instead, so a nudge never
+          burns. Once the engine is lit it stays lit while you steer,
+          until you let go.</li>
           <li><b>Keyboard</b>: &darr; thrust, &larr; / &rarr; rotate,
           R restart, Esc menu.</li>
           <li><b>Gamepad</b>: A / R2 / D-pad up thrust, left stick or D-pad
@@ -3019,6 +3063,49 @@
       if (typeof wasm_exports !== "undefined" && wasm_exports.set_swap_sides) {
         applySwapSetting();
         clearInterval(swapTimer);
+      }
+    }, 200);
+
+    // "Pro stick" toggle (off by default): the one-handed stick-hold engine
+    // normally soft-starts (flick grace → throttle ramp, and a cold engine
+    // through a big flip) so steering flicks stay free; that costs every
+    // stick burn ~0.2 s of full thrust the split scheme's throttle button
+    // never pays, which is why a one-handed ship loses to a split-flown
+    // ghost doing the same burn. On: the engine decides once per touch
+    // (the wasm's ProStick latch) — a finger that stays in the centre for
+    // a few frames is a press and lights at full throttle on the spot
+    // (like the throttle button), a finger that steers first keeps the
+    // grace + ramp so a nudge never burns, and a lit touch stays lit
+    // through any steering until release. Only meaningful with split
+    // controls OFF (under
+    // split the stick never thrusts), so the row sits right under the
+    // Split row and SLIDES IN/OUT with it (owner call 2026-09; `.subrow`
+    // collapse — the stored choice survives the hide and applies again
+    // when split is turned off). Frame-side only: the recorder stores the
+    // resolved throttle, so replays/ghost/verification are untouched.
+    // Forwarded to the WASM `set_stick_instant` export and persisted per
+    // device (same pattern as the toggles above).
+    const proStickToggle = document.getElementById("prostick-toggle");
+    const proStickWrap = document.getElementById("prostick-wrap");
+    proStickToggle.checked = localStorage.getItem("pegasus_pro_stick") === "1";
+    function syncProStickRow() {
+      proStickWrap.classList.toggle("collapsed", splitToggle.checked);
+    }
+    syncProStickRow();
+    // Arm the slide transition only after the boot state has painted.
+    requestAnimationFrame(() => proStickWrap.classList.add("anim"));
+    splitToggle.addEventListener("change", syncProStickRow);
+    function applyProStickSetting() {
+      call("set_stick_instant", proStickToggle.checked ? 1 : 0);
+    }
+    proStickToggle.addEventListener("change", () => {
+      localStorage.setItem("pegasus_pro_stick", proStickToggle.checked ? "1" : "0");
+      applyProStickSetting();
+    });
+    const proStickTimer = setInterval(() => {
+      if (typeof wasm_exports !== "undefined" && wasm_exports.set_stick_instant) {
+        applyProStickSetting();
+        clearInterval(proStickTimer);
       }
     }, 200);
 
