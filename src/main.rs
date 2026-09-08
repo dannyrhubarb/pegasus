@@ -1891,16 +1891,27 @@ async fn main() {
             run_started = true;
             RUN_START_SEQ.fetch_add(1, Ordering::Relaxed);
         }
-        if mode == Mode::Flying && !ui_paused && run_started {
+        if mode == Mode::Flying && !ui_paused && run_started && !sim.crashed {
             phys_accum = (phys_accum + get_frame_time()).min(0.05);
             while phys_accum >= PHYSICS_DT {
+                // A wreck is NOT stepped — not even the ticks still owed
+                // this frame after the destroying one. The impact tick
+                // parks it (velocities zeroed, gravity off) but leaves it
+                // overlapping the rock, and every further pipeline step
+                // let Rapier's penetration correction shove it out a bit,
+                // so during the 1.5 s wreck grace the wreck crept away
+                // from the crash site and the camera panned after it (a
+                // long-standing report, diagnosed 2026-09; the dialog
+                // stopped stepping anyway, which is why the pan ended
+                // there). Nothing after the destroying tick is recorded,
+                // resimmed or verified, so freezing here changes no replay.
+                if sim.crashed {
+                    phys_accum = 0.0;
+                    break;
+                }
                 prev_ship = sim.ship_pose();
-                let was_crashed = sim.crashed;
                 let rep = sim.tick(input);
                 phys_accum -= PHYSICS_DT;
-                if was_crashed {
-                    continue; // parked wreck: nothing to record or report
-                }
                 let destroyed = rep.impact.as_ref().is_some_and(|i| i.destroyed);
                 // The scheme flown rides the recording's cosmetic trailer
                 // (presentation only — replays render the widgets of the
@@ -1951,6 +1962,13 @@ async fn main() {
             shake = (shake + imp.damage / sim.hull_cap() + 0.25).min(1.0);
             if imp.destroyed {
                 crash_timer = CRASH_DIALOG_DELAY;
+                // Hold the camera ON the parked wreck: the stepping loop
+                // above stops at the destroying tick and drains the
+                // accumulator, so the interpolation alpha is 0 from here
+                // on and the camera reads prev_ship — snap that to the
+                // parked pose instead of the pre-impact one.
+                prev_ship = sim.ship_pose();
+                phys_accum = 0.0;
                 // Debris burst at the crash site.
                 boom_burst(imp.x, imp.y, &mut particles);
                 if SOUND_ON.load(Ordering::Relaxed) != 0 && let Some(s) = &boom_snd {
