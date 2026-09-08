@@ -1635,7 +1635,16 @@ red bar, brighter red when critically low) directly under the fuel bar.
 On destruction: 70 explosion particles (`kind 3`, ~1.1 s life), the wreck is
 parked (`set_gravity_scale(0)`, velocities zeroed) so the camera holds still,
 input is dead (`crashed` gates thrust/RCS and ship rendering), and a "CRASHED"
-banner shows. After `CRASH_DIALOG_DELAY = 1.5 s` the **crash dialog** takes
+banner shows. **The wreck is never stepped again** (2026-09): main's
+fixed-timestep loop is gated on `!sim.crashed` and breaks out — draining
+`phys_accum` — the moment a tick destroys the ship, and the impact site
+snaps `prev_ship` to the parked pose. Before that the pipeline kept
+stepping the parked-but-still-overlapping wreck through the 1.5 s grace,
+and Rapier's penetration correction shoved it out of the rock a little per
+tick, so the wreck crept away from the crash site and the camera panned
+after it (a long-standing report; the crash dialog stopped stepping, which
+is why the pan ended there). Nothing after the destroying tick is
+recorded, resimmed or verified, so the freeze changes no replay. After `CRASH_DIALOG_DELAY = 1.5 s` the **crash dialog** takes
 over (see below; on web the HTML game-over screen sits on top of it);
 respawn happens from its Fly-again action (or the R key,
 which works from any mode) and returns to **`SPAWN_X` = 0, the original
