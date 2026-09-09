@@ -2140,7 +2140,19 @@ and can never touch prod boards. All JS-side in `index.html`:
   a lost 201 response just writes the same score twice, cosmetic — and
   after a 201 it re-runs `applyGlobalRecord` once immediately and once
   ~20 s later, so a fresh record becomes BEST + the racing ghost after
-  the async verdict lands. **Own-row "verifying…"** (`pendingVerify` /
+  the async verdict lands. **Score receipts (#157 step 0, 2026-09)**:
+  the 201 also carries a signed `receipt` (backend-minted HMAC over
+  level / score / runId — see the backend's `receipt.rs`), which
+  `storeReceipt` appends to `localStorage.pegasus_receipts` (`{r, name,
+  ts}` entries, newest last, capped at 500). It is the proof that THIS
+  device made THAT submission: when accounts land (#157 step 4b) a
+  player presents their receipts and the server adopts exactly those
+  rows — a run submitted without a stored receipt can never be adopted,
+  which is why this shipped ahead of accounts. Identity-adjacent, so it
+  is excluded from bug-report zips like the device id, never sent
+  anywhere today, and destined for the #172 store. Issued for every
+  accepted submission whatever the later verdict (it must not become a
+  rejection oracle). **Own-row "verifying…"** (`pendingVerify` /
   `mergePendingRow`): the 201's runId is remembered and the board screen
   merges the submitter's own entry in at its rank — dimmed, amber
   "verifying…" instead of the date, no ▶ (the blob isn't served until
