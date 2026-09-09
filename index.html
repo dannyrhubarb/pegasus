@@ -1297,11 +1297,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">9c35d53</div>
+        <div class="info-value" id="git-rev">0446e93</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-09-08T17:59:31Z</div>
+        <div class="info-value" id="build-time">2026-09-09T19:30:50Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -2722,10 +2722,11 @@
       push("level", currentLevelFile || "(none)");
       push("screen", overlay || "game");
       // Settings & state: every pegasus_* localStorage key except the
-      // bulky ones and the anonymous device id (that stays on the device).
-      const skip = ["pegasus_device_id", "pegasus_log", "pegasus_board_cache",
-                    "pegasus_editor_doc", "pegasus_custom_level", "pegasus_date_locale",
-                    "pegasus_recent_runs"];
+      // bulky ones and the identity-adjacent ones — the anonymous device
+      // id and the score receipts stay on the device.
+      const skip = ["pegasus_device_id", "pegasus_receipts", "pegasus_log",
+                    "pegasus_board_cache", "pegasus_editor_doc", "pegasus_custom_level",
+                    "pegasus_date_locale", "pegasus_recent_runs"];
       try {
         for (let i = 0; i < localStorage.length; i++) {
           const k = localStorage.key(i);
@@ -2851,7 +2852,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "9c35d53";
+    const wasmRev = "0446e93";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -3418,7 +3419,7 @@
     // an app resumed from the switcher for weeks still sees a new verdict:
     // - `minBuild` {android, ios} walls shell builds below it (CI run
     //   number); `minWebBuildTime` (ISO instant) walls web pages whose
-    //   baked 2026-09-08T17:59:31Z predates it. A wall NEVER interrupts a live
+    //   baked 2026-09-09T19:30:50Z predates it. A wall NEVER interrupts a live
     //   play: a mid-flight/replay verdict latches in `wallPolicy` and
     //   showScreen raises it at the next screen (pause, crash, game over,
     //   exit) — boot is menu-open, so launch walls immediately. On the web
@@ -3762,6 +3763,7 @@
               window.pegLog.add("submit",
                 "accepted runId=" + (res && res.runId ? res.runId : "(none)"));
             }
+            if (res && res.receipt) storeReceipt(res.receipt, playerName());
             if (res && res.runId) {
               pendingVerify = {
                 stem: levelStem(file), name: playerName(), score: entry.d,
@@ -3895,6 +3897,28 @@
     // oracle) design. The window covers the worker's worst case (a 60-min
     // recording resims in ~1–2 min).
     const PENDING_VERIFY_MS = 3 * 60 * 1000;
+    // Score receipts (pegasus#157 step 0): every accepted submit answers
+    // with a signed `receipt` — the proof that THIS device made THAT
+    // submission. Kept locally (newest last, capped) so that when
+    // accounts arrive a player can present them and adopt exactly their
+    // own anonymous rows; a run submitted without a stored receipt can
+    // never be adopted, which is why this ships long before accounts do.
+    // Identity-adjacent: excluded from bug reports like the device id,
+    // and destined for the #172 store once that exists. Never sent
+    // anywhere today.
+    const RECEIPTS_KEY = "pegasus_receipts";
+    const RECEIPTS_MAX = 500;
+    function storeReceipt(receipt, name) {
+      try {
+        if (typeof receipt !== "string" || !receipt || receipt.length > 512) return;
+        let list = [];
+        try { list = JSON.parse(localStorage.getItem(RECEIPTS_KEY) || "[]"); } catch (e) { list = []; }
+        if (!Array.isArray(list)) list = [];
+        list.push({ r: receipt, name: name || "", ts: new Date().toISOString() });
+        if (list.length > RECEIPTS_MAX) list = list.slice(list.length - RECEIPTS_MAX);
+        localStorage.setItem(RECEIPTS_KEY, JSON.stringify(list));
+      } catch (e) { /* storage full / disabled — never break the submit path */ }
+    }
     let pendingVerify = null; // {stem, name, score, runId, ts, until}
     function mergePendingRow(stem, file, scores) {
       const p = pendingVerify;
