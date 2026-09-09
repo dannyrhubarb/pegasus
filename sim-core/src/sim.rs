@@ -1903,6 +1903,131 @@ mod tests {
     }
 
     #[test]
+    fn wells_geometry_keeps_the_cavern_and_every_shaft_open() {
+        // Geometry lint for "Well, well, well": the cavern highway, all three
+        // well shafts (sampled down their centre lines) and every base deck
+        // must be open space. The shafts are drawn as perpendicular offsets
+        // of a centre line, so an authoring slip shows up as rock ON that
+        // line — exactly what this walks.
+        let level = Level::parse(include_str!("../../levels/wells.level"));
+        assert_eq!(level.scoring, Scoring::Time);
+        let t = level.terrain.as_ref().expect("wells must be a terrain level");
+        assert_eq!(t.pads.len(), 3, "Well, well, well ships with three bases");
+
+        let sp = t.start.expect("Well, well, well spawns on a start platform");
+        for dx in [-PAD_HALF_W, 0.0, PAD_HALF_W] {
+            assert!(!t.point_in_rock(glam::vec2(sp.x + dx, sp.y + 0.4)),
+                "start platform deck is buried in rock");
+        }
+        assert!(!t.point_in_rock(glam::vec2(0.0, level.stand_y(0.0))));
+
+        // The cavern highway: open air from wall to wall, above the floor
+        // humps and below the hanging spurs.
+        for x in (-22..=136).step_by(4) {
+            assert!(!t.point_in_rock(glam::vec2(x as f32, 10.0)),
+                "cavern highway blocked at x={x}");
+        }
+        // Each well: mouth x, then waypoints along its centre line IN PATH
+        // ORDER as (x, y). Path order, not depth order, because the siphon's
+        // depth is not monotonic — it climbs back up between its two U-turns.
+        // (name, mouth x, centre line) — an alias because the tuple trips
+        // clippy::type_complexity written out inline.
+        type Shaft = (&'static str, f32, &'static [(f32, f32)]);
+        let shafts: [Shaft; 3] = [
+            ("winding", 30.0,
+             &[(32.5, -5.0), (37.8, -13.0), (28.7, -21.0), (22.0, -29.0),
+               (30.3, -37.0), (38.0, -45.0), (32.1, -53.0)]),
+            ("siphon", 60.0,
+             &[(60.0, -11.0), (60.0, -22.0), (60.0, -33.0), (62.6, -40.4),
+               (69.7, -43.0), (76.3, -39.3), (78.0, -31.0), (78.1, -20.6),
+               (82.3, -14.3), (89.8, -13.4), (95.3, -18.6), (96.0, -28.0),
+               (96.0, -39.0), (96.0, -50.0)]),
+            ("deep", 118.0,
+             &[(118.8, -10.0), (119.6, -20.0), (119.2, -30.0), (117.9, -40.0),
+               (116.7, -50.0), (116.5, -60.0), (117.4, -70.0), (118.8, -80.0)]),
+        ];
+        for (name, mouth_x, line) in shafts {
+            // The mouth is a hole in the cavern floor: open from above.
+            for h in [2.0f32, 6.0, 12.0] {
+                assert!(!t.point_in_rock(glam::vec2(mouth_x, h)),
+                    "{name} well mouth blocked {h} m above the floor");
+            }
+            for &(x, y) in line {
+                assert!(!t.point_in_rock(glam::vec2(x, y)),
+                    "{name} well is rock at ({x}, {y})");
+            }
+            // Shape pins. A shaft flattened into a plain vertical hole would
+            // still pass every point_in_rock above, so assert the shapes
+            // themselves: how often the centre line reverses sideways (the
+            // winding well's turns) and how often it reverses VERTICALLY
+            // (the siphon climbing between its two U-turns).
+            let steps: Vec<(f32, f32)> = line.windows(2)
+                .map(|w| (w[1].0 - w[0].0, w[1].1 - w[0].1)).collect();
+            let turns = steps.windows(2).filter(|s| s[0].0 * s[1].0 < 0.0).count();
+            let flips = steps.windows(2).filter(|s| s[0].1 * s[1].1 < 0.0).count();
+            match name {
+                "winding" => assert!(turns >= 3,
+                    "the winding well must turn at least three times, got {turns}"),
+                "siphon" => {
+                    // Down, up, down: two reversals, and the climb has to be
+                    // a real one rather than a wobble.
+                    assert_eq!(flips, 2,
+                        "the siphon must U-turn up and then back down, got {flips}");
+                    let climb: f32 = steps.iter().filter(|s| s.1 > 0.0).map(|s| s.1).sum();
+                    assert!(climb > 15.0,
+                        "the siphon's U-turn must climb properly, got {climb:.1} m");
+                }
+                "deep" => {
+                    let wander = line.iter()
+                        .map(|&(x, _)| (x - 118.0f32).abs()).fold(0.0, f32::max);
+                    assert!(wander < 4.0,
+                        "the deep well must stay near-straight, wandered {wander:.1} m");
+                }
+                _ => {}
+            }
+        }
+        for p in &t.pads {
+            for dx in [-PAD_HALF_W, 0.0, PAD_HALF_W] {
+                assert!(!t.point_in_rock(glam::vec2(p.x + dx, p.y + 0.4)),
+                    "base at ({},{}) deck is buried in rock", p.x, p.y);
+            }
+            // Room above the deck to shed a long fall's speed before landing.
+            for h in [3.0f32, 6.0, 9.0] {
+                assert!(!t.point_in_rock(glam::vec2(p.x, p.y + h)),
+                    "base at ({},{}) has no braking room {h} m up", p.x, p.y);
+            }
+        }
+    }
+
+    #[test]
+    fn every_wells_base_is_landable_and_the_last_one_completes() {
+        // Each of the three bases must be a real landing: park on it with the
+        // other two already visited and the run completes there. Catches a
+        // deck the shaft geometry won't let the ship settle on.
+        let level = Level::parse(include_str!("../../levels/wells.level"));
+        let pads = level.terrain.as_ref().unwrap().pads.clone();
+        let all = (1u64 << pads.len()) - 1;
+        for (i, pad) in pads.iter().enumerate() {
+            let mut sim = Sim::new(level.clone());
+            let mut kf = spawn_keyframe(&level, 0.0);
+            kf.x = pad.x;
+            kf.y = pad.y + 0.78;
+            kf.visited = all & !(1 << i); // every base but this one
+            sim.restore(&kf);
+            let mut completed = false;
+            for _ in 0..(3.0 / PHYSICS_DT) as u32 {
+                if sim.tick(InputState::default()).completed {
+                    completed = true;
+                    break;
+                }
+            }
+            assert!(completed, "base {i} at ({},{}) never registered a landing",
+                pad.x, pad.y);
+            assert!(!sim.crashed, "base {i} landing destroyed the ship");
+        }
+    }
+
+    #[test]
     fn spawn_has_ground_under_the_ship() {
         // The window syncs inside restore/tick, so even tick 0 collides:
         // an idle ship must still be standing (not fallen through) after 2 s.
