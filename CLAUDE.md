@@ -350,7 +350,7 @@ push-retry loop for concurrent deploys):
 - `sim-core/` — the **`pegasus-sim` library crate** (workspace member): the whole deterministic half of the game, extracted 2026-07 so pegasus-backend can compile the IDENTICAL simulation for server-side score verification (it consumes this crate as a cargo **git dependency pinned to a `main` rev** — physics/level changes here need a backend re-pin + redeploy, see the backend repo's CLAUDE.md). **Nothing in it may depend on macroquad or any nondeterminism**; it uses `glam` (pinned to the version macroquad 0.4.16 re-exports, so `Vec2` unifies across the boundary) + **TWO Rapier versions** (`rapier_legacy` = 0.23.1 frozen, `rapier2d` = 0.35 — see "Physics engines") + `miniz_oxide`:
   - `sim-core/src/engine.rs` — **the physics engines**: the one small interface `Sim` needs (ship body, static segment/hull colliders, forces, `step`) implemented twice, once per Rapier version, selected per recording by the ruleset's `engine` field — see "Physics engines"
   - `sim-core/src/sim.rs` — **the deterministic simulation core**: `Sim` owns all Rapier state, the sliding collider windows (BTreeMaps) and ship systems (fuel/hull/score/landing/crash), advanced ONLY by `tick(InputState) -> TickReport` at `PHYSICS_DT`; plus `resim(&Recording)` and all physics constants. Same inputs + same start keyframe → bit-identical trajectory (unit-tested). **Any new gameplay force/effect must go through `tick`** — frame-level physics mutation would break replay determinism.
-  - `sim-core/src/world.rs` — deterministic world generation, parameterized by a **`Level`** (see "Levels"): cave curves, shafts, obstacles, pads and `stand_y` are all `Level` methods; plus **`Terrain`** (hand-drawn polygon worlds — see "Levels"), `Rng`/`hash_u32`, the world constants (`SEG_LEN`, `RESET_X`, `PERIOD`, `V_PERIOD`, …) and `shipped_levels()` — the stem → `Level` map of the compiled-in level files the backend verifier params-checks submissions against (kept in sync with `levels/manifest.json` by a unit test)
+  - `sim-core/src/world.rs` — deterministic world generation, parameterized by a **`Level`** (see "Levels"): cave curves, shafts, obstacles, pads and `stand_y` are all `Level` methods; plus **`Terrain`** (hand-drawn polygon worlds — see "Levels"), `Rng`/`hash_u32`, the world constants (`SEG_LEN`, `RESET_X`, `PERIOD`, `V_PERIOD`, …) and `shipped_levels()` — the stem → `Level` map of the compiled-in level files the backend verifier params-checks submissions against (a unit test pins every `levels/manifest.json` entry to one; a shipped level may stay UNLISTED mid-rollout — see "Levels")
   - `sim-core/src/replay.rs` — the hybrid `Recording` format + blob codec (see "Hybrid recording")
   - `sim-core/examples/replay_drift.rs` — **replay drift check**: re-sims every `.pgrec` in a directory on THIS build and reports per-keyframe drift (bit-exact count, first divergence, max drift) plus a port of the backend verifier's segment loop and verdict (`cargo run --release --example replay_drift -- blobs/`; an optional `scores.txt` enables the score bound). The measuring tool AND the regression gate for physics-engine work — see "Physics engines"
   - `sim-core/examples/landing_diag.rs` — **landing diagnostic**: re-sims a `.pgrec` blob (e.g. from a bug-report zip) and logs the landing predicate around every pad approach — which settle condition held/failed per tick and how far the registration timer got (`cargo run --release --example landing_diag -- blob.pgrec`). Built for "my landing didn't register" reports; the verifier-side twin is pegasus-backend's `verify_blob`
@@ -1463,7 +1463,58 @@ tunnels, five pads scattered through them (incl. a perch on the west
 tunnel's sill) plus a neutral `start` platform in the spawn chamber,
 **time-scored**: visit all five as fast as you can, the run ends on the
 last pad; its geometry-lint unit test asserts every chamber / tunnel /
-pad / start waypoint is open space via `Terrain::point_in_rock`).
+pad / start waypoint is open space via `Terrain::point_in_rock`) and
+**Well, well, well** (2026-09, PR #213 by @marcuseinar — **UNLISTED until
+the backend repin that pins its `fuel`/`refuel_rate` is promoted; the
+manifest row + its `Whats-new:` entry are the follow-up PR**, per the
+two-step rollout below: the second hand-drawn level — one big
+cavern with an uneven roof, and three vertical WELLS sunk into its floor:
+**winding** (three smooth turns, 60 m), **siphon** (down, a 180° U-turn
+UP, then a reversed U-turn back DOWN, 56 m) and **almost-straight** (90 m,
+the long haul), each ending in a bare dead end with a base on it, plus a
+neutral `start` platform at x = 0. **Time-scored**: down and up each well,
+the run ends on the last base. Flies on `fuel = 500` with
+`refuel_rate = 125` — five times the endurance, with the pit-stop rate
+raised to match so a refill still takes the stock four seconds and the
+percentage gauge reads as it does everywhere else; the wells are long
+enough that the default tank made the climbs a fuel puzzle rather than a
+flying one. Its shafts are drawn as PERPENDICULAR offsets of a centre
+line (a horizontal offset would pinch the corridor wherever the shaft
+leans), each easing into and out of a dead-vertical run at the mouth and
+the floor: a shaft already leaning at the mouth cuts the opening
+diagonally — one lip sunk into the floor, the other standing proud of it
+— and a vertical finish is what gives the base a clean horizontal floor
+(long enough that the deck sits under PLUMB shaft, not under one still
+easing over). **Curvature does NOT bound the amplitude** — the tempting
+assumption, and wrong: where the centre line's radius drops under the
+half-width the mitred inner wall self-intersects, but clipping that loop
+IS the correct offset — the corridor opens into a rounded bay instead of
+pinching, so the shaft holds three ±8 m turns at a measured-constant 9 m
+width. What actually bounds the shapes is the rock left between
+neighbouring wells (≥ 10 m here) and, at a U-turn, the turn radius: 9 m
+against a 5.5 m half-width leaves a 3.5 m inner radius, so the inner wall
+is a real semicircle and the half-disc it encloses is ordinary rock
+hanging off the pillar above it. The siphon's legs sit one turn-diameter
+apart, which is what leaves 7 m pillars between them, and its upper
+U-turn apex is held 7.5 m below the cavern floor — any thinner and the
+climb would breach into the cavern and could be skipped.
+**The basement is ONE ROCK BLOCK PER WELL, each cut by a keyhole slit
+tracing that well's void** (top edge → down the west wall → across the
+floor → up the east wall → on along the top edge). Vertical strips
+bounded by well walls — the obvious scheme — cannot express a shaft that
+doubles back, because the left/right walls swap sides the moment travel
+reverses; the slit only needs the void outline, so it takes any shape,
+needs no polygon clipper, and leaves a U-turn's inner pillar as ordinary
+rock. **Rock extends 45 m past anything reachable**: the world's outer
+faces are exposed (nothing is behind them), so the renderer lights an
+edge band along each, and at a tighter margin those bands hang in the
+void below the deep well and past the cavern walls — visible rock edges
+you can never crash into. Lint tests walk every shaft's centre line IN
+PATH ORDER (the siphon's depth is not monotonic), PIN THE SHAPES (winding
+≥ 3 sideways reversals; siphon exactly 2 VERTICAL reversals plus a real
+climb; deep well wanders < 4 m — a shaft flattened to a plain vertical
+hole passes every point-in-rock check otherwise) and land the ship on all
+three bases.).
 **The Caves** (the original shafted world) was retired 2026-07 with The
 Rift — its world survives as the compiled-in `Level::demo()` (`pads`
 scoring), which remains the no-manifest fallback and the fixture for the
@@ -1496,10 +1547,17 @@ writes the UTF-8 bytes via `wasm_memory.buffer`, `load_level(len)` parses it
 into `PENDING_LEVEL`. The main loop applies a pending level at the next frame
 boundary as a **full fresh start** (new `Sim`, new recorder, ghost dropped —
 it was flown on a different world; a re-push of the identical level is a
-no-op). Adding a level = add the file + list it in the manifest (removing
-one is the reverse — also drop it from `shipped_levels()`, the sync test
-pins the two together); the deploy copies `levels/` verbatim
-(`build-site`). Selection persists in `localStorage` (`pegasus_level`).
+no-op). **Adding a level is a TWO-STEP rollout** (since pegasus-backend#43
+the verifier REJECTS unknown stems outright — a listed level nobody has
+pinned gets every score silently discarded, an empty board eating the
+launch-day runs): (1) merge the file + its `shipped_levels()` entry with
+NO manifest row (unlisted — no player sees it, and the commit carries NO
+`Whats-new:` trailer, the changelog must not advertise it); (2) the
+backend repins to the merged rev and the repin is PROMOTED to prod; (3) a
+one-line follow-up PR adds the manifest row, with the level's `Whats-new:`
+entry on it. The sync test enforces manifest ⊆ `shipped_levels()` and
+allows the unlisted state (removing a level is the reverse: drop the row,
+then the entry); the deploy copies `levels/` verbatim (`build-site`). Selection persists in `localStorage` (`pegasus_level`).
 **There is no "default level"** — Fly always goes through the picker; boot
 just pre-loads the saved selection (else the first manifest level — also
 the recovery path when a saved level was retired from the manifest) behind
