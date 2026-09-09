@@ -5157,23 +5157,31 @@ mod tests {
 
     #[test]
     fn shipped_levels_map_stays_in_sync_with_the_manifest() {
-        // The backend verifier params-checks submissions against
-        // world::shipped_levels() — a level listed in the manifest but
-        // missing there silently loses that check (unknown stems are
-        // accepted un-params-checked by design).
+        // The backend verifier accepts ONLY stems it finds in
+        // world::shipped_levels() (pegasus-backend#43: unknown stems are
+        // rejected outright), so every level the manifest shows players
+        // MUST have an entry — a listed-but-unpinned level would have all
+        // its scores silently discarded. The reverse is allowed: a shipped
+        // level may be UNLISTED, the staging state of the two-step level
+        // rollout (merge the file + its entry, let the backend repin and
+        // promote, THEN add the manifest row — see "Levels" in CLAUDE.md).
         let manifest = include_str!("../levels/manifest.json");
         let shipped = pegasus_sim::world::shipped_levels();
         for (stem, lvl) in &shipped {
+            assert!(!lvl.name.is_empty(), "shipped level {stem} has no name");
+        }
+        for m in manifest.match_indices(".level\"") {
+            let head = &manifest[..m.0];
+            let stem = &head[head.rfind('"').map_or(0, |q| q + 1)..];
             assert!(
-                manifest.contains(&format!("\"{stem}.level\"")),
-                "shipped_levels entry {stem} is not in levels/manifest.json"
+                shipped.iter().any(|(s, _)| *s == stem),
+                "levels/manifest.json lists {stem}.level but world::shipped_levels() has no entry for it"
             );
-            assert!(!lvl.name.is_empty());
         }
         assert_eq!(
             manifest.matches(".level").count(),
-            shipped.len(),
-            "levels/manifest.json and world::shipped_levels() are out of sync"
+            manifest.match_indices(".level\"").count(),
+            "every manifest entry is a quoted \"<stem>.level\" string"
         );
     }
 
