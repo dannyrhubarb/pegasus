@@ -16,7 +16,9 @@ android {
         // CI passes the workflow run number so every Play upload is a new,
         // monotonically increasing versionCode; local builds default to 1.
         versionCode = (System.getenv("PEGASUS_VERSION_CODE") ?: "1").toInt()
-        versionName = "1.0"
+        // Marketing version = the release tag (tools/version.sh --marketing,
+        // exported by CI as PEGASUS_VERSION_NAME); local builds read 0.0.0.
+        versionName = System.getenv("PEGASUS_VERSION_NAME") ?: "0.0.0"
         // Launcher label, overridden by the preview build type so an
         // on-demand PR build is tellable from the real app in the launcher.
         manifestPlaceholders["appLabel"] = "Pegasus"

@@ -20,8 +20,10 @@
 #   PLAY_SERVICE_ACCOUNT_JSON   a Google Cloud service-account JSON key with
 #                               release access in Play Console → API access
 #
-# versionCode = the workflow run number (monotonic); versionName stays
-# whatever app/build.gradle.kts sets. NOTE: the very first AAB must be
+# versionCode = the workflow run number (monotonic); versionName = the
+# release tag (tools/version.sh --marketing — the run FAILS on an untagged
+# history: a store release is cut from a tagged main, see CLAUDE.md
+# "Versioning"). NOTE: the very first AAB must be
 # uploaded to Play Console manually (Google requirement) — grab it from
 # this workflow's artifacts.
 name: Android release
@@ -119,6 +121,9 @@ jobs:
 
       - name: Install wasm-opt
         run: sudo apt-get install -y binaryen
+
+      - name: Derive the marketing version from the release tag
+        run: echo "PEGASUS_VERSION_NAME=$(tools/version.sh --marketing)" >> "$GITHUB_ENV"
 
       - name: Assemble webroot
         run: ./android/sync-web.sh
