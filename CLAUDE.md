@@ -100,7 +100,7 @@ push-retry loop for concurrent deploys):
 - `editor.html` — the **standalone level editor** (issue #89 v1, 2026-07): draws hand-drawn `.level` worlds — the same `poly`/`pad`/`start` representation The Hollows uses — on a pan/zoom canvas. Self-contained like `index.html` (no CDNs), copied by `build-site`. **Deliberately UNLINKED from the game UI** (owner decision pre-merge): it lives at its own path with no menu button and no picker row; the game only meets it through the `?custom=1` test-fly handoff. **While it stays unlinked, editor commits carry NO `Whats-new:` trailers** (the changelog must not advertise an unannounced feature — the PR #110 branch had its trailers stripped before merge; give the editor one proper entry when it's linked up for real). See "Level editor & custom drafts" under "Levels"
 - `tools/gen-third-party-licenses.py` + `third-party-licenses.html` — the generated third-party attribution page served with the site and linked from the About screen; regenerate when `Cargo.lock` changes (see "License")
 - `privacy.html` — standalone privacy policy served with the site (and bundled into both apps), written for the Play Store listing's required privacy-policy URL; same substance as the About screen's `#privacy-note` — keep the two in agreement when the analytics story changes
-- `app-policy.json` — the **checked-in update/config policy** every client fetches at launch (`{}` = no verdicts): **the remote lever over ALREADY-INSTALLED apps and stale web tabs** — commit a `config` override to repoint old installs at a moved backend with no store release, or a `minBuild`/`minWebBuildTime` wall for a genuinely breaking change. **Reach for this whenever a backend move or compatibility break is being planned** (it exists because the #171 migration had no such lever and drained for weeks — pegasus-backend#38); see "App update policy" under "Game menu"
+- `app-policy.json` — the **checked-in update/config policy** every client fetches at launch (`{}` = no verdicts): **the remote lever over ALREADY-INSTALLED apps and stale web tabs** — commit a `config` override to repoint old installs at a moved backend with no store release, a `minBuild`/`minWebBuildTime` wall for a genuinely breaking change, or a `recommendBuild`/`recommendWebBuildTime` nudge (same screen with a Not-now button) for an update that is strongly advised but not required. **Reach for this whenever a backend move or compatibility break is being planned** (it exists because the #171 migration had no such lever and drained for weeks — pegasus-backend#38); see "App update policy" under "Game menu"
 - `tools/gen-whats-new.py` + `tools/whats-new-backfill.json` + `tools/whats-new-overrides.json` — deploy-time generator for `whats-new.json`, the About screen's What's New changelog (see "What's new page" — **every user-facing commit needs a `Whats-new:` trailer**; the overrides file rewords already-merged entries)
 - `.github/labels.json` + `tools/sync-labels.py` + `.github/workflows/labels.yml` — the **checked-in issue-label convention** (`type:` / `area:` / `status:` groups); edit the JSON, never the GitHub UI — see "Git workflow"
 - `index.html` — web wrapper, safe-area insets, the **HTML game menu** (start / pause / game-over screens, level picker, settings, high scores, about — see "Game menu"), **gamepad polling**, and a **boot guard** (touch/stick input moved in-canvas — no touch handlers here any more): a small standalone `<script>` tag ahead of the bundle (script tags parse independently, so no error in the bundle/main script can kill it) that paints any script error on screen with file:line and offers a tap-to-reload if `wasm_exports` is missing 8 s after load. Keep it first and self-contained. It also pushes each reported error into a capped `window.__pegErrs` buffer (push-only — the guard never depends on anything) that the analytics module drains (see "Analytics"). It also wraps `console.error` (installed ahead of the bundle, so the wasm `console_error` import routes through it) and appends the last logged error to the banner when the error event is anonymous or attributed to the `.wasm` file — **a Rust panic reaches JS as an opaque trap** (`RuntimeError: unreachable`; iOS Safari mutes it further to a bare "Script error." with no filename, because wasm frames fail its same-origin check), and the only useful description is the panic-hook line logged just before the trap (`src/main.rs` installs `std::panic::set_hook` → `error!("{}", info)`; the *default* hook prints the useless Debug form `PanicHookInfo { payload: Any { .. }, … }`). Unhandled promise rejections get the same banner (skipped when `reason` is null). **Fully-anonymous errors (no filename AND no console.error trace) are deliberately ignored**: same-origin scripts always carry file:line and a wasm panic always logs via the hook first, so the only things that land there are Safari-injected third-party scripts — reproduced live on iOS: opening the **share sheet** runs share/action extensions' preprocessing JS in the page, and an error in any of them arrives as a muted "Script error." (this was the mystery banner of 2026-07-06, seen right after the Pegasus rename and initially blamed on it).
@@ -663,6 +663,30 @@ release actually runs. All keys optional (`{}` = no verdicts):
   the reload usually IS the fix; the latch keeps a cache-wedged client
   (the `?fresh=` lesson above) from reload-looping, and that client gets
   the visible wall instead. Dev builds (placeholder) are exempt.
+- `recommendBuild` `{android, ios}` / `recommendWebBuildTime` (ISO
+  instant): the **SOFT tier** (2026-09) — same thresholds and the same
+  `scr-update` screen, titled UPDATE RECOMMENDED, with a **Not now**
+  button (`#btn-update-skip`, an `.mbtn.back`, so hardware back is the
+  same dismiss). For an update that is strongly advised but not required
+  (a fix worth nagging about that breaks nothing when skipped). Rules:
+  **min always wins** — a build under both thresholds gets the hard wall
+  (`applyWall` clears `nagPolicy` on a hard verdict; under the wall the
+  hidden Not-now's handler no-ops, so a synthetic click or hardware back
+  changes nothing — verified headless); the nudge shows **only on the way
+  to the main menu** (`showScreen("scr-home")` is the one intercept —
+  boot is menu-open so a launch verdict shows at once; a verdict arriving
+  mid-play latches in `nagPolicy` and never interrupts the crash flow,
+  the pause screen or game-over — those need their own buttons); it
+  spends **no silent self-reload** on the web (a reload with a run paused
+  behind the menu would kill it, and the player was offered a choice);
+  and **Not now dismisses it for the session PER THRESHOLD**
+  (`pegasus_update_nag` in sessionStorage = `"<platform>:<threshold>"`,
+  with an in-memory twin when storage is blocked — a raised
+  recommendation asks again, a cold start asks again, a re-fetch of the
+  same policy doesn't). `recommendMessage` replaces the nudge's text
+  like `message` does the wall's. Does NOT gate the auto-fly-again
+  setting (that reads `wallPolicy` only). `build-site` validates the
+  three keys like their `min*` twins.
 - `config` `{apiBaseUrl, replayBaseUrl, wsUrl}`: **outranks the baked
   config.json IN THE SHELLS ONLY** (the online layer's `Promise.all`
   waits for both; the web page never applies it — its config.json is
@@ -2754,7 +2778,7 @@ commit the refreshed page.
 - **Always open a PR** after pushing a feature branch — standing instruction
   from the owner (no need to ask first). The PR also produces a phone-testable
   preview deployment at `pr-<n>/`.
-- Development branch: `claude/throttle-steering-reversal-5sirm6` (current); previous: `claude/flux-one-minute-level-c3d5zy`
+- Development branch: `claude/update-wall-skip-button-juh884` (current); previous: `claude/throttle-steering-reversal-5sirm6`
 - Merges to `main` via rebase PRs using the GitHub MCP tools (`mcp__github__create_pull_request`, `mcp__github__merge_pull_request`).
 - **Curate the branch before merging.** Rebase merges land every branch
   commit on `main` verbatim, so branch noise becomes permanent history.
