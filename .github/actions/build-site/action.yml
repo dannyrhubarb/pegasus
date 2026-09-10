@@ -93,15 +93,22 @@ runs:
         fi
         # Shrink the wasm (~30% on top of the size-tuned release profile).
         wasm-opt -Oz -o site/pegasus.wasm target/wasm32-unknown-unknown/release/pegasus.wasm
-        # Inject the build's git revision and timestamp into the info overlay.
+        # Inject the build's identity into the info overlay: the git revision,
+        # the tag-derived VERSION (tools/version.sh — `1.3.0+14`, see CLAUDE.md
+        # "Versioning") and the commit's own committer date as the build time.
+        # All three are pure functions of the checked-out commit — a wall-clock
+        # timestamp here was the one input that could never reproduce
+        # (reproducible builds, #214).
         # ISO-8601 UTC: index.html re-renders it in the viewer's timezone
         # and region-derived locale (fmtDateTime), like the board timestamps.
-        BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        BUILD_TIME=$(tools/version.sh --commit-date)
+        BUILD_VERSION=$(tools/version.sh)
         sed -i "s|__GIT_REVISION__|${GIT_REV}|g" site/index.html
         sed -i "s|__BUILD_TIME__|${BUILD_TIME}|g" site/index.html
+        sed -i "s|__BUILD_VERSION__|${BUILD_VERSION}|g" site/index.html
         # Version marker fetched with cache bypassed by index.html, to detect
         # a stale cached page and offer the "new build" reload toast.
-        printf '{"revision":"%s"}\n' "${GIT_REV}" > site/version.json
+        printf '{"revision":"%s","version":"%s"}\n' "${GIT_REV}" "${BUILD_VERSION}" > site/version.json
         # What's New data for the About screen: curated backfill + every
         # commit carrying a `Whats-new:` trailer. Needs full git history —
         # the workflows that use this action check out with fetch-depth: 0
@@ -124,5 +131,5 @@ runs:
         # optional ({} = no verdicts, everything fails open), but what's
         # present must be well-shaped. Clients FETCH it live — the shells
         # never bundle it (see WEB_ONLY in tools/check-bundle-sync.py).
-        python3 -c 'import json,sys,datetime; p=json.load(sys.stdin); assert isinstance(p,dict); assert all(all(k in ("android","ios") and isinstance(v,int) for k,v in p.get(b,{}).items()) for b in ("minBuild","recommendBuild")); assert all(p.get(t) is None or datetime.datetime.fromisoformat(p[t].replace("Z","+00:00")) for t in ("minWebBuildTime","recommendWebBuildTime")); assert isinstance(p.get("message",""),str) and isinstance(p.get("recommendMessage",""),str); assert all(k in ("android","ios") and isinstance(v,str) for k,v in p.get("storeUrls",{}).items()); c=p.get("config"); assert c is None or (c["apiBaseUrl"].startswith("https://") and c["replayBaseUrl"].startswith("https://"))' < app-policy.json
+        python3 -c 'import json,sys,re; p=json.load(sys.stdin); assert isinstance(p,dict); assert all(all(k in ("android","ios") and isinstance(v,int) for k,v in p.get(b,{}).items()) for b in ("minBuild","recommendBuild")); assert all(p.get(t) is None or re.fullmatch(r"\d+\.\d+\.\d+(\+\d+)?", p[t]) for t in ("minVersion","recommendVersion")); assert not {"minWebBuildTime","recommendWebBuildTime"} & p.keys(), "retired: use minVersion/recommendVersion"; assert isinstance(p.get("message",""),str) and isinstance(p.get("recommendMessage",""),str); assert all(k in ("android","ios") and isinstance(v,str) for k,v in p.get("storeUrls",{}).items()); c=p.get("config"); assert c is None or (c["apiBaseUrl"].startswith("https://") and c["replayBaseUrl"].startswith("https://"))' < app-policy.json
         cp app-policy.json site/

@@ -42,8 +42,9 @@ fi
 # replay build id). The -ios suffix marks app-bundled builds apart in
 # analytics/replays. perl, not sed -i: BSD sed on macOS needs -i ''.
 REV="$(git rev-parse --short=8 HEAD)-ios"
-BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-perl -pi -e "s/__GIT_REVISION__/${REV}/g; s/__BUILD_TIME__/${BUILD_TIME}/g" "$DEST/index.html"
+BUILD_TIME="$(tools/version.sh --commit-date)" # the commit date, not the clock — reproducible
+BUILD_VERSION="$(tools/version.sh)"
+perl -pi -e "s/__GIT_REVISION__/${REV}/g; s/__BUILD_TIME__/${BUILD_TIME}/g; s/__BUILD_VERSION__/${BUILD_VERSION}/g" "$DEST/index.html"
 
 # What's New changelog (needs full git history — fine on a normal clone).
 python3 tools/gen-whats-new.py > "$DEST/whats-new.json" || {

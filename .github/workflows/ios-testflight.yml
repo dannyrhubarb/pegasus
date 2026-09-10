@@ -113,6 +113,13 @@ jobs:
       - name: Install wasm-opt
         run: brew install binaryen
 
+      - name: Derive the marketing version from the release tag
+        # CFBundleShortVersionString = the tag (tools/version.sh --marketing);
+        # the run FAILS on an untagged history — a store release is cut from
+        # a tagged main (CLAUDE.md "Versioning"). The build number stays the
+        # run number (CURRENT_PROJECT_VERSION below).
+        run: echo "MARKETING_VERSION=$(tools/version.sh --marketing)" >> "$GITHUB_ENV"
+
       - name: Assemble WebRoot
         run: ./ios/sync-web.sh
 
@@ -148,6 +155,7 @@ jobs:
             CODE_SIGN_STYLE=Automatic \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            MARKETING_VERSION="$MARKETING_VERSION" \
             -allowProvisioningUpdates \
             -authenticationKeyID "$ASC_KEY_ID" \
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \

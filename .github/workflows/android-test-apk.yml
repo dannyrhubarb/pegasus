@@ -110,6 +110,12 @@ jobs:
       - name: Install wasm-opt
         run: sudo apt-get install -y binaryen
 
+      - name: Derive the marketing version from the latest release tag
+        # A PR branch descends from a tagged main, so this normally resolves;
+        # before the repo's first tag it falls back rather than blocking a
+        # test build (the -pr<n> suffix marks it anyway).
+        run: echo "PEGASUS_VERSION_NAME=$(tools/version.sh --marketing 2>/dev/null || echo 0.0.0)" >> "$GITHUB_ENV"
+
       - name: Assemble webroot
         env:
           # The About screen's revision row: the PR head sha, not the
