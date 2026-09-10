@@ -1291,7 +1291,7 @@
       <div class="subrow collapsed" id="prostick-wrap">
         <div>
           <label class="setrow" id="prostick-toggle-row">
-            <span>Pro stick (centre burns, push steers)</span>
+            <span>Pro stick (instant burn from centre)</span>
             <input type="checkbox" id="prostick-toggle"><span class="tgl"></span>
           </label>
         </div>
@@ -1334,11 +1334,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">2438f61-pr-209</div>
+        <div class="info-value" id="git-rev">74f5905-pr-209</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-09-10T12:56:26Z</div>
+        <div class="info-value" id="build-time">2026-09-10T19:22:03Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -1424,11 +1424,12 @@
           split controls off in Settings for one-handed flight, where
           holding the stick also fires the engine &mdash; with a short
           soft start, so a quick steering flick never burns. The
-          <b>Pro stick</b> setting swaps that for a burn zone: hold the
-          stick near where your finger landed and the engine fires
-          instantly, exactly like the throttle button; push it out to
-          steer and the engine goes cold; bring it back to burn
-          again.</li>
+          <b>Pro stick</b> setting keeps that for steering but makes a
+          plain press instant: touch and hold still and the engine fires
+          at once, exactly like the throttle button; steer straight from
+          the touch and you get the soft start instead, so a nudge never
+          burns. Once the engine is lit it stays lit while you steer,
+          until you let go.</li>
           <li><b>Keyboard</b>: &darr; thrust, &larr; / &rarr; rotate,
           R restart, Esc menu.</li>
           <li><b>Gamepad</b>: A / R2 / D-pad up thrust, left stick or D-pad
@@ -2895,7 +2896,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "2438f61-pr-209";
+    const wasmRev = "74f5905-pr-209";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -3071,11 +3072,13 @@
     // through a big flip) so steering flicks stay free; that costs every
     // stick burn ~0.2 s of full thrust the split scheme's throttle button
     // never pays, which is why a one-handed ship loses to a split-flown
-    // ghost doing the same burn. On: DEFLECTION gates the engine instead of
-    // timers — a finger held near where it landed is full throttle the
-    // frame it touches (exactly like the throttle button), pushed out to
-    // steer it is a cold engine, back to centre relights it (the wasm's
-    // STICK_BURN_* zone). Only meaningful with split controls OFF (under
+    // ghost doing the same burn. On: the engine decides once per touch
+    // (the wasm's ProStick latch) — a finger that stays in the centre for
+    // a few frames is a press and lights at full throttle on the spot
+    // (like the throttle button), a finger that steers first keeps the
+    // grace + ramp so a nudge never burns, and a lit touch stays lit
+    // through any steering until release. Only meaningful with split
+    // controls OFF (under
     // split the stick never thrusts), so the row sits right under the
     // Split row and SLIDES IN/OUT with it (owner call 2026-09; `.subrow`
     // collapse — the stored choice survives the hide and applies again
@@ -3503,7 +3506,7 @@
     // an app resumed from the switcher for weeks still sees a new verdict:
     // - `minBuild` {android, ios} walls shell builds below it (CI run
     //   number); `minWebBuildTime` (ISO instant) walls web pages whose
-    //   baked 2026-09-10T12:56:26Z predates it. A wall NEVER interrupts a live
+    //   baked 2026-09-10T19:22:03Z predates it. A wall NEVER interrupts a live
     //   play: a mid-flight/replay verdict latches in `wallPolicy` and
     //   showScreen raises it at the next screen (pause, crash, game over,
     //   exit) — boot is menu-open, so launch walls immediately. On the web
