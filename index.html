@@ -1485,15 +1485,20 @@
       <div class="mbtn back" id="btn-name-skip">Skip</div>
     </div>
 
-    <!-- Forced-update wall (app shells only, #190): shown when
-         app-policy.json declares this build too old — see the policy block
-         in the script. Deliberately NO .mbtn.back and no other exit:
-         uiBack's generic branch finds nothing, and showScreen/closeMenu
-         redirect here while walled, so the wall cannot be dismissed. -->
+    <!-- Update screen (#190) — see the policy block in the script. Two
+         modes on one screen: the forced-update WALL (app-policy.json's
+         minBuild / minWebBuildTime: this build is too old) hides the
+         Not-now button and showScreen/closeMenu redirect here while walled,
+         so it cannot be dismissed — the hidden .mbtn.back's handler no-ops
+         under the wall, so hardware back goes nowhere either; the
+         RECOMMENDED nudge (recommendBuild / recommendWebBuildTime: update
+         strongly advised, not required) shows Not now (.mbtn.back = the
+         hardware-back action too), which dismisses it for the session. -->
     <div class="screen" id="scr-update">
-      <div class="h2">UPDATE REQUIRED</div>
+      <div class="h2" id="update-title">UPDATE REQUIRED</div>
       <div class="hint" id="update-msg"></div>
       <div class="mbtn primary" id="btn-store">Update</div>
+      <div class="mbtn back" id="btn-update-skip" style="display:none">Not now</div>
     </div>
 
     <!-- CRT scanlines + vignette + sweep, over everything but tap-transparent -->
@@ -1910,11 +1915,19 @@
     // `wallPolicy` = a standing "too old" verdict whose wall hasn't been
     // raised yet because the canvas was live when it arrived (a wall must
     // never interrupt a play); the next screen raises it here.
+    // `nagPolicy` = a standing "update RECOMMENDED" verdict (the soft tier:
+    // strongly advised, not required). It shows the same screen with a
+    // Not-now button, and ONLY on the way to the main menu — never in the
+    // crash flow or over a pause, where a dismissable interstitial would
+    // just be in the way; boot is menu-open, so a launch verdict shows at
+    // once. Not now dismisses it for the session (armNag's latch).
     let walled = false;
     let wallPolicy = null;
+    let nagPolicy = null;
     function showScreen(id) {
       if (!walled && wallPolicy && id !== "scr-update") armWall(wallPolicy);
       if (walled && id !== "scr-update") id = "scr-update";
+      if (!walled && nagPolicy && id === "scr-home" && armNag(nagPolicy)) id = "scr-update";
       if (overlay === "scr-bugreport" && id !== "scr-bugreport") bugReportLeft();
       overlay = id;
       menuEl.classList.add("open");
@@ -3427,6 +3440,19 @@
     //   verdict per build spends one SILENT self-reload (sessionStorage
     //   latch — the reload usually IS the fix; the latch stops the
     //   documented cache-wedge from looping it) before anything shows.
+    // - `recommendBuild` {android, ios} / `recommendWebBuildTime`: the SOFT
+    //   tier — same thresholds, same screen, but with a Not-now button:
+    //   for an update that is strongly advised without being required (a
+    //   fix worth nagging about that breaks nothing if skipped). A build
+    //   under BOTH thresholds gets the hard wall — min always wins. The
+    //   nudge shows only on the way to the main menu (never in the crash
+    //   flow, never over a paused run — see showScreen), spends NO silent
+    //   self-reload (a reload while a run is paused would kill it, and the
+    //   player was offered a choice, not a verdict), and Not now dismisses
+    //   it for the session PER THRESHOLD (sessionStorage — a raised
+    //   recommendation asks again; a cold start asks again).
+    //   `recommendMessage` replaces the nudge's text like `message` does
+    //   the wall's.
     // - `config` overrides the baked config.json — the remote fix that
     //   would have made the #171 drain a zero-day. SHELLS ONLY, enforced
     //   at the apply site: the web's config.json is deploy-fresh at every
@@ -3461,23 +3487,46 @@
           ? { buildTime: rawBuildTime } : null;
       } catch (e) { return null; }
     })();
-    function policyWalls(p) {
-      // True only on an explicit, well-formed verdict for THIS platform.
+    function policyBelow(p, buildKey, timeKey) {
+      // True only on an explicit, well-formed verdict for THIS platform:
+      // the shell build number under `p[buildKey][platform]`, or the web
+      // build instant before `p[timeKey]`. Shared by the wall (min*) and
+      // the recommendation (recommend*) — same shape, different keys.
       try {
         if (!p || typeof p !== "object") return false;
         if (appShell) {
-          if (!p.minBuild) return false;
-          const min = p.minBuild[appShell.platform];
+          if (!p[buildKey]) return false;
+          const min = p[buildKey][appShell.platform];
           const m = appShell.build.match(/\((\d+)\)/); // "1.0 (42)" → 42
           if (typeof min !== "number" || !isFinite(min) || !m) return false;
           return parseInt(m[1], 10) < min;
         }
-        if (!webBuild || typeof p.minWebBuildTime !== "string") return false;
+        if (!webBuild || typeof p[timeKey] !== "string") return false;
         const built = Date.parse(webBuild.buildTime);
-        const min = Date.parse(p.minWebBuildTime);
+        const min = Date.parse(p[timeKey]);
         if (!isFinite(built) || !isFinite(min)) return false;
         return built < min;
       } catch (e) { return false; }
+    }
+    const policyWalls = (p) => policyBelow(p, "minBuild", "minWebBuildTime");
+    const policyRecommends = (p) => policyBelow(p, "recommendBuild", "recommendWebBuildTime");
+    function nagKey(p) {
+      // The dismiss latch is keyed on the threshold itself, so raising the
+      // recommendation re-asks while a re-fetch of the same policy doesn't.
+      return appShell
+        ? appShell.platform + ":" + p.recommendBuild[appShell.platform]
+        : "web:" + p.recommendWebBuildTime;
+    }
+    let nagDismissed = null; // in-memory twin of the sessionStorage latch
+    function nagIsDismissed(p) {
+      const k = nagKey(p);
+      if (nagDismissed === k) return true;
+      try { return sessionStorage.getItem("pegasus_update_nag") === k; } catch (e) { return false; }
+    }
+    function dismissNag(p) {
+      const k = nagKey(p);
+      nagDismissed = k;
+      try { sessionStorage.setItem("pegasus_update_nag", k); } catch (e) { /* in-memory only */ }
     }
     function policyConfig(p) {
       // The override must be complete and https to outrank the baked
@@ -3504,10 +3553,26 @@
         } catch (e) { /* storage blocked — straight to the wall */ }
       }
       walled = true;
+      fillUpdateScreen(p, false);
+    }
+    function armNag(p) {
+      // The soft verdict's counterpart: fill the screen in recommended
+      // mode (Not now shown) unless this threshold was already dismissed
+      // this session. Returns whether the screen should show.
+      if (nagIsDismissed(p)) return false;
+      fillUpdateScreen(p, true);
+      return true;
+    }
+    function fillUpdateScreen(p, soft) {
+      document.getElementById("update-title").textContent =
+        soft ? "UPDATE RECOMMENDED" : "UPDATE REQUIRED";
+      const custom = p && (soft ? p.recommendMessage : p.message);
       document.getElementById("update-msg").textContent =
-        (p && typeof p.message === "string" && p.message) || (appShell
-          ? "This version is out of date and can no longer play online. Update to keep flying."
-          : "This page is running an outdated build. Reload to get the latest version.");
+        (typeof custom === "string" && custom) || (appShell
+          ? (soft ? "A newer version with important fixes is available. Update when you can."
+                  : "This version is out of date and can no longer play online. Update to keep flying.")
+          : (soft ? "A newer build with important fixes is available. Reload to get it."
+                  : "This page is running an outdated build. Reload to get the latest version."));
       const btn = document.getElementById("btn-store");
       if (appShell) {
         const url = p && p.storeUrls && typeof p.storeUrls[appShell.platform] === "string"
@@ -3519,7 +3584,17 @@
         btn.style.display = "";
         btn.onclick = () => { location = freshUrl(); };
       }
+      document.getElementById("btn-update-skip").style.display = soft ? "" : "none";
     }
+    document.getElementById("btn-update-skip").addEventListener("click", () => {
+      // Not now — also what hardware back drives (uiBack clicks the
+      // screen's .mbtn.back). Under the HARD wall the button is hidden but
+      // a synthetic click still lands here, so it must no-op: the wall is
+      // lifted only by a corrected policy, never by the UI.
+      if (walled || !nagPolicy) return;
+      dismissNag(nagPolicy);
+      showScreen("scr-home");
+    });
     function applyWall(p) {
       if (!policyWalls(p)) {
         wallPolicy = null;
@@ -3527,14 +3602,30 @@
           walled = false;
           if (overlay === "scr-update") showScreen("scr-home"); // corrected policy lifts it
         }
+        applyNag(p);
         return;
       }
+      nagPolicy = null; // the hard verdict outranks the soft one
       wallPolicy = p;
       if (overlay === null) return; // canvas live (flight/replay): never
                                     // disturb a play — showScreen raises
                                     // the latched verdict at the next screen
       armWall(p);
       if (walled) showScreen("scr-update"); // not walled ⇒ armWall navigated away
+    }
+    function applyNag(p) {
+      // The soft tier, evaluated only once the hard one has declined. A
+      // verdict latches in `nagPolicy`; showScreen shows it on the next
+      // arrival at the main menu — or right now when the menu is already
+      // the open screen (boot, or a re-check while idling there). A
+      // withdrawn recommendation lifts a showing nudge in place.
+      if (!policyRecommends(p)) {
+        nagPolicy = null;
+        if (overlay === "scr-update" && !walled) showScreen("scr-home");
+        return;
+      }
+      nagPolicy = p;
+      if (overlay === "scr-home") showScreen("scr-home"); // re-enters via the nag hook
     }
     let cachedPolicy = null;
     let lastPolicyCheck = 0;
