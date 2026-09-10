@@ -1296,12 +1296,16 @@
     <div class="screen" id="scr-about">
       <div class="h2">ABOUT</div>
       <div class="info-row">
+        <div class="info-label">Version</div>
+        <div class="info-value" id="build-version">0.0.0+330</div>
+      </div>
+      <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">dbd03e9-pr-211</div>
+        <div class="info-value" id="git-rev">e7f06d6-pr-211</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-09-10T04:11:53Z</div>
+        <div class="info-value" id="build-time">2026-09-10T13:01:54Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -1487,11 +1491,11 @@
 
     <!-- Update screen (#190) — see the policy block in the script. Two
          modes on one screen: the forced-update WALL (app-policy.json's
-         minBuild / minWebBuildTime: this build is too old) hides the
+         minBuild / minVersion: this build is too old) hides the
          Not-now button and showScreen/closeMenu redirect here while walled,
          so it cannot be dismissed — the hidden .mbtn.back's handler no-ops
          under the wall, so hardware back goes nowhere either; the
-         RECOMMENDED nudge (recommendBuild / recommendWebBuildTime: update
+         RECOMMENDED nudge (recommendBuild / recommendVersion: update
          strongly advised, not required) shows Not now (.mbtn.back = the
          hardware-back action too), which dismisses it for the session. -->
     <div class="screen" id="scr-update">
@@ -2515,7 +2519,13 @@
     // so compare with startsWith("__") rather than a literal match.
     const gitRev = document.getElementById("git-rev");
     const buildTime = document.getElementById("build-time");
-    const rawBuildTime = buildTime.textContent.trim(); // ISO-8601 UTC when deployed
+    const rawBuildTime = buildTime.textContent.trim(); // the commit's date (ISO-8601 UTC) when deployed
+    // The tag-derived version ("1.3.0+14" — tools/version.sh, see CLAUDE.md
+    // "Versioning"): the page's identity for the update policy on EVERY
+    // platform, so it's captured raw here before the dev fallback below.
+    const buildVersion = document.getElementById("build-version");
+    const rawBuildVersion = buildVersion.textContent.trim();
+    if (rawBuildVersion.startsWith("__")) buildVersion.textContent = "dev (local build)";
     if (gitRev.textContent.trim().startsWith("__")) {
       gitRev.textContent = "dev (local build)";
     }
@@ -2725,6 +2735,7 @@
       const push = (k, v) => lines.push(k + ": " + v);
       push("reported", new Date().toISOString());
       push("build", wasmRev.startsWith("__") ? "dev (local build)" : wasmRev);
+      push("version", rawBuildVersion.startsWith("__") ? "dev (local build)" : rawBuildVersion);
       try {
         if (window.PegasusApp && PegasusApp.appBuild) push("app-build", String(PegasusApp.appBuild()));
         else if (window.__pegAppBuild) push("app-build", String(window.__pegAppBuild));
@@ -2865,7 +2876,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "dbd03e9-pr-211";
+    const wasmRev = "e7f06d6-pr-211";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -3431,8 +3442,9 @@
     // launch AND on a slow re-check (10 min + on foreground, throttled) so
     // an app resumed from the switcher for weeks still sees a new verdict:
     // - `minBuild` {android, ios} walls shell builds below it (CI run
-    //   number); `minWebBuildTime` (ISO instant) walls web pages whose
-    //   baked 2026-09-10T04:11:53Z predates it. A wall NEVER interrupts a live
+    //   number); `minVersion` ("1.3.0" or "1.3.0+14") walls EVERY platform
+    //   whose baked tag-derived 0.0.0+330 sorts below it (tuple
+    //   order — see CLAUDE.md "Versioning"). A wall NEVER interrupts a live
     //   play: a mid-flight/replay verdict latches in `wallPolicy` and
     //   showScreen raises it at the next screen (pause, crash, game over,
     //   exit) — boot is menu-open, so launch walls immediately. On the web
@@ -3440,7 +3452,7 @@
     //   verdict per build spends one SILENT self-reload (sessionStorage
     //   latch — the reload usually IS the fix; the latch stops the
     //   documented cache-wedge from looping it) before anything shows.
-    // - `recommendBuild` {android, ios} / `recommendWebBuildTime`: the SOFT
+    // - `recommendBuild` {android, ios} / `recommendVersion`: the SOFT
     //   tier — same thresholds, same screen, but with a Not-now button:
     //   for an update that is strongly advised without being required (a
     //   fix worth nagging about that breaks nothing if skipped). A build
@@ -3473,49 +3485,56 @@
       } catch (e) { /* broken bridge — treat as web */ }
       return null;
     })();
-    // The web page's own version identity: the deploy-baked build instant
-    // (`rawBuildTime`, captured by the About block above BEFORE the dev
-    // fallback rewrites the element — reading the DOM here is too late).
-    // Placeholder = dev build = feature off; previews are excluded too
-    // (fresh by construction, and the root page's cached policy must not
-    // leak into them — same localStorage origin).
-    const webBuild = (function () {
-      if (appShell) return null;
+    // The page's own version identity, on every platform: the baked
+    // tag-derived version (`rawBuildVersion`, "1.3.0+14" — captured by the
+    // About block above BEFORE the dev fallback rewrites the element).
+    // Placeholder = dev build = null; web previews are excluded too (fresh
+    // by construction, and the root page's cached policy must not leak
+    // into them — same localStorage origin). The shells' bundled page
+    // carries the same stamp, so one `minVersion` reaches all three.
+    const pageVersion = (function () {
       try {
-        if (/\/pr-\d+\//.test(location.pathname)) return null;
-        return rawBuildTime && !rawBuildTime.startsWith("__")
-          ? { buildTime: rawBuildTime } : null;
+        if (!appShell && /\/pr-\d+\//.test(location.pathname)) return null;
+        return rawBuildVersion && !rawBuildVersion.startsWith("__") ? rawBuildVersion : null;
       } catch (e) { return null; }
     })();
-    function policyBelow(p, buildKey, timeKey) {
-      // True only on an explicit, well-formed verdict for THIS platform:
-      // the shell build number under `p[buildKey][platform]`, or the web
-      // build instant before `p[timeKey]`. Shared by the wall (min*) and
-      // the recommendation (recommend*) — same shape, different keys.
+    function versionTuple(s) {
+      // "1.3.0+14" → [1, 3, 0, 14]; a bare "1.3.0" is +0. null = malformed.
+      const m = /^(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?$/.exec(String(s));
+      return m ? [m[1], m[2], m[3], m[4] || "0"].map(Number) : null;
+    }
+    function versionBelow(a, b) {
+      for (let i = 0; i < 4; i++) if (a[i] !== b[i]) return a[i] < b[i];
+      return false;
+    }
+    function policyBelow(p, buildKey, versionKey) {
+      // True only on an explicit, well-formed verdict for THIS client: a
+      // shell's store build number under `p[buildKey][platform]` (the CI
+      // run number), or ANY platform's page version below `p[versionKey]`
+      // (tag-derived, tuple order). Either one suffices. Shared by the
+      // wall (min*) and the recommendation (recommend*) — same shape,
+      // different keys.
       try {
         if (!p || typeof p !== "object") return false;
-        if (appShell) {
-          if (!p[buildKey]) return false;
+        if (appShell && p[buildKey]) {
           const min = p[buildKey][appShell.platform];
           const m = appShell.build.match(/\((\d+)\)/); // "1.0 (42)" → 42
-          if (typeof min !== "number" || !isFinite(min) || !m) return false;
-          return parseInt(m[1], 10) < min;
+          if (typeof min === "number" && isFinite(min) && m && parseInt(m[1], 10) < min) return true;
         }
-        if (!webBuild || typeof p[timeKey] !== "string") return false;
-        const built = Date.parse(webBuild.buildTime);
-        const min = Date.parse(p[timeKey]);
-        if (!isFinite(built) || !isFinite(min)) return false;
-        return built < min;
+        if (pageVersion && typeof p[versionKey] === "string") {
+          const own = versionTuple(pageVersion), min = versionTuple(p[versionKey]);
+          if (own && min && versionBelow(own, min)) return true;
+        }
+        return false;
       } catch (e) { return false; }
     }
-    const policyWalls = (p) => policyBelow(p, "minBuild", "minWebBuildTime");
-    const policyRecommends = (p) => policyBelow(p, "recommendBuild", "recommendWebBuildTime");
+    const policyWalls = (p) => policyBelow(p, "minBuild", "minVersion");
+    const policyRecommends = (p) => policyBelow(p, "recommendBuild", "recommendVersion");
     function nagKey(p) {
-      // The dismiss latch is keyed on the threshold itself, so raising the
+      // The dismiss latch is keyed on the thresholds themselves, so a raised
       // recommendation re-asks while a re-fetch of the same policy doesn't.
-      return appShell
-        ? appShell.platform + ":" + p.recommendBuild[appShell.platform]
-        : "web:" + p.recommendWebBuildTime;
+      const b = appShell && p.recommendBuild ? p.recommendBuild[appShell.platform] : null;
+      return (appShell ? appShell.platform : "web") + ":" + (b == null ? "" : b) + ":" + (p.recommendVersion || "");
     }
     let nagDismissed = null; // in-memory twin of the sessionStorage latch
     function nagIsDismissed(p) {
@@ -3545,8 +3564,8 @@
       // and IT gets the visible wall with a manual Reload instead.
       if (!appShell) {
         try {
-          if (sessionStorage.getItem("pegasus_wall_reload") !== webBuild.buildTime) {
-            sessionStorage.setItem("pegasus_wall_reload", webBuild.buildTime);
+          if (sessionStorage.getItem("pegasus_wall_reload") !== pageVersion) {
+            sessionStorage.setItem("pegasus_wall_reload", pageVersion);
             location = freshUrl();
             return; // navigating away — nothing to draw
           }
@@ -3644,7 +3663,7 @@
         .catch(() => cachedPolicy); // offline: last known policy (or none) stands
     }
     const policyPromise = (function () {
-      if (!appShell && !webBuild) return Promise.resolve(null); // dev / preview: feature off
+      if (!appShell && !pageVersion) return Promise.resolve(null); // dev / preview: feature off
       try { cachedPolicy = JSON.parse(localStorage.getItem("pegasus_app_policy") || "null"); } catch (e) { /* fresh */ }
       // Apply the cached verdict off the eval path (showScreen's helpers —
       // pegAnalytics among them — are defined below this block).

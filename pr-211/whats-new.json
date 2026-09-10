@@ -1,5 +1,10 @@
 [
  {
+  "rev": "e7f06d6",
+  "date": "2026-09-10T13:01:49Z",
+  "note": "New: The About screen now shows the game's version number — straight from the release tag"
+ },
+ {
   "rev": "dbd03e9",
   "date": "2026-09-10T04:10:36Z",
   "note": "New: When an update is worth having but not required, the game now asks nicely — with a Not-now button"
