@@ -2754,6 +2754,14 @@ commit the refreshed page.
 - **Always open a PR** after pushing a feature branch — standing instruction
   from the owner (no need to ask first). The PR also produces a phone-testable
   preview deployment at `pr-<n>/`.
+- **Never MERGE without the owner's review (owner rule, 2026-09-10)**:
+  opening a PR is standing policy; landing one is not. A push to `main`
+  publishes the live site, so every merge is a deploy. Open the PR, get
+  CI green, and STOP — merge only when the owner has approved that
+  specific PR in the session. A request to build or fix something is a
+  request for the PR, never approval to merge it; "proceed" in an earlier
+  context does not carry over. (Born 2026-09-09, when several PRs were
+  merged on assumed permission.)
 - Development branch: `claude/throttle-steering-reversal-5sirm6` (current); previous: `claude/flux-one-minute-level-c3d5zy`
 - Merges to `main` via rebase PRs using the GitHub MCP tools (`mcp__github__create_pull_request`, `mcp__github__merge_pull_request`).
 - **Curate the branch before merging.** Rebase merges land every branch
