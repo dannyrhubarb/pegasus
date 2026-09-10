@@ -981,7 +981,55 @@ tunnels, five pads scattered through them (incl. a perch on the west
 tunnel's sill) plus a neutral `start` platform in the spawn chamber,
 **time-scored**: visit all five as fast as you can, the run ends on the
 last pad; its geometry-lint unit test asserts every chamber / tunnel /
-pad / start waypoint is open space via `Terrain::point_in_rock`).
+pad / start waypoint is open space via `Terrain::point_in_rock`) and
+**Well, well, well** (2026-09: the second hand-drawn level — one big
+cavern with an uneven roof, and three vertical WELLS sunk into its floor:
+**winding** (three smooth turns, 60 m), **siphon** (down, a 180° U-turn
+UP, then a reversed U-turn back DOWN, 56 m) and **almost-straight** (90 m,
+the long haul), each ending in a bare dead end with a base on it, plus a
+neutral `start` platform at x = 0. **Time-scored**: down and up each well,
+the run ends on the last base. Flies on `fuel = 500` with
+`refuel_rate = 125` — five times the endurance, with the pit-stop rate
+raised to match so a refill still takes the stock four seconds and the
+percentage gauge reads as it does everywhere else; the wells are long
+enough that the default tank made the climbs a fuel puzzle rather than a
+flying one. Its shafts are drawn as PERPENDICULAR offsets of a centre
+line (a horizontal offset would pinch the corridor wherever the shaft
+leans), each easing into and out of a dead-vertical run at the mouth and
+the floor: a shaft already leaning at the mouth cuts the opening
+diagonally — one lip sunk into the floor, the other standing proud of it
+— and a vertical finish is what gives the base a clean horizontal floor
+(long enough that the deck sits under PLUMB shaft, not under one still
+easing over). **Curvature does NOT bound the amplitude** — the tempting
+assumption, and wrong: where the centre line's radius drops under the
+half-width the mitred inner wall self-intersects, but clipping that loop
+IS the correct offset — the corridor opens into a rounded bay instead of
+pinching, so the shaft holds three ±8 m turns at a measured-constant 9 m
+width. What actually bounds the shapes is the rock left between
+neighbouring wells (≥ 10 m here) and, at a U-turn, the turn radius: 9 m
+against a 5.5 m half-width leaves a 3.5 m inner radius, so the inner wall
+is a real semicircle and the half-disc it encloses is ordinary rock
+hanging off the pillar above it. The siphon's legs sit one turn-diameter
+apart, which is what leaves 7 m pillars between them, and its upper
+U-turn apex is held 7.5 m below the cavern floor — any thinner and the
+climb would breach into the cavern and could be skipped.
+**The basement is ONE ROCK BLOCK PER WELL, each cut by a keyhole slit
+tracing that well's void** (top edge → down the west wall → across the
+floor → up the east wall → on along the top edge). Vertical strips
+bounded by well walls — the obvious scheme — cannot express a shaft that
+doubles back, because the left/right walls swap sides the moment travel
+reverses; the slit only needs the void outline, so it takes any shape,
+needs no polygon clipper, and leaves a U-turn's inner pillar as ordinary
+rock. **Rock extends 45 m past anything reachable**: the world's outer
+faces are exposed (nothing is behind them), so the renderer lights an
+edge band along each, and at a tighter margin those bands hang in the
+void below the deep well and past the cavern walls — visible rock edges
+you can never crash into. Lint tests walk every shaft's centre line IN
+PATH ORDER (the siphon's depth is not monotonic), PIN THE SHAPES (winding
+≥ 3 sideways reversals; siphon exactly 2 VERTICAL reversals plus a real
+climb; deep well wanders < 4 m — a shaft flattened to a plain vertical
+hole passes every point-in-rock check otherwise) and land the ship on all
+three bases).
 **The Caves** (the original shafted world) was retired 2026-07 with The
 Rift — its world survives as the compiled-in `Level::demo()` (`pads`
 scoring), which remains the no-manifest fallback and the fixture for the
