@@ -1291,7 +1291,7 @@
       <div class="subrow collapsed" id="prostick-wrap">
         <div>
           <label class="setrow" id="prostick-toggle-row">
-            <span>Pro stick (instant one-handed engine)</span>
+            <span>Pro stick (centre burns, push steers)</span>
             <input type="checkbox" id="prostick-toggle"><span class="tgl"></span>
           </label>
         </div>
@@ -1334,11 +1334,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">b8eb306-pr-209</div>
+        <div class="info-value" id="git-rev">2438f61-pr-209</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-09-08T19:42:42Z</div>
+        <div class="info-value" id="build-time">2026-09-10T12:56:26Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -1424,9 +1424,11 @@
           split controls off in Settings for one-handed flight, where
           holding the stick also fires the engine &mdash; with a short
           soft start, so a quick steering flick never burns. The
-          <b>Pro stick</b> setting removes that soft start: the one-handed
-          engine then fires instantly, exactly like the throttle
-          button.</li>
+          <b>Pro stick</b> setting swaps that for a burn zone: hold the
+          stick near where your finger landed and the engine fires
+          instantly, exactly like the throttle button; push it out to
+          steer and the engine goes cold; bring it back to burn
+          again.</li>
           <li><b>Keyboard</b>: &darr; thrust, &larr; / &rarr; rotate,
           R restart, Esc menu.</li>
           <li><b>Gamepad</b>: A / R2 / D-pad up thrust, left stick or D-pad
@@ -2763,10 +2765,11 @@
       push("level", currentLevelFile || "(none)");
       push("screen", overlay || "game");
       // Settings & state: every pegasus_* localStorage key except the
-      // bulky ones and the anonymous device id (that stays on the device).
-      const skip = ["pegasus_device_id", "pegasus_log", "pegasus_board_cache",
-                    "pegasus_editor_doc", "pegasus_custom_level", "pegasus_date_locale",
-                    "pegasus_recent_runs"];
+      // bulky ones and the identity-adjacent ones — the anonymous device
+      // id and the score receipts stay on the device.
+      const skip = ["pegasus_device_id", "pegasus_receipts", "pegasus_log",
+                    "pegasus_board_cache", "pegasus_editor_doc", "pegasus_custom_level",
+                    "pegasus_date_locale", "pegasus_recent_runs"];
       try {
         for (let i = 0; i < localStorage.length; i++) {
           const k = localStorage.key(i);
@@ -2892,7 +2895,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "b8eb306-pr-209";
+    const wasmRev = "2438f61-pr-209";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -3068,9 +3071,11 @@
     // through a big flip) so steering flicks stay free; that costs every
     // stick burn ~0.2 s of full thrust the split scheme's throttle button
     // never pays, which is why a one-handed ship loses to a split-flown
-    // ghost doing the same burn. On: the stick fires at full throttle the
-    // frame it is touched, exactly like the throttle button — no grace, no
-    // ramp, no flip gate. Only meaningful with split controls OFF (under
+    // ghost doing the same burn. On: DEFLECTION gates the engine instead of
+    // timers — a finger held near where it landed is full throttle the
+    // frame it touches (exactly like the throttle button), pushed out to
+    // steer it is a cold engine, back to centre relights it (the wasm's
+    // STICK_BURN_* zone). Only meaningful with split controls OFF (under
     // split the stick never thrusts), so the row sits right under the
     // Split row and SLIDES IN/OUT with it (owner call 2026-09; `.subrow`
     // collapse — the stored choice survives the hide and applies again
@@ -3498,7 +3503,7 @@
     // an app resumed from the switcher for weeks still sees a new verdict:
     // - `minBuild` {android, ios} walls shell builds below it (CI run
     //   number); `minWebBuildTime` (ISO instant) walls web pages whose
-    //   baked 2026-09-08T19:42:42Z predates it. A wall NEVER interrupts a live
+    //   baked 2026-09-10T12:56:26Z predates it. A wall NEVER interrupts a live
     //   play: a mid-flight/replay verdict latches in `wallPolicy` and
     //   showScreen raises it at the next screen (pause, crash, game over,
     //   exit) — boot is menu-open, so launch walls immediately. On the web
@@ -3842,6 +3847,7 @@
               window.pegLog.add("submit",
                 "accepted runId=" + (res && res.runId ? res.runId : "(none)"));
             }
+            if (res && res.receipt) storeReceipt(res.receipt, playerName());
             if (res && res.runId) {
               pendingVerify = {
                 stem: levelStem(file), name: playerName(), score: entry.d,
@@ -3975,6 +3981,28 @@
     // oracle) design. The window covers the worker's worst case (a 60-min
     // recording resims in ~1–2 min).
     const PENDING_VERIFY_MS = 3 * 60 * 1000;
+    // Score receipts (pegasus#157 step 0): every accepted submit answers
+    // with a signed `receipt` — the proof that THIS device made THAT
+    // submission. Kept locally (newest last, capped) so that when
+    // accounts arrive a player can present them and adopt exactly their
+    // own anonymous rows; a run submitted without a stored receipt can
+    // never be adopted, which is why this ships long before accounts do.
+    // Identity-adjacent: excluded from bug reports like the device id,
+    // and destined for the #172 store once that exists. Never sent
+    // anywhere today.
+    const RECEIPTS_KEY = "pegasus_receipts";
+    const RECEIPTS_MAX = 500;
+    function storeReceipt(receipt, name) {
+      try {
+        if (typeof receipt !== "string" || !receipt || receipt.length > 512) return;
+        let list = [];
+        try { list = JSON.parse(localStorage.getItem(RECEIPTS_KEY) || "[]"); } catch (e) { list = []; }
+        if (!Array.isArray(list)) list = [];
+        list.push({ r: receipt, name: name || "", ts: new Date().toISOString() });
+        if (list.length > RECEIPTS_MAX) list = list.slice(list.length - RECEIPTS_MAX);
+        localStorage.setItem(RECEIPTS_KEY, JSON.stringify(list));
+      } catch (e) { /* storage full / disabled — never break the submit path */ }
+    }
     let pendingVerify = null; // {stem, name, score, runId, ts, until}
     function mergePendingRow(stem, file, scores) {
       const p = pendingVerify;
