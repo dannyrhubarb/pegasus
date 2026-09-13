@@ -5,7 +5,7 @@
 // invariants are pinned by the tests at the bottom of main.rs.
 
 use glam::{vec2, Vec2};
-use rapier2d::prelude::*;
+use crate::engine::{ColHandle, World};
 
 use crate::replay::LevelParams;
 
@@ -485,18 +485,20 @@ impl Level {
     }
 
     // Returns (top_a, top_b, bot_a, bot_b) for segment index i
-    pub fn seg_points(&self, idx: i64) -> (Point<f32>, Point<f32>, Point<f32>, Point<f32>) {
+    pub fn seg_points(&self, idx: i64) -> (Vec2, Vec2, Vec2, Vec2) {
         let x0 = idx as f32 * SEG_LEN;
         let x1 = x0 + SEG_LEN;
         let (cy0, hw0) = (self.cave_center(x0), self.cave_half_width(x0));
         let (cy1, hw1) = (self.cave_center(x1), self.cave_half_width(x1));
         (
-            point![x0, cy0 + hw0], point![x1, cy1 + hw1],
-            point![x0, cy0 - hw0], point![x1, cy1 - hw1],
+            Vec2::new(x0, cy0 + hw0), Vec2::new(x1, cy1 + hw1),
+            Vec2::new(x0, cy0 - hw0), Vec2::new(x1, cy1 - hw1),
         )
     }
 
-    pub fn insert_seg(&self, idx: i64, layer: i64, collider_set: &mut ColliderSet) -> Vec<ColliderHandle> {
+    // Ceiling then floor collider of segment `idx` on `layer` — that order
+    // is part of the deterministic handle sequence (see Sim::sync_window).
+    pub fn insert_seg(&self, idx: i64, layer: i64, world: &mut World) -> Vec<ColHandle> {
         // Shaft openings: no ceiling/floor collider where a vertical shaft
         // punches through — the shaft walls take over at the opening edges.
         if self.seg_in_opening(idx) {
@@ -504,10 +506,10 @@ impl Level {
         }
         let ly = layer as f32 * V_PERIOD;
         let (ta, tb, ba, bb) = self.seg_points(idx);
-        let off = |p: Point<f32>| point![p.x, p.y + ly];
+        let off = |p: Vec2| Vec2::new(p.x, p.y + ly);
         vec![
-            collider_set.insert(ColliderBuilder::segment(off(ta), off(tb)).friction(0.0).build()),
-            collider_set.insert(ColliderBuilder::segment(off(ba), off(bb)).friction(0.0).build()),
+            world.add_segment(off(ta), off(tb), 0.0),
+            world.add_segment(off(ba), off(bb), 0.0),
         ]
     }
 }
@@ -659,7 +661,7 @@ pub struct ObstacleSpec {
     pub cx: f32,
     pub cy: f32,
     pub rot: f32,
-    pub pts: Vec<Point<f32>>, // local-space candidate vertices for the convex hull
+    pub pts: Vec<Vec2>, // local-space candidate vertices for the convex hull
 }
 
 impl Level {
@@ -726,7 +728,7 @@ impl Level {
             let base = i as f32 / n as f32 * std::f32::consts::TAU;
             let ang = base + rng.range(-0.25, 0.25);
             let rad = r * rng.range(0.6, 1.0);
-            pts.push(point![rad * ang.cos(), rad * ang.sin()]);
+            pts.push(Vec2::new(rad * ang.cos(), rad * ang.sin()));
         }
 
         Some(ObstacleSpec {
