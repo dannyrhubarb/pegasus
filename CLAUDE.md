@@ -329,14 +329,15 @@ while the wasm loads):
   in player language (both feet on the deck ≤ 10 cm, slow < 1 m/s,
   not turning, held 0.4 s, the settle ring, "let go and it rocks level",
   falls over past ~25°), then touchdown/damage thresholds, fuel, controls
-  and level modes, then **Rulebook versions** (what the boards' `vN`
-  tags and the replay badge mean — one bullet per registry entry).
+  and level modes, then **Editions of the rules** (what the boards'
+  "rules N" tags and the replay badge mean — one bullet per registry
+  entry).
   Born from the ruleset-2 landing work: the rules were
   invisible, so a failed landing read as the game cheating. **Per-commit
   rule: the numbers on this page mirror `ruleset_v2()` / `FOOT_TOUCH_M` /
   `CRASH_DV_*` / `FUEL_*` — a ruleset or threshold change updates the
   manual in the same commit, and a new ruleset adds its bullet to
-  Rulebook versions** (the markup comment says so too). Static
+  Editions of the rules** (the markup comment says so too). Static
   text, no fetch; histPath `[home, about, manual]`, `.mbtn.back` →
 hardware back (owner placement: under About with What's new, not a
 fifth home button).
@@ -1910,21 +1911,24 @@ for now:
   (`li.locked`, no ▶) and shows the `#scores-hint` line under the list
   ("N replays need a newer version — update to watch them" — tap =
   the `?fresh=` reload on the website, a no-op in the app shells, which
-  update via the store). EVERY row gets a `.vtag` ("v1" / "v2" / "v3") after the date — the
-  rulebook it was flown under; the one matching the API's
-  `currentRuleset` (`apiCurrentRuleset`, falling back to the
-  `current_ruleset` export) is dimmed (`.vtag.cur`), older ones are
-  amber, the tag's `title` explains it on hover, and the `#scores-rules`
-  footnote under the list points at the Flight manual's **Rulebook
-  versions** section, which explains v1/v2/v3 in player language (owner
-  ask 2026-09: tagging only non-current rows read as "everything is
-  v1"; a new ruleset = a new bullet there).
+  update via the store). EVERY row gets a `.vtag` ("rules 1" / "rules 2"
+  / "rules 3") after the date — the edition of the rules it was flown
+  under; ALL ONE COLOUR (amber — the current edition, the one matching
+  the API's `currentRuleset` / `apiCurrentRuleset`, falling back to the
+  `current_ruleset` export, differs only in its hover `title`; an
+  earlier cut dimmed it, which the owner read as two kinds of row), and
+  the `#scores-rules` footnote under the list points at the Flight
+  manual's **Editions of the rules** section, which explains editions
+  1/2/3 in player language (owner asks 2026-09: tagging only non-current
+  rows read as "everything is v1", and a bare "vN" read as too
+  technical — the word "rules" is the whole explanation; a new ruleset =
+  a new bullet there).
   `watch_replay_blob` answers **2** for a blob whose `min_logic` is above
   this build (`try_decode_recording` keeps `ERR_NEEDS_NEWER` distinct);
   `watchGlobalReplay` reads the raw code (`pushBytesToWasmCode`) and says
   "needs a newer game version" instead of "rejected". During replay
   playback main.rs draws an amber **ruleset badge** top-centre under the
-  safe area — "FLOWN ON v1" for an older registry entry, "FLOWN ON A
+  safe area — "FLOWN ON RULES 1" for an older registry entry, "FLOWN ON A
   NEWER VERSION" when the header matches no ruleset this build ships
   (it still replays bit-exactly if parameter-only) — hidden when the
   replay's ruleset is the current one. Verified headless against a
@@ -2333,7 +2337,7 @@ alone, 1.90 MB with both) and keeps all of history replayable.
 - **Boards stay merged across rulesets** (owner rule): ruleset 3 changes
   no number, only the solver, and the per-second drift between the two
   engines is centimetres — scores are comparable; rows flown on 1/2 show
-  the "vN" tag like any older ruleset.
+  the "rules N" tag like any older ruleset.
 - The two Rapiers use different math types (nalgebra in 0.23, glam 0.33
   via `glamx` in 0.35) and neither leaks out of `engine.rs`: positions
   cross as f32 pairs / the crate's own glam-0.27 `Vec2` (macroquad's),
