@@ -4,6 +4,7 @@
 // other source of nondeterminism — see the determinism rules in the game
 // repo's CLAUDE.md ("Determinism rules").
 
+pub mod engine;
 pub mod replay;
 pub mod sim;
 pub mod world;
