@@ -1,5 +1,10 @@
 [
  {
+  "rev": "0f19dca",
+  "date": "2026-09-13T09:40:19Z",
+  "note": "New: High-score rows now say which edition of the rules they were flown under — \"rules 2\", no decoder ring needed"
+ },
+ {
   "rev": "a8bec16",
   "date": "2026-09-13T07:59:41Z",
   "note": "New: Every high score now wears its rulebook badge (v1, v2, v3) — the Flight manual explains what changed between them"

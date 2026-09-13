@@ -718,12 +718,13 @@
       text-align: left;
     }
     #scores-list .pdate { color: var(--faint); font-size: 0.72em; white-space: nowrap; }
-    /* Ruleset versioning (#194): a row flown under a non-current ruleset is
-       tagged; a row whose replay this build can't decode is dimmed and has
-       no ▶ (the API withholds replayPath) — the #scores-hint line below the
-       list says why. */
+    /* Ruleset versioning (#194): every row is tagged with the rules it was
+       flown under ("rules 2"), one colour for all of them (owner call
+       2026-09: dimming the current one read as two kinds of row); a row
+       whose replay this build can't decode is dimmed and has no ▶ (the API
+       withholds replayPath) — the #scores-hint line below the list says
+       why. */
     #scores-list .vtag { color: var(--amber); margin-left: 0.6em; letter-spacing: 0.06em; }
-    #scores-list .vtag.cur { color: var(--faint); } /* the current rulebook: present, not loud */
     #scores-list li.locked { opacity: 0.72; }
     #scores-hint { color: var(--amber); max-width: 100%; }
     #scores-list .watch {
@@ -1239,7 +1240,7 @@
       <div class="hint" id="scores-status" style="display:none"></div>
       <div class="hint" id="scores-empty">No flights recorded yet</div>
       <div class="hint" id="scores-hint" style="display:none"></div>
-      <div class="hint" id="scores-rules" style="display:none">vN = the rulebook the run was flown under &middot; About &rarr; Flight manual</div>
+      <div class="hint" id="scores-rules" style="display:none">&ldquo;rules 2&rdquo; = the edition of the flight rules the run was flown under &middot; About &rarr; Flight manual</div>
       <div class="mbtn back" id="btn-scores-back">&#8249; Back</div>
     </div>
 
@@ -1299,15 +1300,15 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Version</div>
-        <div class="info-value" id="build-version">0.0.0+335</div>
+        <div class="info-value" id="build-version">1.0.0+6</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">f29cde8-pr-215</div>
+        <div class="info-value" id="git-rev">0f19dca-pr-215</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-09-13T08:49:03Z</div>
+        <div class="info-value" id="build-time">2026-09-13T09:40:45Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -1408,26 +1409,28 @@
           <li><b>Sprints</b> (an hourglass) give you 60 seconds &mdash; as
           far as you can before the horn.</li>
         </ul>
-        <h3>Rulebook versions</h3>
-        <p>Every run is stamped with the rulebook it was flown under
-        &mdash; the <b>vN</b> tag on the high-score boards and the
-        "flown on" badge on a replay. Old runs keep their old rules
-        forever and replay exactly as recorded; the boards mix versions
-        because the changes are small enough to compare.</p>
+        <h3>Editions of the rules</h3>
+        <p>The rules get tuned now and then, and every run is stamped
+        with the edition it was flown under &mdash; the <b>rules 2</b>
+        tag next to the date on the high-score boards, and the "flown on"
+        badge on a replay. Old runs keep their old rules forever and
+        replay exactly as recorded; the boards mix editions because the
+        changes are small enough to compare.</p>
         <ul>
-          <li><b>v1</b> &mdash; the original rules: a landing counted with
-          the ship's centre over the pad (a foot could hang over the edge)
-          after a 0.8 s hold, and a crooked touchdown could freeze
+          <li><b>rules 1</b> &mdash; the original rules: a landing counted
+          with the ship's centre over the pad (a foot could hang over the
+          edge) after a 0.8 s hold, and a crooked touchdown could freeze
           mid-rock.</li>
-          <li><b>v2</b> &mdash; the landing above: both feet on the deck,
-          a 0.4 s hold, and the ship always rocks level by itself.</li>
-          <li><b>v3</b> &mdash; the current rulebook: v2's rules on a
-          newer physics engine. Same moon, same numbers; only the maths
-          under the hood changed.</li>
+          <li><b>rules 2</b> &mdash; the landing above: both feet on the
+          deck, a 0.4 s hold, and the ship always rocks level by
+          itself.</li>
+          <li><b>rules 3</b> &mdash; the current edition: the rules of
+          edition 2 on a newer physics engine. Same moon, same numbers;
+          only the maths under the hood changed.</li>
         </ul>
-        <p class="note">These are the rules of the current game version
-        (v3). A replay from a newer rulebook than your game knows asks
-        you to update before it can be watched.</p>
+        <p class="note">Your game plays edition 3. A replay from a newer
+        edition than your game knows asks you to update before it can be
+        watched.</p>
       </div>
       <div class="mbtn back" data-goto="scr-about">&#8249; Back</div>
     </div>
@@ -2895,7 +2898,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "f29cde8-pr-215";
+    const wasmRev = "0f19dca-pr-215";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -3462,7 +3465,7 @@
     // an app resumed from the switcher for weeks still sees a new verdict:
     // - `minBuild` {android, ios} walls shell builds below it (CI run
     //   number); `minVersion` ("1.3.0" or "1.3.0+14") walls EVERY platform
-    //   whose baked tag-derived 0.0.0+335 sorts below it (tuple
+    //   whose baked tag-derived 1.0.0+6 sorts below it (tuple
     //   order — see CLAUDE.md "Versioning"). A wall NEVER interrupts a live
     //   play: a mid-flight/replay verdict latches in `wallPolicy` and
     //   showScreen raises it at the next screen (pause, crash, game over,
@@ -4160,10 +4163,11 @@
     let renderedBoardJson = null;
     // Ruleset versioning (#194): the newest shipped ruleset, as the API
     // reports it (`currentRuleset` on every board response). EVERY row
-    // carries its "vN" rulebook tag (owner ask 2026-09 — a board where only
-    // old rows are labelled read as "everything is v1"); the current
-    // rulebook's tag is dimmed, older ones amber, and the footnote under
-    // the list points at the Flight manual's "Rulebook versions". Falls
+    // carries its "rules N" tag (owner ask 2026-09 — a board where only
+    // old rows are labelled read as "everything is v1"), all one colour
+    // (the current edition only differs in its hover title), and the
+    // footnote under the list points at the Flight manual's "Editions of
+    // the rules" (owner ask 2026-09: "vN" read as too technical). Falls
     // back to this build's own registry until a response has arrived.
     let apiCurrentRuleset = 0;
     function currentRuleset() {
@@ -4212,10 +4216,10 @@
         else when.textContent = s.ts ? fmtDate(s.ts) : "";
         if (s.ruleset) {
           const tag = document.createElement("span");
-          tag.className = "vtag" + (cur && s.ruleset === cur ? " cur" : "");
-          tag.textContent = "v" + s.ruleset;
-          tag.title = "Rulebook v" + s.ruleset + (cur && s.ruleset === cur ? " (current)" : "")
-            + " — the rules this run was flown under; see About → Flight manual";
+          tag.className = "vtag";
+          tag.textContent = "rules " + s.ruleset;
+          tag.title = "Flown under rules " + s.ruleset + (cur && s.ruleset === cur ? " (the current rules)" : "")
+            + " — see About → Flight manual";
           when.appendChild(tag);
         }
         if (s.needsUpdate) { li.classList.add("locked"); locked++; }
