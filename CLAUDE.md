@@ -329,11 +329,14 @@ while the wasm loads):
   in player language (both feet on the deck ≤ 10 cm, slow < 1 m/s,
   not turning, held 0.4 s, the settle ring, "let go and it rocks level",
   falls over past ~25°), then touchdown/damage thresholds, fuel, controls
-  and level modes. Born from the ruleset-2 landing work: the rules were
+  and level modes, then **Rulebook versions** (what the boards' `vN`
+  tags and the replay badge mean — one bullet per registry entry).
+  Born from the ruleset-2 landing work: the rules were
   invisible, so a failed landing read as the game cheating. **Per-commit
   rule: the numbers on this page mirror `ruleset_v2()` / `FOOT_TOUCH_M` /
   `CRASH_DV_*` / `FUEL_*` — a ruleset or threshold change updates the
-  manual in the same commit** (the markup comment says so too). Static
+  manual in the same commit, and a new ruleset adds its bullet to
+  Rulebook versions** (the markup comment says so too). Static
   text, no fetch; histPath `[home, about, manual]`, `.mbtn.back` →
 hardware back (owner placement: under About with What's new, not a
 fifth home button).
@@ -1907,9 +1910,15 @@ for now:
   (`li.locked`, no ▶) and shows the `#scores-hint` line under the list
   ("N replays need a newer version — update to watch them" — tap =
   the `?fresh=` reload on the website, a no-op in the app shells, which
-  update via the store). Rows flown under a ruleset other than the API's
+  update via the store). EVERY row gets a `.vtag` ("v1" / "v2" / "v3") after the date — the
+  rulebook it was flown under; the one matching the API's
   `currentRuleset` (`apiCurrentRuleset`, falling back to the
-  `current_ruleset` export) get an amber `.vtag` ("v1") after the date.
+  `current_ruleset` export) is dimmed (`.vtag.cur`), older ones are
+  amber, the tag's `title` explains it on hover, and the `#scores-rules`
+  footnote under the list points at the Flight manual's **Rulebook
+  versions** section, which explains v1/v2/v3 in player language (owner
+  ask 2026-09: tagging only non-current rows read as "everything is
+  v1"; a new ruleset = a new bullet there).
   `watch_replay_blob` answers **2** for a blob whose `min_logic` is above
   this build (`try_decode_recording` keeps `ERR_NEEDS_NEWER` distinct);
   `watchGlobalReplay` reads the raw code (`pushBytesToWasmCode`) and says
