@@ -718,10 +718,12 @@
       text-align: left;
     }
     #scores-list .pdate { color: var(--faint); font-size: 0.72em; white-space: nowrap; }
-    /* Ruleset versioning (#194): a row flown under a non-current ruleset is
-       tagged; a row whose replay this build can't decode is dimmed and has
-       no ▶ (the API withholds replayPath) — the #scores-hint line below the
-       list says why. */
+    /* Ruleset versioning (#194): every row is tagged with the rules it was
+       flown under ("rules 2"), one colour for all of them (owner call
+       2026-09: dimming the current one read as two kinds of row); a row
+       whose replay this build can't decode is dimmed and has no ▶ (the API
+       withholds replayPath) — the #scores-hint line below the list says
+       why. */
     #scores-list .vtag { color: var(--amber); margin-left: 0.6em; letter-spacing: 0.06em; }
     #scores-list li.locked { opacity: 0.72; }
     #scores-hint { color: var(--amber); max-width: 100%; }
@@ -1238,6 +1240,7 @@
       <div class="hint" id="scores-status" style="display:none"></div>
       <div class="hint" id="scores-empty">No flights recorded yet</div>
       <div class="hint" id="scores-hint" style="display:none"></div>
+      <div class="hint" id="scores-rules" style="display:none">&ldquo;rules 2&rdquo; = the edition of the flight rules the run was flown under &middot; About &rarr; Flight manual</div>
       <div class="mbtn back" id="btn-scores-back">&#8249; Back</div>
     </div>
 
@@ -1406,9 +1409,28 @@
           <li><b>Sprints</b> (an hourglass) give you 60 seconds &mdash; as
           far as you can before the horn.</li>
         </ul>
-        <p class="note">These are the rules of the current game version.
-        Replays flown under older rules replay exactly as they were and
-        show a "flown on" badge.</p>
+        <h3>Editions of the rules</h3>
+        <p>The rules get tuned now and then, and every run is stamped
+        with the edition it was flown under &mdash; the <b>rules 2</b>
+        tag next to the date on the high-score boards, and the "flown on"
+        badge on a replay. Old runs keep their old rules forever and
+        replay exactly as recorded; the boards mix editions because the
+        changes are small enough to compare.</p>
+        <ul>
+          <li><b>rules 1</b> &mdash; the original rules: a landing counted
+          with the ship's centre over the pad (a foot could hang over the
+          edge) after a 0.8 s hold, and a crooked touchdown could freeze
+          mid-rock.</li>
+          <li><b>rules 2</b> &mdash; the landing above: both feet on the
+          deck, a 0.4 s hold, and the ship always rocks level by
+          itself.</li>
+          <li><b>rules 3</b> &mdash; the current edition: the rules of
+          edition 2 on a newer physics engine. Same moon, same numbers;
+          only the maths under the hood changed.</li>
+        </ul>
+        <p class="note">Your game plays edition 3. A replay from a newer
+        edition than your game knows asks you to update before it can be
+        watched.</p>
       </div>
       <div class="mbtn back" data-goto="scr-about">&#8249; Back</div>
     </div>
@@ -4140,9 +4162,13 @@
     // level picker — see renderLevels).
     let renderedBoardJson = null;
     // Ruleset versioning (#194): the newest shipped ruleset, as the API
-    // reports it (`currentRuleset` on every board response) — rows flown
-    // under any other ruleset get a "vN" tag. Falls back to this build's own
-    // registry until a response has arrived.
+    // reports it (`currentRuleset` on every board response). EVERY row
+    // carries its "rules N" tag (owner ask 2026-09 — a board where only
+    // old rows are labelled read as "everything is v1"), all one colour
+    // (the current edition only differs in its hover title), and the
+    // footnote under the list points at the Flight manual's "Editions of
+    // the rules" (owner ask 2026-09: "vN" read as too technical). Falls
+    // back to this build's own registry until a response has arrived.
     let apiCurrentRuleset = 0;
     function currentRuleset() {
       if (apiCurrentRuleset) return apiCurrentRuleset;
@@ -4164,11 +4190,13 @@
       return url;
     }
     const scoresHint = document.getElementById("scores-hint");
+    const scoresRules = document.getElementById("scores-rules");
     function renderBoardRows(scores) {
       renderedBoardJson = JSON.stringify(scores);
       scoresList.textContent = "";
       scoresEmpty.style.display = scores.length ? "none" : "";
       const cur = currentRuleset();
+      scoresRules.style.display = scores.some(s => s.ruleset) ? "" : "none";
       let locked = 0;
       scores.forEach((s, i) => {
         const li = document.createElement("li");
@@ -4186,10 +4214,12 @@
         // date; it carries no replayPath, so it never grows a watch button.
         if (s.pending) { li.classList.add("pending"); when.textContent = "verifying…"; }
         else when.textContent = s.ts ? fmtDate(s.ts) : "";
-        if (s.ruleset && cur && s.ruleset !== cur) {
+        if (s.ruleset) {
           const tag = document.createElement("span");
           tag.className = "vtag";
-          tag.textContent = "v" + s.ruleset;
+          tag.textContent = "rules " + s.ruleset;
+          tag.title = "Flown under rules " + s.ruleset + (cur && s.ruleset === cur ? " (the current rules)" : "")
+            + " — see About → Flight manual";
           when.appendChild(tag);
         }
         if (s.needsUpdate) { li.classList.add("locked"); locked++; }

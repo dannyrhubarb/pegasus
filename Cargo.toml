@@ -12,14 +12,14 @@ members = ["sim-core"]
 # its own macroquad-free crate so the score backend can compile the exact
 # same simulation for server-side verification.
 pegasus-sim = { path = "sim-core" }
-macroquad = "0.4"
+macroquad = "=0.4.16" # pinned exactly: a macroquad bump moves miniquad, whose JS glue is vendored as mq_js_bundle.js — diff js/gl.js before moving this (CLAUDE.md)
 
 # Real audio only on the web build: the audio feature pulls quad-snd, which
 # needs ALSA headers to link native Linux builds. Native dev builds use
 # macroquad's dummy audio backend (same API, no sound) so `cargo build` /
 # `cargo test` work without system deps.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-macroquad = { version = "0.4", features = ["audio"] }
+macroquad = { version = "=0.4.16", features = ["audio"] }
 
 # Tuned for wasm size (the deploy artifact). Native release builds are rare
 # here; if you need a fast native build use the dev profile.

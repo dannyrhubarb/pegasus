@@ -85,8 +85,10 @@ pub const REPLAY_FORMAT_VERSION_V6: u16 = 6;
 // parameter-only ruleset change must NOT bump it.
 // History: 1 = the v6 baseline logic; 2 = the BOTH-FEET landing rule
 // (ruleset 2, pegasus#194 phase 4 — `land_rule`, a predicate older
-// clients don't implement).
-pub const LOGIC_VERSION: u16 = 2;
+// clients don't implement); 3 = the MODERN physics engine (ruleset 3,
+// 2026-09 — `SimParams::engine` 1 = rapier 0.35, a solver older builds
+// don't ship; see engine.rs).
+pub const LOGIC_VERSION: u16 = 3;
 
 // The distinguishable "too new" decode error: the blob is well-formed, this
 // build's sim logic just can't replay it. Callers compare against this to
@@ -274,6 +276,15 @@ pub struct SimParams {
     // sleeping ship integrates while parked and drifts by float dust, so
     // ruleset 1 keeps sleeping for bit-exact old replays. Logic level 2.
     pub ship_sleep: f32,
+    // Which PHYSICS ENGINE the ruleset runs on (ext field 6; neutral
+    // default 0 = `engine::Engine::Legacy`, rapier 0.23 — what rulesets 1
+    // and 2 were recorded with; 1 = `Modern`, rapier 0.35, ruleset 3
+    // onwards). A Rapier bump does not reproduce old trajectories (see
+    // engine.rs), so the engine is part of the ruleset and `Sim` builds
+    // the one the header names. A new engine is new tick behaviour older
+    // builds can't run: rulesets on it stamp a higher min_logic (3 for
+    // Modern). See CLAUDE.md "Physics engines".
+    pub engine: f32,
     // Oldest client LOGIC_VERSION that can re-sim this ruleset bit-exactly.
     // Not a physics number: it rides serialization but is excluded from
     // "same ruleset" comparisons only in the sense that equal params imply
@@ -338,7 +349,7 @@ impl LevelParams {
 impl SimParams {
     const N_FIELDS: usize = 15;
     // v6 extension fields, in serialization order (append-only).
-    const N_EXT_FIELDS: usize = 6;
+    const N_EXT_FIELDS: usize = 7;
 
     fn to_array(self) -> [f32; Self::N_FIELDS] {
         [
@@ -366,7 +377,7 @@ impl SimParams {
         [
             self.pad_land_time, self.pad_refuel_per_s,
             self.hull_repair_per_s, self.fuel_out_end_secs,
-            self.land_rule, self.ship_sleep,
+            self.land_rule, self.ship_sleep, self.engine,
         ]
     }
 
@@ -378,6 +389,7 @@ impl SimParams {
             3 => self.fuel_out_end_secs = v,
             4 => self.land_rule = v,
             5 => self.ship_sleep = v,
+            6 => self.engine = v,
             _ => {} // future field this build doesn't know — min_logic decides
         }
     }
@@ -852,7 +864,7 @@ mod tests {
             crash_dv_soft: 2.5, crash_dv_hard: 6.0, hull_max: 100.0,
             pad_land_time: 0.8, pad_refuel_per_s: 25.0,
             hull_repair_per_s: 20.0, fuel_out_end_secs: 2.5,
-            land_rule: 0.0, ship_sleep: 1.0, min_logic: 1,
+            land_rule: 0.0, ship_sleep: 1.0, engine: 0.0, min_logic: 1,
         }
     }
 

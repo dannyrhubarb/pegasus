@@ -22,10 +22,10 @@
 // makes recorded runs verifiable and shareable as pure input streams.
 
 use glam::Vec2;
-use rapier2d::prelude::*;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::engine::{ColHandle, Engine, ShipSpec, World};
 use crate::replay::{InputState, Keyframe, Recording, SimParams};
 use crate::world::*;
 
@@ -110,6 +110,7 @@ pub fn ruleset_v1() -> SimParams {
         fuel_out_end_secs: FUEL_OUT_END_SECS,
         land_rule: 0.0,
         ship_sleep: 1.0,
+        engine: 0.0,
         min_logic: 1,
     }
 }
@@ -136,12 +137,26 @@ pub fn ruleset_v2() -> SimParams {
     }
 }
 
+// Ruleset 3 (2026-09): ruleset 2's rules on the MODERN physics engine —
+// rapier 0.35 instead of the 0.23 rulesets 1–2 were recorded with
+// (`engine` 1; see engine.rs for why a Rapier bump is a new ruleset and
+// not an in-place upgrade). Same numbers everywhere else, so scores stay
+// comparable on the merged boards; the solver differs, so a logic-2
+// client cannot re-sim these (min_logic 3 — "update to watch"). FROZEN.
+pub fn ruleset_v3() -> SimParams {
+    SimParams {
+        engine: 1.0,
+        min_logic: 3,
+        ..ruleset_v2()
+    }
+}
+
 // The ruleset LIVE PLAY runs — what the recorder stamps into new blobs and
-// what the backend verifier's registry must contain. Currently ruleset 2;
+// what the backend verifier's registry must contain. Currently ruleset 3;
 // a tuning change means adding ruleset_vN() and pointing this at it (see
 // issue #194 — never editing a shipped entry).
 pub fn sim_params() -> SimParams {
-    ruleset_v2()
+    ruleset_v3()
 }
 
 // THE REGISTRY: every ruleset ever shipped, in order — index + 1 is the
@@ -150,7 +165,7 @@ pub fn sim_params() -> SimParams {
 // these exactly (predetermined tunings — owner rule, issue #194); the
 // newest entry must be what `sim_params()` returns. Append-only.
 pub fn rulesets() -> Vec<SimParams> {
-    vec![ruleset_v1(), ruleset_v2()]
+    vec![ruleset_v1(), ruleset_v2(), ruleset_v3()]
 }
 
 // The registry number of a header ruleset (1-based), None if it matches
@@ -183,12 +198,12 @@ pub fn spawn_keyframe(level: &Level, x: f32) -> Keyframe {
 }
 
 pub struct Shaft {
-    pub handles: Vec<ColliderHandle>,
+    pub handles: Vec<ColHandle>,
     pub walls: [Vec<Vec2>; 2], // left / right wall polylines, world space
 }
 
 pub struct Obstacle {
-    pub handle: ColliderHandle,
+    pub handle: ColHandle,
     pub cx: f32,
     pub cy: f32,
     pub rot: f32,
@@ -196,7 +211,7 @@ pub struct Obstacle {
 }
 
 pub struct Pad {
-    pub handle: ColliderHandle,
+    pub handle: ColHandle,
     pub cx: f32,
     pub y: f32, // deck top (collider line), layer offset applied
 }
@@ -235,24 +250,14 @@ pub struct Impact {
 }
 
 pub struct Sim {
-    bodies: RigidBodySet,
-    colliders: ColliderSet,
-    physics_pipeline: PhysicsPipeline,
-    island_manager: IslandManager,
-    broad_phase: DefaultBroadPhase,
-    narrow_phase: NarrowPhase,
-    impulse_joints: ImpulseJointSet,
-    multibody_joints: MultibodyJointSet,
-    ccd_solver: CCDSolver,
-    query_pipeline: QueryPipeline,
-    integration_params: IntegrationParameters,
-    gravity: Vector<f32>,
-    ship: RigidBodyHandle,
+    // The physics engine the header ruleset names (engine.rs) — owns the
+    // ship body and every static collider.
+    world: World,
 
     // Sliding collider windows. BTreeMap (not HashMap): iteration order in
     // the sync's retain/insert loops determines Rapier handle assignment,
     // which must be identical across runs for bit-exact resim.
-    cave: BTreeMap<(i64, i64), Vec<ColliderHandle>>,
+    cave: BTreeMap<(i64, i64), Vec<ColHandle>>,
     pub shafts: BTreeMap<(i64, i64), Shaft>,
     pub obstacles: BTreeMap<(i64, i64), Obstacle>,
     pub pads: BTreeMap<(i64, i64), Pad>,
@@ -295,62 +300,25 @@ impl Sim {
     // format-v6 contract (issue #194). Under ruleset 1 headers this is
     // bit-identical to `new` (same numbers, same op sequence).
     pub fn with_rules(level: Level, rules: SimParams) -> Sim {
-        let mut bodies = RigidBodySet::new();
-        let mut colliders = ColliderSet::new();
-
-        let body = RigidBodyBuilder::dynamic()
-            .translation(vector![0.0, level.stand_y(0.0)])
-            .angular_damping(rules.angular_damping)
-            // A whisper of drag: imperceptible at landing speeds but it caps
-            // how much momentum can pile up on a long burn or free-fall.
-            .linear_damping(rules.linear_damping)
-            // Ruleset 2: never sleep — see SimParams::ship_sleep.
-            .can_sleep(rules.ship_sleep > 0.0)
-            .ccd_enabled(true)
-            .build();
-        let ship = bodies.insert(body);
-        // Compound collider of three capsules tracing the 1.5× scaled lander
-        // (see CLAUDE.md "Physics notes"). Endpoints in scaled world units.
-        colliders.insert_with_parent(
-            ColliderBuilder::new(SharedShape::capsule(
-                point![0.0, 0.42], point![0.0, -0.08], 0.26))
-                .restitution(0.2).build(),
-            ship, &mut bodies,
-        );
-        colliders.insert_with_parent(
-            ColliderBuilder::new(SharedShape::capsule(
-                point![-0.26, -0.30], point![-0.33, -0.64], 0.09))
-                .restitution(0.2).build(),
-            ship, &mut bodies,
-        );
-        colliders.insert_with_parent(
-            ColliderBuilder::new(SharedShape::capsule(
-                point![0.26, -0.30], point![0.33, -0.64], 0.09))
-                .restitution(0.2).build(),
-            ship, &mut bodies,
+        // The ship body + its three-capsule compound collider live in the
+        // engine (engine.rs); the ruleset picks which Rapier builds them.
+        let world = World::new(
+            Engine::of(&rules),
+            &ShipSpec {
+                y0: level.stand_y(0.0),
+                gravity_y: if level.gravity_y != 0.0 { level.gravity_y } else { rules.gravity_y },
+                // A whisper of drag: imperceptible at landing speeds but it
+                // caps how much momentum can pile up on a long burn or
+                // free-fall.
+                linear_damping: rules.linear_damping,
+                angular_damping: rules.angular_damping,
+                // Ruleset 2+: never sleep — see SimParams::ship_sleep.
+                can_sleep: rules.ship_sleep > 0.0,
+            },
         );
 
         let mut sim = Sim {
-            bodies,
-            colliders,
-            physics_pipeline: PhysicsPipeline::new(),
-            island_manager: IslandManager::new(),
-            broad_phase: DefaultBroadPhase::new(),
-            narrow_phase: NarrowPhase::new(),
-            impulse_joints: ImpulseJointSet::new(),
-            multibody_joints: MultibodyJointSet::new(),
-            ccd_solver: CCDSolver::new(),
-            query_pipeline: QueryPipeline::new(),
-            integration_params: IntegrationParameters {
-                dt: PHYSICS_DT,
-                num_solver_iterations: std::num::NonZeroUsize::new(8).unwrap(),
-                ..Default::default()
-            },
-            gravity: vector![
-                0.0,
-                if level.gravity_y != 0.0 { level.gravity_y } else { rules.gravity_y }
-            ],
-            ship,
+            world,
             cave: BTreeMap::new(),
             shafts: BTreeMap::new(),
             obstacles: BTreeMap::new(),
@@ -416,18 +384,14 @@ impl Sim {
     // keyframe) and by resim (a recording's first keyframe). Score/visited
     // pads are session state, not run state — deliberately untouched.
     pub fn restore(&mut self, kf: &Keyframe) {
-        let rb = self.bodies.get_mut(self.ship).unwrap();
-        rb.set_gravity_scale(1.0, true);
-        rb.set_translation(vector![kf.x, kf.y], true);
-        // new_unchecked, NOT Rotation::new / from_complex: the keyframe holds
-        // the body's original unit complex verbatim, and any re-normalisation
-        // or angle round-trip would change its bits (= sub-mm restore drift).
-        rb.set_rotation(
-            Rotation::new_unchecked(rapier2d::na::Complex::new(kf.rot_re, kf.rot_im)),
-            true,
-        );
-        rb.set_linvel(vector![kf.vx, kf.vy], true);
-        rb.set_angvel(kf.angvel, true);
+        self.world.set_gravity_scale(1.0);
+        self.world.set_translation(kf.x, kf.y);
+        // The keyframe holds the body's original unit complex verbatim, and
+        // any re-normalisation or angle round-trip would change its bits
+        // (= sub-mm restore drift) — the engine restores it unchecked.
+        self.world.set_rotation_unchecked(kf.rot_re, kf.rot_im);
+        self.world.set_linvel(kf.vx, kf.vy);
+        self.world.set_angvel(kf.angvel);
         self.fuel = kf.fuel;
         self.hull = kf.hull;
         self.crashed = false;
@@ -471,7 +435,7 @@ impl Sim {
         // replay seek onto the finish would drop the frozen ship.
         if self.level.time_limit_ticks > 0 && kf.run_ticks >= self.level.time_limit_ticks {
             self.completed = true;
-            self.bodies.get_mut(self.ship).unwrap().set_gravity_scale(0.0, true);
+            self.world.set_gravity_scale(0.0);
         }
         self.land_timer = kf.land_timer;
         self.fuel_out_timer = 0.0;
@@ -491,17 +455,27 @@ impl Sim {
     }
 
     pub fn ship_pose(&self) -> (f32, f32, f32) {
-        let b = &self.bodies[self.ship];
-        (b.translation().x, b.translation().y, b.rotation().angle())
+        let (x, y) = self.world.translation();
+        (x, y, self.world.angle())
     }
 
     pub fn ship_vel(&self) -> (f32, f32) {
-        let v = self.bodies[self.ship].linvel();
-        (v.x, v.y)
+        self.world.linvel()
     }
 
     pub fn ship_angvel(&self) -> f32 {
-        self.bodies[self.ship].angvel()
+        self.world.angvel()
+    }
+
+    // Which physics engine this sim runs on (from its ruleset).
+    pub fn engine(&self) -> Engine {
+        self.world.engine()
+    }
+
+    // Whether the engine has put the ship body to sleep (diagnostics/tests;
+    // nothing in tick() reads it — see SimParams::ship_sleep).
+    pub fn ship_sleeping(&self) -> bool {
+        self.world.is_sleeping()
     }
 
     // How far the landing settle timer has run toward registration, 0..1
@@ -515,15 +489,15 @@ impl Sim {
     }
 
     pub fn keyframe(&self, tick: u32, glow: f32) -> Keyframe {
-        let b = &self.bodies[self.ship];
-        let rot = *b.rotation();
+        let (x, y) = self.world.translation();
+        let (rot_re, rot_im) = self.world.rotation();
         let (vx, vy) = self.ship_vel();
         Keyframe {
             tick,
-            x: b.translation().x,
-            y: b.translation().y,
-            rot_re: rot.re, // exact unit-complex heading, not an angle —
-            rot_im: rot.im, // see the Keyframe doc comment in replay.rs
+            x,
+            y,
+            rot_re, // exact unit-complex heading, not an angle —
+            rot_im, // see the Keyframe doc comment in replay.rs
             vx, vy,
             angvel: self.ship_angvel(),
             fuel: self.fuel,
@@ -586,14 +560,13 @@ impl Sim {
             let steer_mag = (steer_x * steer_x + steer_y * steer_y).sqrt().min(1.0);
 
             let thrust_force = self.thrust_force();
-            let rb = self.bodies.get_mut(self.ship).unwrap();
-            rb.reset_forces(true);
-            rb.reset_torques(true);
-            let a = rb.rotation().angle();
+            self.world.reset_forces();
+            self.world.reset_torques();
+            let a = self.world.angle();
 
             if throttle > 0.0 {
                 let f = thrust_force * throttle;
-                rb.add_force(vector![-a.sin() * f, a.cos() * f], true);
+                self.world.add_force(-a.sin() * f, a.cos() * f);
             }
 
             // Manual rate rotation: fire a side RCS booster at the nozzle
@@ -603,10 +576,11 @@ impl Sim {
             if rot != 0 {
                 let side = rot.signum() as f32;
                 let (lx, ly) = (0.30 * side, -0.71);
-                let px = rb.translation().x + lx * a.cos() - ly * a.sin();
-                let py = rb.translation().y + lx * a.sin() + ly * a.cos();
+                let (tx, ty) = self.world.translation();
+                let px = tx + lx * a.cos() - ly * a.sin();
+                let py = ty + lx * a.sin() + ly * a.cos();
                 let (fx, fy) = (-self.rules.rcs_force * a.sin(), self.rules.rcs_force * a.cos());
-                rb.add_force_at_point(vector![fx, fy], point![px, py], true);
+                self.world.add_force_at_point(fx, fy, px, py);
             }
 
             // Touch heading control: PD to the commanded nose direction,
@@ -619,10 +593,11 @@ impl Sim {
                 let mut err = target - a;
                 if err > std::f32::consts::PI { err -= std::f32::consts::TAU; }
                 if err < -std::f32::consts::PI { err += std::f32::consts::TAU; }
-                heading_torque = (err * self.rules.heading_kp - rb.angvel() * self.rules.heading_kd)
+                heading_torque = (err * self.rules.heading_kp
+                    - self.world.angvel() * self.rules.heading_kd)
                     .clamp(-self.rules.heading_torque_max, self.rules.heading_torque_max)
                     * steer_mag;
-                rb.add_torque(heading_torque, true);
+                self.world.add_torque(heading_torque);
             }
             report.heading_torque = heading_torque;
 
@@ -640,21 +615,7 @@ impl Sim {
             self.fuel = self.fuel.max(0.0);
         }
 
-        self.physics_pipeline.step(
-            &self.gravity,
-            &self.integration_params,
-            &mut self.island_manager,
-            &mut self.broad_phase,
-            &mut self.narrow_phase,
-            &mut self.bodies,
-            &mut self.colliders,
-            &mut self.impulse_joints,
-            &mut self.multibody_joints,
-            &mut self.ccd_solver,
-            Some(&mut self.query_pipeline),
-            &(),
-            &(),
-        );
+        self.world.step();
 
         let (x, y, _) = self.ship_pose();
         let (vx, vy) = self.ship_vel();
@@ -678,20 +639,19 @@ impl Sim {
                     * self.hull_cap();
                 self.hull -= damage;
                 let destroyed = dv > self.rules.crash_dv_hard || self.hull <= 0.0;
-                let rot = *self.bodies[self.ship].rotation();
+                let (rot_re, rot_im) = self.world.rotation();
                 report.impact = Some(Impact {
                     dv, damage, destroyed, x, y, vx, vy,
-                    rot_re: rot.re, rot_im: rot.im,
+                    rot_re, rot_im,
                     angvel: self.ship_angvel(),
                 });
                 if destroyed {
                     self.hull = 0.0;
                     self.crashed = true;
                     // Park the wreck where it died so the camera holds still.
-                    let rb = self.bodies.get_mut(self.ship).unwrap();
-                    rb.set_linvel(vector![0.0, 0.0], true);
-                    rb.set_angvel(0.0, true);
-                    rb.set_gravity_scale(0.0, true);
+                    self.world.set_linvel(0.0, 0.0);
+                    self.world.set_angvel(0.0);
+                    self.world.set_gravity_scale(0.0);
                 }
             }
         }
@@ -700,10 +660,9 @@ impl Sim {
             // Landing: settled on a pad deck (slow, upright, feet on the
             // deck) for PAD_LAND_TIME. First visit scores; parked ships
             // refuel and repair.
-            let b = &self.bodies[self.ship];
             let settled = vx.abs() < 1.0
                 && vy.abs() < 1.0
-                && b.angvel().abs() < 0.5;
+                && self.world.angvel().abs() < 0.5;
             let on_pad = settled
                 .then(|| {
                     if self.rules.land_rule >= 1.0 {
@@ -715,8 +674,7 @@ impl Sim {
                         // in the air (a one-foot tilted touchdown) does not
                         // start the timer. No separate upright check: the
                         // feet geometry caps the tilt at ~9° (FOOT_TOUCH_M).
-                        let rot = b.rotation();
-                        let (c, s) = (rot.re, rot.im);
+                        let (c, s) = self.world.rotation();
                         let feet = [-FOOT_X, FOOT_X].map(|lx| {
                             (x + lx * c - FOOT_Y * s, y + lx * s + FOOT_Y * c)
                         });
@@ -733,7 +691,7 @@ impl Sim {
                         // ship's CENTRE over the deck, the foot line near the
                         // deck top. Verbatim — old replays resim under it.
                         let feet = y - 0.73;
-                        (b.rotation().angle().abs() < 0.30)
+                        (self.world.angle().abs() < 0.30)
                             .then(|| {
                                 self.pads.iter().find_map(|(&key, pad)| {
                                     ((x - pad.cx).abs() <= PAD_HALF_W && (feet - pad.y).abs() < 0.3)
@@ -834,12 +792,11 @@ impl Sim {
         {
             self.completed = true;
             report.completed = true;
-            let rb = self.bodies.get_mut(self.ship).unwrap();
-            rb.reset_forces(true);
-            rb.reset_torques(true);
-            rb.set_linvel(vector![0.0, 0.0], true);
-            rb.set_angvel(0.0, true);
-            rb.set_gravity_scale(0.0, true);
+            self.world.reset_forces();
+            self.world.reset_torques();
+            self.world.set_linvel(0.0, 0.0);
+            self.world.set_angvel(0.0);
+            self.world.set_gravity_scale(0.0);
             self.prev_vel = (0.0, 0.0);
         }
         report
@@ -864,33 +821,23 @@ impl Sim {
                 for poly in &t.polys {
                     for i in 0..poly.len() {
                         let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
-                        self.colliders.insert(
-                            ColliderBuilder::segment(point![a.x, a.y], point![b.x, b.y])
-                                .friction(0.0)
-                                .build(),
-                        );
+                        self.world.add_segment(a, b, 0.0);
                     }
                 }
                 // Neutral start platform: a plain high-friction deck, NOT
                 // in self.pads — no landing/refuel/visit logic fires there.
                 if let Some(sp) = &t.start {
-                    self.colliders.insert(
-                        ColliderBuilder::segment(
-                            point![sp.x - PAD_HALF_W, sp.y],
-                            point![sp.x + PAD_HALF_W, sp.y],
-                        )
-                        .friction(0.9)
-                        .build(),
+                    self.world.add_segment(
+                        Vec2::new(sp.x - PAD_HALF_W, sp.y),
+                        Vec2::new(sp.x + PAD_HALF_W, sp.y),
+                        0.9,
                     );
                 }
                 for (i, p) in t.pads.iter().enumerate() {
-                    let handle = self.colliders.insert(
-                        ColliderBuilder::segment(
-                            point![p.x - PAD_HALF_W, p.y],
-                            point![p.x + PAD_HALF_W, p.y],
-                        )
-                        .friction(0.9)
-                        .build(),
+                    let handle = self.world.add_segment(
+                        Vec2::new(p.x - PAD_HALF_W, p.y),
+                        Vec2::new(p.x + PAD_HALF_W, p.y),
+                        0.9,
                     );
                     self.pads.insert((i as i64, 0), Pad { handle, cx: p.x, y: p.y });
                 }
@@ -906,12 +853,11 @@ impl Sim {
 
         // Cave wall segments (2D window: segments × layers).
         let level = &self.level;
-        let (colliders, island_manager, bodies) =
-            (&mut self.colliders, &mut self.island_manager, &mut self.bodies);
+        let world = &mut self.world;
         self.cave.retain(|&(layer, idx), handles| {
             if layer < lay_lo || layer > lay_hi || idx < want_left || idx > want_right {
                 for h in handles.drain(..) {
-                    colliders.remove(h, island_manager, bodies, false);
+                    world.remove(h);
                 }
                 false
             } else {
@@ -922,7 +868,7 @@ impl Sim {
             for idx in want_left..=want_right {
                 self.cave
                     .entry((layer, idx))
-                    .or_insert_with(|| level.insert_seg(idx, layer, colliders));
+                    .or_insert_with(|| level.insert_seg(idx, layer, world));
             }
         }
 
@@ -932,7 +878,7 @@ impl Sim {
         self.shafts.retain(|&(s, gap), sh| {
             if s < s_lo || s > s_hi || gap < ship_layer - 1 || gap > ship_layer {
                 for h in sh.handles.drain(..) {
-                    colliders.remove(h, island_manager, bodies, false);
+                    world.remove(h);
                 }
                 false
             } else {
@@ -952,14 +898,7 @@ impl Sim {
                 let mut handles = Vec::new();
                 for pts in &walls {
                     for w in pts.windows(2) {
-                        handles.push(colliders.insert(
-                            ColliderBuilder::segment(
-                                point![w[0].x, w[0].y],
-                                point![w[1].x, w[1].y],
-                            )
-                            .friction(0.0)
-                            .build(),
-                        ));
+                        handles.push(world.add_segment(w[0], w[1], 0.0));
                     }
                 }
                 e.insert(Shaft { handles, walls });
@@ -973,7 +912,7 @@ impl Sim {
         let k_right = ((win_right_x + 3.0) / OBSTACLE_SPACING).ceil() as i64;
         self.obstacles.retain(|&(k, layer), ob| {
             if k < k_left || k > k_right || layer < lay_lo || layer > lay_hi {
-                colliders.remove(ob.handle, island_manager, bodies, false);
+                world.remove(ob.handle);
                 false
             } else {
                 true
@@ -983,22 +922,12 @@ impl Sim {
             for k in k_left..=k_right {
                 let Entry::Vacant(e) = self.obstacles.entry((k, layer)) else { continue };
                 let Some(spec) = level.obstacle_spec(k) else { continue };
-                let Some(builder) = ColliderBuilder::convex_hull(&spec.pts) else { continue };
                 let cy = spec.cy + layer as f32 * V_PERIOD;
-                let handle = colliders.insert(
-                    builder
-                        .translation(vector![spec.cx, cy])
-                        .rotation(spec.rot)
-                        .friction(0.6)
-                        .restitution(0.2)
-                        .build(),
-                );
-                // Read the hull back so rendering matches the collider.
-                let verts = colliders[handle]
-                    .shape()
-                    .as_convex_polygon()
-                    .map(|cp| cp.points().iter().map(|p| Vec2::new(p.x, p.y)).collect())
-                    .unwrap_or_else(|| spec.pts.iter().map(|p| Vec2::new(p.x, p.y)).collect());
+                // The engine reads the hull back so rendering matches the
+                // collider; a point set with no hull is skipped like before.
+                let Some((handle, verts)) =
+                    world.add_convex_hull(&spec.pts, spec.cx, cy, spec.rot, 0.6, 0.2)
+                else { continue };
                 e.insert(Obstacle { handle, cx: spec.cx, cy, rot: spec.rot, verts });
             }
         }
@@ -1017,7 +946,7 @@ impl Sim {
                 p >= p_left && p <= p_right
             };
             if !in_x || layer < lay_lo || layer > lay_hi {
-                colliders.remove(pad.handle, island_manager, bodies, false);
+                world.remove(pad.handle);
                 false
             } else {
                 true
@@ -1029,13 +958,10 @@ impl Sim {
                 let Some(spec) = level.pad_spec(p) else { continue };
                 let y = spec.y + layer as f32 * V_PERIOD;
                 // High friction, no restitution: settle, don't skate.
-                let handle = colliders.insert(
-                    ColliderBuilder::segment(
-                        point![spec.cx - PAD_HALF_W, y],
-                        point![spec.cx + PAD_HALF_W, y],
-                    )
-                    .friction(0.9)
-                    .build(),
+                let handle = world.add_segment(
+                    Vec2::new(spec.cx - PAD_HALF_W, y),
+                    Vec2::new(spec.cx + PAD_HALF_W, y),
+                    0.9,
                 );
                 e.insert(Pad { handle, cx: spec.cx, y });
             }
@@ -1055,13 +981,10 @@ impl Sim {
             for layer in lay_lo..=lay_hi {
                 let Entry::Vacant(e) = self.pads.entry((slot, layer)) else { continue };
                 let y = spec.y + layer as f32 * V_PERIOD;
-                let handle = colliders.insert(
-                    ColliderBuilder::segment(
-                        point![spec.cx - PAD_HALF_W, y],
-                        point![spec.cx + PAD_HALF_W, y],
-                    )
-                    .friction(0.9)
-                    .build(),
+                let handle = world.add_segment(
+                    Vec2::new(spec.cx - PAD_HALF_W, y),
+                    Vec2::new(spec.cx + PAD_HALF_W, y),
+                    0.9,
                 );
                 e.insert(Pad { handle, cx: spec.cx, y });
             }
@@ -1380,20 +1303,27 @@ mod tests {
     }
 
     #[test]
-    fn the_registry_ships_two_rulesets_and_live_play_flies_the_newest() {
-        assert_eq!(rulesets().len(), 2);
+    fn the_registry_ships_three_rulesets_and_live_play_flies_the_newest() {
+        assert_eq!(rulesets().len(), 3);
         assert_eq!(ruleset_number(&ruleset_v1()), Some(1));
         assert_eq!(ruleset_number(&ruleset_v2()), Some(2));
-        assert_eq!(sim_params(), ruleset_v2());
+        assert_eq!(ruleset_number(&ruleset_v3()), Some(3));
+        assert_eq!(sim_params(), ruleset_v3());
         assert_eq!(ruleset_v2().min_logic, 2, "a new predicate bumps the logic floor");
+        assert_eq!(ruleset_v3().min_logic, 3, "a new physics engine bumps the logic floor");
         assert_eq!(ruleset_v1().min_logic, 1, "the baseline stays replayable by logic-1 clients");
-        // Live recordings are therefore v6 with min_logic 2; a ruleset-1
+        // The engine is the ONLY thing ruleset 3 changes over ruleset 2.
+        assert_eq!(SimParams { engine: 0.0, min_logic: 2, ..ruleset_v3() }, ruleset_v2());
+        assert_eq!(Engine::of(&ruleset_v1()), Engine::Legacy);
+        assert_eq!(Engine::of(&ruleset_v2()), Engine::Legacy);
+        assert_eq!(Engine::of(&ruleset_v3()), Engine::Modern);
+        // Live recordings are therefore v6 with min_logic 3; a ruleset-1
         // recording keeps the legacy layout and still resims bit-exactly
         // under its own header (the legacy predicate is kept verbatim).
         let (rec, kfs) = record_scripted_flight(Level::demo(), 900);
         let blob = rec.serialize(0);
         assert_eq!(u16::from_le_bytes([blob[4], blob[5]]), 6);
-        assert_eq!(Recording::deserialize(&blob).unwrap().0.params.min_logic, 2);
+        assert_eq!(Recording::deserialize(&blob).unwrap().0.params.min_logic, 3);
         for (a, b) in kfs.iter().zip(resim(&rec).iter()) {
             assert_physics_eq(a, b);
         }
@@ -1958,6 +1888,71 @@ mod tests {
 
     // A ship placed on ONE foot at the given tilt, at rest, low foot exactly
     // on the deck of the pad nearest the spawn.
+    #[test]
+    fn the_header_ruleset_picks_the_physics_engine() {
+        // Rulesets 1–2 build the frozen rapier-0.23 engine, ruleset 3 the
+        // modern one — and the choice is real: the same input stream flown
+        // under ruleset 2 and ruleset 3 (identical numbers, different
+        // solver) does NOT produce the same trajectory. That divergence is
+        // the whole reason the engine is part of the ruleset (engine.rs).
+        assert_eq!(Sim::with_rules(Level::demo(), ruleset_v1()).engine(), Engine::Legacy);
+        assert_eq!(Sim::with_rules(Level::demo(), ruleset_v2()).engine(), Engine::Legacy);
+        assert_eq!(Sim::with_rules(Level::demo(), ruleset_v3()).engine(), Engine::Modern);
+        assert_eq!(Sim::new(Level::demo()).engine(), Engine::Modern, "live play flies the new engine");
+        let (_, on_v2) = record_scripted_flight_with(Level::demo(), 1800, ruleset_v2());
+        let (_, on_v3) = record_scripted_flight_with(Level::demo(), 1800, ruleset_v3());
+        assert!(
+            on_v2.len() != on_v3.len()
+                || on_v2.iter().zip(&on_v3).any(|(a, b)| {
+                    a.x.to_bits() != b.x.to_bits() || a.y.to_bits() != b.y.to_bits()
+                }),
+            "the two engines flew bit-identical trajectories — is the engine flag wired?"
+        );
+        // Each engine resims its own recording bit-exactly through the wire.
+        for rules in [ruleset_v2(), ruleset_v3()] {
+            let (rec, kfs) = record_scripted_flight_with(Level::demo(), 1800, rules);
+            let (back, _) = Recording::deserialize(&rec.serialize(0)).unwrap();
+            assert_eq!(Engine::of(&back.params), Engine::of(&rules));
+            for (a, b) in kfs.iter().zip(resim(&back).iter()) {
+                assert_physics_eq(a, b);
+            }
+        }
+    }
+
+    #[test]
+    fn the_legacy_engine_reproduces_recordings_made_before_the_engine_split() {
+        // Four blobs recorded NATIVELY by the pre-engine sim-core (rapier
+        // 0.23 as the one and only engine, 2026-09-13, main @0446e93):
+        // rulesets 1 and 2, procedural with boulders, without, endless, and
+        // hand-drawn — every collider path. The Legacy engine is that code
+        // moved verbatim, so it must reproduce every recorded keyframe and
+        // the recorded crash tick. Bit-exact on the recording platform; the
+        // 1 mm tolerance only absorbs a libm ulp on another host — an
+        // engine change diverges by decimetres and crashes on other ticks
+        // (measured: 0 of 102 such fixtures survived rapier 0.31 as-is).
+        let fixtures: [(&str, &[u8]); 4] = [
+            ("expanse/ruleset 1", include_bytes!("../fixtures/legacy-expanse-ruleset1.pgrec")),
+            ("glide/ruleset 2", include_bytes!("../fixtures/legacy-glide-ruleset2.pgrec")),
+            ("flux/ruleset 1", include_bytes!("../fixtures/legacy-flux-ruleset1.pgrec")),
+            ("hollows/ruleset 2", include_bytes!("../fixtures/legacy-hollows-ruleset2.pgrec")),
+        ];
+        for (name, bytes) in fixtures {
+            let data = crate::replay::decompress(bytes).expect(name);
+            let (rec, _) = Recording::deserialize(&data).expect(name);
+            assert_eq!(Engine::of(&rec.params), Engine::Legacy, "{name}");
+            assert!(rec.keyframes.len() >= 7, "{name}: fixture too short to mean anything");
+            let out = resim(&rec);
+            assert_eq!(out.len(), rec.keyframes.len(), "{name}: keyframe count / crash tick");
+            for (a, b) in rec.keyframes.iter().zip(out.iter()) {
+                assert_eq!(a.tick, b.tick, "{name}");
+                let dp = ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt();
+                let dv = ((a.vx - b.vx).powi(2) + (a.vy - b.vy).powi(2)).sqrt();
+                assert!(dp < 1e-3 && dv < 1e-3, "{name} @{}: drift {dp} m / {dv} m/s", a.tick);
+                assert!((a.hull - b.hull).abs() < 1e-3 && (a.fuel - b.fuel).abs() < 1e-3, "{name} @{}", a.tick);
+            }
+        }
+    }
+
     fn one_foot_pose(sim: &Sim, a: f32) -> Keyframe {
         let cx = sim.pads.values().map(|p| p.cx).min_by(|a, b| a.abs().total_cmp(&b.abs())).unwrap();
         let pad_y = sim.pads.values().find(|p| p.cx == cx).unwrap().y;
@@ -1983,7 +1978,7 @@ mod tests {
         for _ in 0..480 {
             legacy.tick(InputState::default());
         }
-        assert!(legacy.bodies[legacy.ship].is_sleeping(), "ruleset 1 keeps the legacy sleep");
+        assert!(legacy.ship_sleeping(), "ruleset 1 keeps the legacy sleep");
         assert!(legacy.ship_pose().2 > 0.15, "frozen mid-rock: {}", legacy.ship_pose().2);
 
         let mut sim = Sim::with_rules(Level::demo(), ruleset_v2());
@@ -1991,7 +1986,7 @@ mod tests {
         let mut landed = false;
         for _ in 0..720 {
             landed |= sim.tick(InputState::default()).landed;
-            assert!(!sim.bodies[sim.ship].is_sleeping(), "ruleset 2 never sleeps");
+            assert!(!sim.ship_sleeping(), "ruleset 2 never sleeps");
         }
         assert!(sim.ship_pose().2.abs() < 0.02, "levelled by gravity alone: {}", sim.ship_pose().2);
         assert!(landed, "the settled ship's landing registers");

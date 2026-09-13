@@ -3282,7 +3282,7 @@ async fn main() {
         }
 
         // Ruleset badge (pegasus#194): a replay flown under a ruleset other
-        // than this build's current one says so — "FLOWN ON v1" for an older
+        // than this build's current one says so — "FLOWN ON RULES 1" for an older
         // registry entry, "FLOWN ON A NEWER VERSION" when the header
         // matches none this build ships (parameter-only future rulesets
         // still replay bit-exactly, see Sim::with_rules). Top centre under
@@ -3293,7 +3293,7 @@ async fn main() {
             let current = sim::rulesets().len() as u16;
             let tag = match sim::ruleset_number(&rec.params) {
                 Some(n) if n == current => None,
-                Some(n) => Some(format!("FLOWN ON v{n}")),
+                Some(n) => Some(format!("FLOWN ON RULES {n}")),
                 None => Some("FLOWN ON A NEWER VERSION".to_string()),
             };
             if let Some(tag) = tag {
