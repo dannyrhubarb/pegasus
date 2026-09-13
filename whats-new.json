@@ -1,5 +1,15 @@
 [
  {
+  "rev": "82ac5a8",
+  "date": "2026-09-13T09:28:10+02:00",
+  "note": "New: The About screen now shows the game's version number — straight from the release tag"
+ },
+ {
+  "rev": "643fac3",
+  "date": "2026-09-13T09:28:10+02:00",
+  "note": "New: When an update is worth having but not required, the game now asks nicely — with a Not-now button"
+ },
+ {
   "rev": "9c35d53",
   "date": "2026-09-08T19:58:34+02:00",
   "note": "Fixed: The camera no longer wanders off after a crash — the wreck stays put where it died"
