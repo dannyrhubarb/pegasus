@@ -41,9 +41,43 @@ Every build's identity comes from **annotated `vMAJOR.MINOR.PATCH` tags on
 - **Bump rule (owner convention)**: features bump MINOR, fixes PATCH, a
   sim/replay break (`!` commits) MAJOR — Apple requires each submitted
   marketing version to exceed the last approved one, and any bump
-  satisfies that. Cutting a release: `git tag -a v1.3.0 -m v1.3.0 && git
-  push origin v1.3.0`, then dispatch **Release apps**. Annotated tags are
-  the convention (the script's `--tags` would also see lightweight ones).
+  satisfies that. Annotated tags are the convention (the script's
+  `--tags` would also see lightweight ones).
+- **WHEN to tag — the release cycle (owner decision 2026-09-13)**: a
+  marketing version labels a CYCLE, not a commit — exactly how the
+  stores model it (one version, many builds with increasing build
+  numbers, one of them promoted). So the tag goes on **the commit of
+  the FIRST beta build**, not on the start of the work and not on the
+  store release:
+  1. Work on the next version starts with NO tag — main reads
+     `1.0.0+N` and the website deploys it as usual (the web is always
+     the newest thing; its version never needs to match the store's).
+  2. The first TestFlight / Play-testing upload: `git tag -a v1.1.0 -m
+     v1.1.0 && git push origin v1.1.0`, then dispatch **Release apps**.
+     Every beta from here on is marketing `1.1.0` with a fresh build
+     number (`1.1.0+0`, `1.1.0+3`, …); `--marketing` takes the nearest
+     tag, HEAD need not BE the tag.
+  3. Bugs found in beta are plain commits on main — no new tag. A
+     feature slipping in during beta is still no new tag: semver
+     counts RELEASED versions, and the store never saw 1.1.0.
+  4. The store release is whichever build passes; it is identified by
+     its full version (`1.1.0+4`) + build number (a GitHub Release on
+     the tag can note it). Policy: `minVersion: "1.1.0"` walls every
+     1.0.x install and leaves the betas alone; `"1.1.0+4"` retires the
+     betas that predate a fix.
+  5. The NEXT tag's number is decided by what accumulated since the
+     last one when ITS beta starts (any `feat` → v1.2.0, only fixes →
+     v1.1.1, a `!` → v2.0.0 — the computed-bump step in #214).
+  **Hotfix while a beta is in flight** (the one case for a tag off
+  main): branch `release/1.0` from the `v1.0.0` tag, cherry-pick the
+  fix, tag `v1.0.1` on that branch, dispatch Release apps on that ref —
+  the version script works on any ref. Tagging only at the store
+  release was rejected (betas would upload as `1.0.0` with higher build
+  numbers and read as re-releases of the shipped version); pre-release
+  tags (`v1.1.0-beta.1`) were deferred — Apple rejects any suffix in
+  the marketing version, so the label could only ever show on Android
+  and the About screen, and it needs pre-release parsing in the script
+  and the policy's tuple order (#214 if ever wanted).
 - CI needs full history AND tags: `fetch-depth: 0` fetches both (every
   build workflow already uses it for whats-new). Tag-triggered releases,
   a computed bump from the Conventional Commits since the last tag, and
