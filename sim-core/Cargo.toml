@@ -19,4 +19,4 @@ rapier2d = { version = "0.35.3", features = ["default"] }
 # SAME crate version or the two Vec2s won't unify.
 glam = "0.27"
 # Deflate for the shareable replay blob (pure Rust, wasm-friendly).
-miniz_oxide = "0.8"
+miniz_oxide = "0.9"
