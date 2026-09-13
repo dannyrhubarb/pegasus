@@ -53,10 +53,14 @@ Every build's identity comes from **annotated `vMAJOR.MINOR.PATCH` tags on
      `1.0.0+N` and the website deploys it as usual (the web is always
      the newest thing; its version never needs to match the store's).
   2. The first TestFlight / Play-testing upload: `git tag -a v1.1.0 -m
-     v1.1.0 && git push origin v1.1.0`, then dispatch **Release apps**.
-     Every beta from here on is marketing `1.1.0` with a fresh build
-     number (`1.1.0+0`, `1.1.0+3`, …); `--marketing` takes the nearest
-     tag, HEAD need not BE the tag.
+     v1.1.0 && git push origin v1.1.0` — **the tag push IS the release**:
+     `release-apps.yml` triggers on `v[0-9]*` tag pushes and dispatches
+     both store workflows AT THE TAG REF (2026-09, #214 step 3). Later
+     betas in the cycle are a manual **Release apps** dispatch on main
+     (no new tag — the nearest tag supplies the marketing version).
+     Every beta is marketing `1.1.0` with a fresh build number
+     (`1.1.0+0`, `1.1.0+3`, …); `--marketing` takes the nearest tag,
+     HEAD need not BE the tag.
   3. Bugs found in beta are plain commits on main — no new tag. A
      feature slipping in during beta is still no new tag: semver
      counts RELEASED versions, and the store never saw 1.1.0.
@@ -70,8 +74,9 @@ Every build's identity comes from **annotated `vMAJOR.MINOR.PATCH` tags on
      v1.1.1, a `!` → v2.0.0 — the computed-bump step in #214).
   **Hotfix while a beta is in flight** (the one case for a tag off
   main): branch `release/1.0` from the `v1.0.0` tag, cherry-pick the
-  fix, tag `v1.0.1` on that branch, dispatch Release apps on that ref —
-  the version script works on any ref. Tagging only at the store
+  fix, tag `v1.0.1` on that branch and push the tag — the tag push
+  dispatches the store builds at that ref, and the version script works
+  on any ref. Tagging only at the store
   release was rejected (betas would upload as `1.0.0` with higher build
   numbers and read as re-releases of the shipped version); pre-release
   tags (`v1.1.0-beta.1`) were deferred — Apple rejects any suffix in
@@ -79,10 +84,10 @@ Every build's identity comes from **annotated `vMAJOR.MINOR.PATCH` tags on
   and the About screen, and it needs pre-release parsing in the script
   and the policy's tuple order (#214 if ever wanted).
 - CI needs full history AND tags: `fetch-depth: 0` fetches both (every
-  build workflow already uses it for whats-new). Tag-triggered releases,
-  a computed bump from the Conventional Commits since the last tag, and
-  the reproducible-build work (pinned toolchains, twice-build diff,
-  provenance attestation for the shells) are the follow-ups in #214.
+  build workflow already uses it for whats-new). A computed bump from
+  the Conventional Commits since the last tag and the reproducible-build
+  work (pinned toolchains, twice-build diff, provenance attestation for
+  the shells) are the remaining follow-ups in #214.
 
 ### Deploy pipeline & PR previews
 The site lives at **`https://pegasusmoonlander.com`** (custom domain on this
@@ -2580,7 +2585,10 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   could reach a device; store publishing is now a deliberate manual action
   (Actions → run workflow). **`release-apps.yml` (Release apps)** is the
   one-click wrapper: dispatching it fires both store workflows (per-platform
-  boolean inputs to skip one). It API-dispatches them (`gh workflow run`)
+  boolean inputs to skip one), and **it also fires on a `v[0-9]*` tag
+  push** (2026-09 — the tag IS the release; both platforms, at the tag
+  ref, see "Versioning"; a tag push is a human action, so the pause
+  stands). It API-dispatches them (`gh workflow run`)
   rather than `workflow_call`ing them — DELIBERATE: a called workflow runs
   under the caller's `github.run_number`, and both apps use their own run
   number as the store build number (CFBundleVersion / versionCode must keep

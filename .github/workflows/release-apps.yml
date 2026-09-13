@@ -1,7 +1,17 @@
 # One-click store release: dispatches BOTH store-release workflows — iOS
 # TestFlight and Android release — now that automatic publishing on main
-# pushes is paused and releasing is a manual action. Untick a platform in
-# the dispatch form to release just one.
+# pushes is paused and releasing is a deliberate action. Two ways in:
+#   - push an annotated release tag (`git tag -a v1.1.0 -m v1.1.0 && git
+#     push origin v1.1.0`): the tag IS the release — this fires with the tag
+#     as the ref, so both store builds are cut from exactly the tagged
+#     commit and their marketing version is the tag (tools/version.sh
+#     --marketing; see CLAUDE.md "Versioning" for WHEN to tag — the first
+#     beta of a cycle). A tag on a hotfix branch off an old tag works the
+#     same way. A tag push is a human action, so this stays consistent
+#     with the paused push-to-main publishing.
+#   - manual dispatch on a branch (the later betas of a cycle — no new tag,
+#     the nearest tag supplies the marketing version). Untick a platform
+#     in the dispatch form to release just one; a tag push always does both.
 #
 # It DISPATCHES the two workflows via the API instead of calling them as
 # reusable workflows (`uses:` / workflow_call) — DELIBERATELY, do not "tidy"
@@ -16,6 +26,8 @@
 name: Release apps
 
 on:
+  push:
+    tags: ["v[0-9]*"]
   workflow_dispatch:
     inputs:
       ios:
@@ -37,16 +49,21 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
+      # $GITHUB_REF_NAME is the tag on a tag push and the branch on a manual
+      # dispatch; `gh workflow run --ref` accepts either, and the store
+      # workflows check out that ref (full depth + tags, so the tag-derived
+      # version resolves). On a tag push `inputs.*` are empty — both
+      # platforms release.
       - name: Dispatch iOS TestFlight
-        if: ${{ inputs.ios }}
+        if: ${{ github.event_name == 'push' || inputs.ios }}
         run: gh workflow run ios-testflight.yml --ref "$GITHUB_REF_NAME"
 
       - name: Dispatch Android release
-        if: ${{ inputs.android }}
+        if: ${{ github.event_name == 'push' || inputs.android }}
         run: gh workflow run android-release.yml --ref "$GITHUB_REF_NAME"
 
       - name: Where to watch
         run: |
-          echo "Dispatched. Follow the runs at:"
+          echo "Dispatched from $GITHUB_REF_NAME ($GITHUB_EVENT_NAME). Follow the runs at:"
           echo "  https://github.com/$GH_REPO/actions/workflows/ios-testflight.yml"
           echo "  https://github.com/$GH_REPO/actions/workflows/android-release.yml"
