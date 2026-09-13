@@ -87,10 +87,12 @@ push-retry loop for concurrent deploys):
 
 ## Project structure
 - `src/main.rs` — input exports/atomics, window conf, the frame loop (input gathering + stick gating, camera, drawing, HUD, minimap, crash dialog/replay/ghost cosmetics), and unit tests
-- `sim-core/` — the **`pegasus-sim` library crate** (workspace member): the whole deterministic half of the game, extracted 2026-07 so pegasus-backend can compile the IDENTICAL simulation for server-side score verification (it consumes this crate as a cargo **git dependency pinned to a `main` rev** — physics/level changes here need a backend re-pin + redeploy, see the backend repo's CLAUDE.md). **Nothing in it may depend on macroquad or any nondeterminism**; it uses `glam` (pinned to the version macroquad 0.4.15 re-exports, so `Vec2` unifies across the boundary) + `rapier2d` + `miniz_oxide`:
+- `sim-core/` — the **`pegasus-sim` library crate** (workspace member): the whole deterministic half of the game, extracted 2026-07 so pegasus-backend can compile the IDENTICAL simulation for server-side score verification (it consumes this crate as a cargo **git dependency pinned to a `main` rev** — physics/level changes here need a backend re-pin + redeploy, see the backend repo's CLAUDE.md). **Nothing in it may depend on macroquad or any nondeterminism**; it uses `glam` (pinned to the version macroquad 0.4.15 re-exports, so `Vec2` unifies across the boundary) + **TWO Rapier versions** (`rapier_legacy` = 0.23.1 frozen, `rapier2d` = 0.35 — see "Physics engines") + `miniz_oxide`:
+  - `sim-core/src/engine.rs` — **the physics engines**: the one small interface `Sim` needs (ship body, static segment/hull colliders, forces, `step`) implemented twice, once per Rapier version, selected per recording by the ruleset's `engine` field — see "Physics engines"
   - `sim-core/src/sim.rs` — **the deterministic simulation core**: `Sim` owns all Rapier state, the sliding collider windows (BTreeMaps) and ship systems (fuel/hull/score/landing/crash), advanced ONLY by `tick(InputState) -> TickReport` at `PHYSICS_DT`; plus `resim(&Recording)` and all physics constants. Same inputs + same start keyframe → bit-identical trajectory (unit-tested). **Any new gameplay force/effect must go through `tick`** — frame-level physics mutation would break replay determinism.
   - `sim-core/src/world.rs` — deterministic world generation, parameterized by a **`Level`** (see "Levels"): cave curves, shafts, obstacles, pads and `stand_y` are all `Level` methods; plus **`Terrain`** (hand-drawn polygon worlds — see "Levels"), `Rng`/`hash_u32`, the world constants (`SEG_LEN`, `RESET_X`, `PERIOD`, `V_PERIOD`, …) and `shipped_levels()` — the stem → `Level` map of the compiled-in level files the backend verifier params-checks submissions against (kept in sync with `levels/manifest.json` by a unit test)
   - `sim-core/src/replay.rs` — the hybrid `Recording` format + blob codec (see "Hybrid recording")
+  - `sim-core/examples/replay_drift.rs` — **replay drift check**: re-sims every `.pgrec` in a directory on THIS build and reports per-keyframe drift (bit-exact count, first divergence, max drift) plus a port of the backend verifier's segment loop and verdict (`cargo run --release --example replay_drift -- blobs/`; an optional `scores.txt` enables the score bound). The measuring tool AND the regression gate for physics-engine work — see "Physics engines"
   - `sim-core/examples/landing_diag.rs` — **landing diagnostic**: re-sims a `.pgrec` blob (e.g. from a bug-report zip) and logs the landing predicate around every pad approach — which settle condition held/failed per tick and how far the registration timer got (`cargo run --release --example landing_diag -- blob.pgrec`). Built for "my landing didn't register" reports; the verifier-side twin is pegasus-backend's `verify_blob`
 - `src/render.rs` — radial light shader sources, faceted wall/shaft lattice (`lattice_point`, `shaft_lattice`, `facet_shade`), `draw_flat_mesh`, and `triangulate` (ear-clip fill for hand-drawn terrain polygons)
 - `src/ship_mesh.rs` — `SHIP_TRIS` / `SHIP_DETAILS` data tables extracted from the Flash SWF
@@ -1553,7 +1555,7 @@ exist, selected by the ruleset's `land_rule` (#194 phase 4, 2026-09)**:
 ruleset 1 (legacy, `land_rule` 0, hold `PAD_LAND_TIME = 0.8 s`) = the
 ship's CENTRE within `PAD_HALF_W` of the pad centre and the foot line
 (0.73 below origin) within 0.3 of the deck top — a foot hanging over the
-edge still counted; **ruleset 2 (live, `land_rule` 1, hold 0.4 s) = BOTH
+edge still counted; **rulesets 2–3 (live, `land_rule` 1, hold 0.4 s) = BOTH
 FEET TOUCHING the deck** — each leg-pod tip (`FOOT_X = ±0.33`,
 `FOOT_Y = −0.73` scaled-local, rotated with the hull) inside the deck span
 and within `FOOT_TOUCH_M = 0.10` of its top (contact slop only — the
@@ -1866,11 +1868,15 @@ for now:
   baseline** (what every v3–v5 blob means; never edit it — the module
   consts are its single source), **`ruleset_v2()`** (2026-09: 0.4 s hold, never-sleeping ship
   + the both-feet landing rule, `min_logic` 2 — see "Landing pads &
-  scoring") and **`sim_params()` is what live play flies** (currently =
-  v2; a tuning change = add `ruleset_vN()`, append it to `rulesets()` and
-  repoint, never edit a shipped entry). Since live play is on ruleset 2
-  every new recording is v6 (`min_logic` 2): the API withholds them from
-  pre-v6 clients and the frozen app builds until those update. The racing ghost needs NO
+  scoring"), **`ruleset_v3()`** (2026-09: ruleset 2's numbers on the
+  MODERN physics engine — `engine` 1 = rapier 0.35, `min_logic` 3; see
+  "Physics engines") and **`sim_params()` is what live play flies**
+  (currently = v3; a tuning change = add `ruleset_vN()`, append it to
+  `rulesets()` and repoint, never edit a shipped entry). Since live play
+  is on ruleset 3 every new recording is v6 (`min_logic` 3): the API
+  withholds them from older clients and the frozen app builds until
+  those update. The extension block's field 6 is `engine` (neutral
+  default 0 = the legacy engine, per the append contract). The racing ghost needs NO
   ruleset gate: it is an independent lockstep re-sim of its own
   recording under its own header rules (unlike the LEVEL gate, which
   stays — the ghost renders in the live world's geometry).
@@ -2262,9 +2268,69 @@ The ship uses a **compound collider** of three **capsules** (stadium shapes) par
 - **Left leg pod**: `capsule((−0.26, −0.30), (−0.33, −0.64), r=0.09)` — angled out to the foot.
 - **Right leg pod**: `capsule((+0.26, −0.30), (+0.33, −0.64), r=0.09)` — mirror.
 
-Each is built `ColliderBuilder::new(SharedShape::capsule(a, b, r)).restitution(0.2)` (`SharedShape`, `point!` from `rapier2d::prelude::*`). Rapier 2D has **no ellipse primitive** — capsule is the smooth-rounded alternative; for an even tighter (but faceted) fit you could use `convex_hull` of the `SHIP_TRIS` vertices, at the cost of filling the concave notch between the feet. Cave walls are `segment` colliders (zero thickness). The body has `ccd_enabled(true)`, which matters more now: a long free-fall down a vertical shaft can pass 50 m/s, far above the ~17 m/s of normal cave flight.
+Each is built `ColliderBuilder::new(SharedShape::capsule(a, b, r)).restitution(0.2)` — inside `engine.rs`, once per Rapier version (nalgebra `point!`s in the legacy engine, glam `Vector::new` in the modern one; `Sim` itself never sees a Rapier type). Rapier 2D has **no ellipse primitive** — capsule is the smooth-rounded alternative; for an even tighter (but faceted) fit you could use `convex_hull` of the `SHIP_TRIS` vertices, at the cost of filling the concave notch between the feet. Cave walls are `segment` colliders (zero thickness). The body has `ccd_enabled(true)`, which matters more now: a long free-fall down a vertical shaft can pass 50 m/s, far above the ~17 m/s of normal cave flight.
 
 **RCS / attitude thrusters** (cosmetic particles, `kind 1/2`): bottom nozzles flanking the main booster vent **downward** (like a mini main thruster). Turning **left** → left nozzle at scaled-local `(−0.30, −0.71)`; turning **right** → right nozzle at `(0.30, −0.71)`. Gas exits `−Y` (downward) from both. The x positions sit in the leg nozzle (gold accent: unscaled x ≈ ±0.152–0.249 → midpoint ±0.30 scaled). Emission coords are in **scaled world units** — `lp()`/`ld()` do **not** apply `SHIP_SCALE` (only the render-time `rot` closure does), so don't multiply these by `SHIP_SCALE` (an earlier bug double-scaled them to ±0.60 and spawned the puffs outside the hull).
+
+## Physics engines (two Rapier versions, `sim-core/src/engine.rs`)
+
+`Sim` does not own Rapier state any more: it owns an `engine::World`, an
+enum over **two complete physics stacks compiled side by side** —
+`Legacy` (`rapier_legacy` = rapier **0.23.1**, pinned `=`) and `Modern`
+(`rapier2d` = rapier **0.35**) — and builds the one the recording's
+ruleset names (`SimParams::engine`, format-v6 extension field 6: 0 =
+Legacy, 1 = Modern; `Engine::of(&rules)`). Rulesets 1 and 2 run Legacy,
+ruleset 3 (live play since 2026-09) runs Modern.
+
+**Why (measured 2026-09, the rapier 0.31 trial)**: a Rapier bump does not
+reproduce old trajectories. Rapier 0.27 replaced the broad-phase, 0.29
+rewrote the velocity-constraint solver, 0.35 changed restitution and
+sleeping again — and chaos amplifies a rounding difference through every
+contact. Re-simming the 69 live all-time board runs on 0.31: **0 of 69
+bit-exact** (first divergence at the very first keyframe), **24 of 69
+outside the backend verifier's drift tolerances** (the Expanse record's
+resim crashed 40 s early and failed its score bound), per-keyframe
+drift median 0.14 m / max 1.8 m vs 0.0015 m / 0.42 m on 0.23 (that
+residue is wasm-libm-vs-glibc, absorbed by re-anchoring). 102 scripted
+runs recorded natively on 0.23 and re-simmed natively on 0.31 (same
+libm, so the engine alone): 0 of 102 bit-exact, 20 crash on a different
+tick. Since stored replays, the racing ghost and score verification all
+rest on bit-exact resim, replacing the engine would have orphaned every
+blob ever recorded. Keeping the old engine compiled in costs wasm size
+(measured before `wasm-opt`: 1.23 MB with 0.23 alone, 1.43 MB with 0.35
+alone, 1.90 MB with both) and keeps all of history replayable.
+
+**The rules**:
+- **`rapier_legacy` and `engine::legacy` are FROZEN** — the pre-engine
+  `Sim` internals moved verbatim (same builder calls, same insert/remove
+  sequence). Never bump the pin, never "clean up" the module. The gate:
+  `the_legacy_engine_reproduces_recordings_made_before_the_engine_split`
+  resims four blobs recorded by the pre-engine build (`sim-core/fixtures/
+  legacy-*.pgrec`, rulesets 1 + 2, boulders / no boulders / endless /
+  hand-drawn) and demands every keyframe + the crash tick back; and the
+  `replay_drift` example's report over a corpus of real blobs must not
+  change by a digit when engine.rs is touched (that is how this PR was
+  verified: identical reports on the 69 live replays + 102 fixtures
+  before and after the split).
+- **A future Rapier upgrade = a NEW engine, never a replacement**: add a
+  `World` variant + module, a `ruleset_vN()` naming it (`engine` N-1),
+  bump `LOGIC_VERSION` and stamp it as `min_logic` (older clients then
+  refuse those replays with "update to watch" instead of desyncing), keep
+  `sim_params()` pointing at the newest, then the REPIN dance — the
+  backend must compile the new engine before the game flies it (backend
+  first, promote prod, then merge the game PR; see the backend CLAUDE.md).
+  The engine abstraction adds no state, so the determinism rules are
+  unchanged: identical op sequence live and in resim, on either engine.
+- **Boards stay merged across rulesets** (owner rule): ruleset 3 changes
+  no number, only the solver, and the per-second drift between the two
+  engines is centimetres — scores are comparable; rows flown on 1/2 show
+  the "vN" tag like any older ruleset.
+- The two Rapiers use different math types (nalgebra in 0.23, glam 0.33
+  via `glamx` in 0.35) and neither leaks out of `engine.rs`: positions
+  cross as f32 pairs / the crate's own glam-0.27 `Vec2` (macroquad's),
+  and `ColHandle` is the engine-neutral (index, generation) pair both
+  arenas expose. `Sim::engine()` / `ship_sleeping()` are the only
+  engine-aware reads (tests, diagnostics).
 
 ## iOS app (`ios/`)
 
@@ -2733,13 +2799,16 @@ commit the refreshed page.
   housekeeping PR with the bumps** rather than waiting for something to
   force it — the point is avoiding integration debt. Check release notes
   for breaking changes before crossing majors; CI + the preview deploy
-  validate the rest. **HARD EXCEPTION — sim-affecting crates**: `rapier2d`,
-  `glam` (pinned to macroquad's re-export) and anything else compiled into
+  validate the rest. **HARD EXCEPTION — sim-affecting crates**: `glam`
+  (pinned to macroquad's re-export) and anything else compiled into
   `sim-core` must NEVER be bumped as routine housekeeping — a physics-crate
   bump changes simulation results, which breaks stored replays, the racing
-  ghost and backend score verification, and requires the full REPIN dance
-  (see the backend CLAUDE.md) as a deliberate, coordinated change.
-  macroquad is pinned at 0.4.15 on purpose (vendored JS bundle matches it).
+  ghost and backend score verification. **Rapier in particular is never
+  bumped in place at all**: `rapier_legacy` is frozen forever, and a newer
+  Rapier arrives as a NEW engine variant + a new ruleset + a `LOGIC_VERSION`
+  bump + the REPIN dance (see "Physics engines" — the measured reason and
+  the procedure). macroquad is pinned at 0.4.15 on purpose (vendored JS
+  bundle matches it).
 - **Commit authorship**: every commit's author should be the real human
   contributor driving the session — never `Claude <noreply@anthropic.com>`.
   Use that person's GitHub-provided private noreply address

@@ -6,7 +6,14 @@ license = "GPL-3.0-or-later"
 description = "Pegasus deterministic simulation core: world generation, physics tick, hybrid replay format. Shared by the game (dannyrhubarb/pegasus) and the score-verification backend (dannyrhubarb/pegasus-backend)."
 
 [dependencies]
-rapier2d = { version = "0.23", features = ["default"] }
+# TWO physics engines, compiled side by side (see src/engine.rs): a
+# replay re-simulates under the engine its ruleset names, so old runs keep
+# resimming bit-exactly on the engine they were flown on while new runs fly
+# the current one. `rapier_legacy` is FROZEN at the version rulesets 1–2
+# were recorded with — never bump it; a Rapier upgrade is a NEW engine + a
+# new ruleset (CLAUDE.md "Physics engines"), never an edit of this pin.
+rapier_legacy = { package = "rapier2d", version = "=0.23.1", features = ["default"] }
+rapier2d = { version = "0.35.3", features = ["default"] }
 # Pinned to the exact version macroquad 0.4.15 re-exports as its `Vec2` —
 # the game passes these types straight into rendering, so they must be the
 # SAME crate version or the two Vec2s won't unify.
