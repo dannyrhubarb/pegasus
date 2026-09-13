@@ -1297,15 +1297,15 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Version</div>
-        <div class="info-value" id="build-version">0.0.0+330</div>
+        <div class="info-value" id="build-version">1.0.0+1</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">55a50ec</div>
+        <div class="info-value" id="git-rev">627d61d</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-09-13T07:28:10Z</div>
+        <div class="info-value" id="build-time">2026-09-13T10:31:28Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -2876,7 +2876,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "55a50ec";
+    const wasmRev = "627d61d";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -3443,7 +3443,7 @@
     // an app resumed from the switcher for weeks still sees a new verdict:
     // - `minBuild` {android, ios} walls shell builds below it (CI run
     //   number); `minVersion` ("1.3.0" or "1.3.0+14") walls EVERY platform
-    //   whose baked tag-derived 0.0.0+330 sorts below it (tuple
+    //   whose baked tag-derived 1.0.0+1 sorts below it (tuple
     //   order — see CLAUDE.md "Versioning"). A wall NEVER interrupts a live
     //   play: a mid-flight/replay verdict latches in `wallPolicy` and
     //   showScreen raises it at the next screen (pause, crash, game over,
