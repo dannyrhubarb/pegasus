@@ -1,6 +1,6 @@
 # Pegasus — Moon Lander
 
-Rust + macroquad 0.4.15 + Rapier 2D game compiled to WebAssembly and served via GitHub Pages. The player pilots a ship through a procedurally-generated scrolling cave using thrust and rotation controls.
+Rust + macroquad 0.4.16 + Rapier 2D game compiled to WebAssembly and served via GitHub Pages. The player pilots a ship through a procedurally-generated scrolling cave using thrust and rotation controls.
 
 > **Keep this file current.** Update CLAUDE.md as part of every commit that changes architecture, adds a system, renames constants, fixes a gotcha, or reveals a lesson. Don't batch it up — update it while the context is fresh.
 
@@ -87,7 +87,7 @@ push-retry loop for concurrent deploys):
 
 ## Project structure
 - `src/main.rs` — input exports/atomics, window conf, the frame loop (input gathering + stick gating, camera, drawing, HUD, minimap, crash dialog/replay/ghost cosmetics), and unit tests
-- `sim-core/` — the **`pegasus-sim` library crate** (workspace member): the whole deterministic half of the game, extracted 2026-07 so pegasus-backend can compile the IDENTICAL simulation for server-side score verification (it consumes this crate as a cargo **git dependency pinned to a `main` rev** — physics/level changes here need a backend re-pin + redeploy, see the backend repo's CLAUDE.md). **Nothing in it may depend on macroquad or any nondeterminism**; it uses `glam` (pinned to the version macroquad 0.4.15 re-exports, so `Vec2` unifies across the boundary) + **TWO Rapier versions** (`rapier_legacy` = 0.23.1 frozen, `rapier2d` = 0.35 — see "Physics engines") + `miniz_oxide`:
+- `sim-core/` — the **`pegasus-sim` library crate** (workspace member): the whole deterministic half of the game, extracted 2026-07 so pegasus-backend can compile the IDENTICAL simulation for server-side score verification (it consumes this crate as a cargo **git dependency pinned to a `main` rev** — physics/level changes here need a backend re-pin + redeploy, see the backend repo's CLAUDE.md). **Nothing in it may depend on macroquad or any nondeterminism**; it uses `glam` (pinned to the version macroquad 0.4.16 re-exports, so `Vec2` unifies across the boundary) + **TWO Rapier versions** (`rapier_legacy` = 0.23.1 frozen, `rapier2d` = 0.35 — see "Physics engines") + `miniz_oxide`:
   - `sim-core/src/engine.rs` — **the physics engines**: the one small interface `Sim` needs (ship body, static segment/hull colliders, forces, `step`) implemented twice, once per Rapier version, selected per recording by the ruleset's `engine` field — see "Physics engines"
   - `sim-core/src/sim.rs` — **the deterministic simulation core**: `Sim` owns all Rapier state, the sliding collider windows (BTreeMaps) and ship systems (fuel/hull/score/landing/crash), advanced ONLY by `tick(InputState) -> TickReport` at `PHYSICS_DT`; plus `resim(&Recording)` and all physics constants. Same inputs + same start keyframe → bit-identical trajectory (unit-tested). **Any new gameplay force/effect must go through `tick`** — frame-level physics mutation would break replay determinism.
   - `sim-core/src/world.rs` — deterministic world generation, parameterized by a **`Level`** (see "Levels"): cave curves, shafts, obstacles, pads and `stand_y` are all `Level` methods; plus **`Terrain`** (hand-drawn polygon worlds — see "Levels"), `Rng`/`hash_u32`, the world constants (`SEG_LEN`, `RESET_X`, `PERIOD`, `V_PERIOD`, …) and `shipped_levels()` — the stem → `Level` map of the compiled-in level files the backend verifier params-checks submissions against (kept in sync with `levels/manifest.json` by a unit test)
@@ -1276,7 +1276,7 @@ gradient. (Previously a warm-brown set `80/64/50 · 118/95/72 · 150/120/88`.)
 - **Velocity vector** (opt-in, **off by default**): an arrow drawn from the ship along its momentum, length grows with speed, color = green ≤ 1 m/s (landable) / amber ≤ `CRASH_DV_SOFT` (damage-free touch) / red above (damaging); hidden under 0.25 m/s and while crashed. Toggled by the "Velocity vector" toggle in the menu's Settings screen → exported `set_show_velocity(i32)` → `SHOW_VEL` atomic; the choice persists per device in `localStorage` (`pegasus_show_vel`) and is re-applied once the WASM exports load. The Debug HUD telemetry line appends `v=…` in the same danger color (the arrow toggle and the Debug HUD are independent).
 - `light_radius` and warm tint both scale with `glow`, producing the radial light effect on cave walls.
 
-## macroquad 0.4.15 material API (verified from vendored source)
+## macroquad 0.4.16 material API (verified from vendored source)
 All symbols are in `macroquad::prelude::*` (already imported) — no extra imports needed:
 ```rust
 let mat = load_material(
@@ -2816,8 +2816,15 @@ commit the refreshed page.
   bumped in place at all**: `rapier_legacy` is frozen forever, and a newer
   Rapier arrives as a NEW engine variant + a new ruleset + a `LOGIC_VERSION`
   bump + the REPIN dance (see "Physics engines" — the measured reason and
-  the procedure). macroquad is pinned at 0.4.15 on purpose (vendored JS
-  bundle matches it).
+  the procedure). **macroquad is pinned EXACTLY (`=0.4.16`) on purpose**:
+  every macroquad patch pins its own miniquad (`=0.4.11` today), and
+  miniquad's JS glue is what `mq_js_bundle.js` vendors — so a macroquad
+  bump is done by hand: diff `js/gl.js` between the two miniquad crates
+  (0.4.10 → 0.4.11 was byte-identical, which is why 2026-09's bump needed
+  no bundle change), re-vendor the bundle if it differs, then run the
+  touch e2e (`tests/touch-e2e`, `CHROMIUM_PATH=…` on a machine with a
+  preinstalled Chromium) — the browser-level proof the glue still drives
+  the wasm.
 - **Commit authorship**: every commit's author should be the real human
   contributor driving the session — never `Claude <noreply@anthropic.com>`.
   Use that person's GitHub-provided private noreply address
