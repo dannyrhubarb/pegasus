@@ -1,5 +1,20 @@
 [
  {
+  "rev": "a8bec16",
+  "date": "2026-09-13T07:59:41Z",
+  "note": "New: Every high score now wears its rulebook badge (v1, v2, v3) — the Flight manual explains what changed between them"
+ },
+ {
+  "rev": "82ac5a8",
+  "date": "2026-09-13T09:28:10+02:00",
+  "note": "New: The About screen now shows the game's version number — straight from the release tag"
+ },
+ {
+  "rev": "643fac3",
+  "date": "2026-09-13T09:28:10+02:00",
+  "note": "New: When an update is worth having but not required, the game now asks nicely — with a Not-now button"
+ },
+ {
   "rev": "4fafec6",
   "date": "2026-09-13T07:07:22Z",
   "note": "New: A fresh physics engine under the hood — same moon, same rules, newer maths; your old replays still fly exactly as recorded"

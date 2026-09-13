@@ -723,6 +723,7 @@
        no ▶ (the API withholds replayPath) — the #scores-hint line below the
        list says why. */
     #scores-list .vtag { color: var(--amber); margin-left: 0.6em; letter-spacing: 0.06em; }
+    #scores-list .vtag.cur { color: var(--faint); } /* the current rulebook: present, not loud */
     #scores-list li.locked { opacity: 0.72; }
     #scores-hint { color: var(--amber); max-width: 100%; }
     #scores-list .watch {
@@ -1238,6 +1239,7 @@
       <div class="hint" id="scores-status" style="display:none"></div>
       <div class="hint" id="scores-empty">No flights recorded yet</div>
       <div class="hint" id="scores-hint" style="display:none"></div>
+      <div class="hint" id="scores-rules" style="display:none">vN = the rulebook the run was flown under &middot; About &rarr; Flight manual</div>
       <div class="mbtn back" id="btn-scores-back">&#8249; Back</div>
     </div>
 
@@ -1296,12 +1298,16 @@
     <div class="screen" id="scr-about">
       <div class="h2">ABOUT</div>
       <div class="info-row">
+        <div class="info-label">Version</div>
+        <div class="info-value" id="build-version">0.0.0+334</div>
+      </div>
+      <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">4fafec6-pr-215</div>
+        <div class="info-value" id="git-rev">bf6a056-pr-215</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-09-13T07:09:34Z</div>
+        <div class="info-value" id="build-time">2026-09-13T07:59:46Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -1402,9 +1408,26 @@
           <li><b>Sprints</b> (an hourglass) give you 60 seconds &mdash; as
           far as you can before the horn.</li>
         </ul>
-        <p class="note">These are the rules of the current game version.
-        Replays flown under older rules replay exactly as they were and
-        show a "flown on" badge.</p>
+        <h3>Rulebook versions</h3>
+        <p>Every run is stamped with the rulebook it was flown under
+        &mdash; the <b>vN</b> tag on the high-score boards and the
+        "flown on" badge on a replay. Old runs keep their old rules
+        forever and replay exactly as recorded; the boards mix versions
+        because the changes are small enough to compare.</p>
+        <ul>
+          <li><b>v1</b> &mdash; the original rules: a landing counted with
+          the ship's centre over the pad (a foot could hang over the edge)
+          after a 0.8 s hold, and a crooked touchdown could freeze
+          mid-rock.</li>
+          <li><b>v2</b> &mdash; the landing above: both feet on the deck,
+          a 0.4 s hold, and the ship always rocks level by itself.</li>
+          <li><b>v3</b> &mdash; the current rulebook: v2's rules on a
+          newer physics engine. Same moon, same numbers; only the maths
+          under the hood changed.</li>
+        </ul>
+        <p class="note">These are the rules of the current game version
+        (v3). A replay from a newer rulebook than your game knows asks
+        you to update before it can be watched.</p>
       </div>
       <div class="mbtn back" data-goto="scr-about">&#8249; Back</div>
     </div>
@@ -1485,15 +1508,20 @@
       <div class="mbtn back" id="btn-name-skip">Skip</div>
     </div>
 
-    <!-- Forced-update wall (app shells only, #190): shown when
-         app-policy.json declares this build too old — see the policy block
-         in the script. Deliberately NO .mbtn.back and no other exit:
-         uiBack's generic branch finds nothing, and showScreen/closeMenu
-         redirect here while walled, so the wall cannot be dismissed. -->
+    <!-- Update screen (#190) — see the policy block in the script. Two
+         modes on one screen: the forced-update WALL (app-policy.json's
+         minBuild / minVersion: this build is too old) hides the
+         Not-now button and showScreen/closeMenu redirect here while walled,
+         so it cannot be dismissed — the hidden .mbtn.back's handler no-ops
+         under the wall, so hardware back goes nowhere either; the
+         RECOMMENDED nudge (recommendBuild / recommendVersion: update
+         strongly advised, not required) shows Not now (.mbtn.back = the
+         hardware-back action too), which dismisses it for the session. -->
     <div class="screen" id="scr-update">
-      <div class="h2">UPDATE REQUIRED</div>
+      <div class="h2" id="update-title">UPDATE REQUIRED</div>
       <div class="hint" id="update-msg"></div>
       <div class="mbtn primary" id="btn-store">Update</div>
+      <div class="mbtn back" id="btn-update-skip" style="display:none">Not now</div>
     </div>
 
     <!-- CRT scanlines + vignette + sweep, over everything but tap-transparent -->
@@ -1910,11 +1938,19 @@
     // `wallPolicy` = a standing "too old" verdict whose wall hasn't been
     // raised yet because the canvas was live when it arrived (a wall must
     // never interrupt a play); the next screen raises it here.
+    // `nagPolicy` = a standing "update RECOMMENDED" verdict (the soft tier:
+    // strongly advised, not required). It shows the same screen with a
+    // Not-now button, and ONLY on the way to the main menu — never in the
+    // crash flow or over a pause, where a dismissable interstitial would
+    // just be in the way; boot is menu-open, so a launch verdict shows at
+    // once. Not now dismisses it for the session (armNag's latch).
     let walled = false;
     let wallPolicy = null;
+    let nagPolicy = null;
     function showScreen(id) {
       if (!walled && wallPolicy && id !== "scr-update") armWall(wallPolicy);
       if (walled && id !== "scr-update") id = "scr-update";
+      if (!walled && nagPolicy && id === "scr-home" && armNag(nagPolicy)) id = "scr-update";
       if (overlay === "scr-bugreport" && id !== "scr-bugreport") bugReportLeft();
       overlay = id;
       menuEl.classList.add("open");
@@ -2502,7 +2538,13 @@
     // so compare with startsWith("__") rather than a literal match.
     const gitRev = document.getElementById("git-rev");
     const buildTime = document.getElementById("build-time");
-    const rawBuildTime = buildTime.textContent.trim(); // ISO-8601 UTC when deployed
+    const rawBuildTime = buildTime.textContent.trim(); // the commit's date (ISO-8601 UTC) when deployed
+    // The tag-derived version ("1.3.0+14" — tools/version.sh, see CLAUDE.md
+    // "Versioning"): the page's identity for the update policy on EVERY
+    // platform, so it's captured raw here before the dev fallback below.
+    const buildVersion = document.getElementById("build-version");
+    const rawBuildVersion = buildVersion.textContent.trim();
+    if (rawBuildVersion.startsWith("__")) buildVersion.textContent = "dev (local build)";
     if (gitRev.textContent.trim().startsWith("__")) {
       gitRev.textContent = "dev (local build)";
     }
@@ -2712,6 +2754,7 @@
       const push = (k, v) => lines.push(k + ": " + v);
       push("reported", new Date().toISOString());
       push("build", wasmRev.startsWith("__") ? "dev (local build)" : wasmRev);
+      push("version", rawBuildVersion.startsWith("__") ? "dev (local build)" : rawBuildVersion);
       try {
         if (window.PegasusApp && PegasusApp.appBuild) push("app-build", String(PegasusApp.appBuild()));
         else if (window.__pegAppBuild) push("app-build", String(window.__pegAppBuild));
@@ -2852,7 +2895,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "4fafec6-pr-215";
+    const wasmRev = "bf6a056-pr-215";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -3418,8 +3461,9 @@
     // launch AND on a slow re-check (10 min + on foreground, throttled) so
     // an app resumed from the switcher for weeks still sees a new verdict:
     // - `minBuild` {android, ios} walls shell builds below it (CI run
-    //   number); `minWebBuildTime` (ISO instant) walls web pages whose
-    //   baked 2026-09-13T07:09:34Z predates it. A wall NEVER interrupts a live
+    //   number); `minVersion` ("1.3.0" or "1.3.0+14") walls EVERY platform
+    //   whose baked tag-derived 0.0.0+334 sorts below it (tuple
+    //   order — see CLAUDE.md "Versioning"). A wall NEVER interrupts a live
     //   play: a mid-flight/replay verdict latches in `wallPolicy` and
     //   showScreen raises it at the next screen (pause, crash, game over,
     //   exit) — boot is menu-open, so launch walls immediately. On the web
@@ -3427,6 +3471,19 @@
     //   verdict per build spends one SILENT self-reload (sessionStorage
     //   latch — the reload usually IS the fix; the latch stops the
     //   documented cache-wedge from looping it) before anything shows.
+    // - `recommendBuild` {android, ios} / `recommendVersion`: the SOFT
+    //   tier — same thresholds, same screen, but with a Not-now button:
+    //   for an update that is strongly advised without being required (a
+    //   fix worth nagging about that breaks nothing if skipped). A build
+    //   under BOTH thresholds gets the hard wall — min always wins. The
+    //   nudge shows only on the way to the main menu (never in the crash
+    //   flow, never over a paused run — see showScreen), spends NO silent
+    //   self-reload (a reload while a run is paused would kill it, and the
+    //   player was offered a choice, not a verdict), and Not now dismisses
+    //   it for the session PER THRESHOLD (sessionStorage — a raised
+    //   recommendation asks again; a cold start asks again).
+    //   `recommendMessage` replaces the nudge's text like `message` does
+    //   the wall's.
     // - `config` overrides the baked config.json — the remote fix that
     //   would have made the #171 drain a zero-day. SHELLS ONLY, enforced
     //   at the apply site: the web's config.json is deploy-fresh at every
@@ -3447,37 +3504,67 @@
       } catch (e) { /* broken bridge — treat as web */ }
       return null;
     })();
-    // The web page's own version identity: the deploy-baked build instant
-    // (`rawBuildTime`, captured by the About block above BEFORE the dev
-    // fallback rewrites the element — reading the DOM here is too late).
-    // Placeholder = dev build = feature off; previews are excluded too
-    // (fresh by construction, and the root page's cached policy must not
-    // leak into them — same localStorage origin).
-    const webBuild = (function () {
-      if (appShell) return null;
+    // The page's own version identity, on every platform: the baked
+    // tag-derived version (`rawBuildVersion`, "1.3.0+14" — captured by the
+    // About block above BEFORE the dev fallback rewrites the element).
+    // Placeholder = dev build = null; web previews are excluded too (fresh
+    // by construction, and the root page's cached policy must not leak
+    // into them — same localStorage origin). The shells' bundled page
+    // carries the same stamp, so one `minVersion` reaches all three.
+    const pageVersion = (function () {
       try {
-        if (/\/pr-\d+\//.test(location.pathname)) return null;
-        return rawBuildTime && !rawBuildTime.startsWith("__")
-          ? { buildTime: rawBuildTime } : null;
+        if (!appShell && /\/pr-\d+\//.test(location.pathname)) return null;
+        return rawBuildVersion && !rawBuildVersion.startsWith("__") ? rawBuildVersion : null;
       } catch (e) { return null; }
     })();
-    function policyWalls(p) {
-      // True only on an explicit, well-formed verdict for THIS platform.
+    function versionTuple(s) {
+      // "1.3.0+14" → [1, 3, 0, 14]; a bare "1.3.0" is +0. null = malformed.
+      const m = /^(\d+)\.(\d+)\.(\d+)(?:\+(\d+))?$/.exec(String(s));
+      return m ? [m[1], m[2], m[3], m[4] || "0"].map(Number) : null;
+    }
+    function versionBelow(a, b) {
+      for (let i = 0; i < 4; i++) if (a[i] !== b[i]) return a[i] < b[i];
+      return false;
+    }
+    function policyBelow(p, buildKey, versionKey) {
+      // True only on an explicit, well-formed verdict for THIS client: a
+      // shell's store build number under `p[buildKey][platform]` (the CI
+      // run number), or ANY platform's page version below `p[versionKey]`
+      // (tag-derived, tuple order). Either one suffices. Shared by the
+      // wall (min*) and the recommendation (recommend*) — same shape,
+      // different keys.
       try {
         if (!p || typeof p !== "object") return false;
-        if (appShell) {
-          if (!p.minBuild) return false;
-          const min = p.minBuild[appShell.platform];
+        if (appShell && p[buildKey]) {
+          const min = p[buildKey][appShell.platform];
           const m = appShell.build.match(/\((\d+)\)/); // "1.0 (42)" → 42
-          if (typeof min !== "number" || !isFinite(min) || !m) return false;
-          return parseInt(m[1], 10) < min;
+          if (typeof min === "number" && isFinite(min) && m && parseInt(m[1], 10) < min) return true;
         }
-        if (!webBuild || typeof p.minWebBuildTime !== "string") return false;
-        const built = Date.parse(webBuild.buildTime);
-        const min = Date.parse(p.minWebBuildTime);
-        if (!isFinite(built) || !isFinite(min)) return false;
-        return built < min;
+        if (pageVersion && typeof p[versionKey] === "string") {
+          const own = versionTuple(pageVersion), min = versionTuple(p[versionKey]);
+          if (own && min && versionBelow(own, min)) return true;
+        }
+        return false;
       } catch (e) { return false; }
+    }
+    const policyWalls = (p) => policyBelow(p, "minBuild", "minVersion");
+    const policyRecommends = (p) => policyBelow(p, "recommendBuild", "recommendVersion");
+    function nagKey(p) {
+      // The dismiss latch is keyed on the thresholds themselves, so a raised
+      // recommendation re-asks while a re-fetch of the same policy doesn't.
+      const b = appShell && p.recommendBuild ? p.recommendBuild[appShell.platform] : null;
+      return (appShell ? appShell.platform : "web") + ":" + (b == null ? "" : b) + ":" + (p.recommendVersion || "");
+    }
+    let nagDismissed = null; // in-memory twin of the sessionStorage latch
+    function nagIsDismissed(p) {
+      const k = nagKey(p);
+      if (nagDismissed === k) return true;
+      try { return sessionStorage.getItem("pegasus_update_nag") === k; } catch (e) { return false; }
+    }
+    function dismissNag(p) {
+      const k = nagKey(p);
+      nagDismissed = k;
+      try { sessionStorage.setItem("pegasus_update_nag", k); } catch (e) { /* in-memory only */ }
     }
     function policyConfig(p) {
       // The override must be complete and https to outrank the baked
@@ -3496,18 +3583,34 @@
       // and IT gets the visible wall with a manual Reload instead.
       if (!appShell) {
         try {
-          if (sessionStorage.getItem("pegasus_wall_reload") !== webBuild.buildTime) {
-            sessionStorage.setItem("pegasus_wall_reload", webBuild.buildTime);
+          if (sessionStorage.getItem("pegasus_wall_reload") !== pageVersion) {
+            sessionStorage.setItem("pegasus_wall_reload", pageVersion);
             location = freshUrl();
             return; // navigating away — nothing to draw
           }
         } catch (e) { /* storage blocked — straight to the wall */ }
       }
       walled = true;
+      fillUpdateScreen(p, false);
+    }
+    function armNag(p) {
+      // The soft verdict's counterpart: fill the screen in recommended
+      // mode (Not now shown) unless this threshold was already dismissed
+      // this session. Returns whether the screen should show.
+      if (nagIsDismissed(p)) return false;
+      fillUpdateScreen(p, true);
+      return true;
+    }
+    function fillUpdateScreen(p, soft) {
+      document.getElementById("update-title").textContent =
+        soft ? "UPDATE RECOMMENDED" : "UPDATE REQUIRED";
+      const custom = p && (soft ? p.recommendMessage : p.message);
       document.getElementById("update-msg").textContent =
-        (p && typeof p.message === "string" && p.message) || (appShell
-          ? "This version is out of date and can no longer play online. Update to keep flying."
-          : "This page is running an outdated build. Reload to get the latest version.");
+        (typeof custom === "string" && custom) || (appShell
+          ? (soft ? "A newer version with important fixes is available. Update when you can."
+                  : "This version is out of date and can no longer play online. Update to keep flying.")
+          : (soft ? "A newer build with important fixes is available. Reload to get it."
+                  : "This page is running an outdated build. Reload to get the latest version."));
       const btn = document.getElementById("btn-store");
       if (appShell) {
         const url = p && p.storeUrls && typeof p.storeUrls[appShell.platform] === "string"
@@ -3519,7 +3622,17 @@
         btn.style.display = "";
         btn.onclick = () => { location = freshUrl(); };
       }
+      document.getElementById("btn-update-skip").style.display = soft ? "" : "none";
     }
+    document.getElementById("btn-update-skip").addEventListener("click", () => {
+      // Not now — also what hardware back drives (uiBack clicks the
+      // screen's .mbtn.back). Under the HARD wall the button is hidden but
+      // a synthetic click still lands here, so it must no-op: the wall is
+      // lifted only by a corrected policy, never by the UI.
+      if (walled || !nagPolicy) return;
+      dismissNag(nagPolicy);
+      showScreen("scr-home");
+    });
     function applyWall(p) {
       if (!policyWalls(p)) {
         wallPolicy = null;
@@ -3527,14 +3640,30 @@
           walled = false;
           if (overlay === "scr-update") showScreen("scr-home"); // corrected policy lifts it
         }
+        applyNag(p);
         return;
       }
+      nagPolicy = null; // the hard verdict outranks the soft one
       wallPolicy = p;
       if (overlay === null) return; // canvas live (flight/replay): never
                                     // disturb a play — showScreen raises
                                     // the latched verdict at the next screen
       armWall(p);
       if (walled) showScreen("scr-update"); // not walled ⇒ armWall navigated away
+    }
+    function applyNag(p) {
+      // The soft tier, evaluated only once the hard one has declined. A
+      // verdict latches in `nagPolicy`; showScreen shows it on the next
+      // arrival at the main menu — or right now when the menu is already
+      // the open screen (boot, or a re-check while idling there). A
+      // withdrawn recommendation lifts a showing nudge in place.
+      if (!policyRecommends(p)) {
+        nagPolicy = null;
+        if (overlay === "scr-update" && !walled) showScreen("scr-home");
+        return;
+      }
+      nagPolicy = p;
+      if (overlay === "scr-home") showScreen("scr-home"); // re-enters via the nag hook
     }
     let cachedPolicy = null;
     let lastPolicyCheck = 0;
@@ -3553,7 +3682,7 @@
         .catch(() => cachedPolicy); // offline: last known policy (or none) stands
     }
     const policyPromise = (function () {
-      if (!appShell && !webBuild) return Promise.resolve(null); // dev / preview: feature off
+      if (!appShell && !pageVersion) return Promise.resolve(null); // dev / preview: feature off
       try { cachedPolicy = JSON.parse(localStorage.getItem("pegasus_app_policy") || "null"); } catch (e) { /* fresh */ }
       // Apply the cached verdict off the eval path (showScreen's helpers —
       // pegAnalytics among them — are defined below this block).
@@ -4030,9 +4159,12 @@
     // level picker — see renderLevels).
     let renderedBoardJson = null;
     // Ruleset versioning (#194): the newest shipped ruleset, as the API
-    // reports it (`currentRuleset` on every board response) — rows flown
-    // under any other ruleset get a "vN" tag. Falls back to this build's own
-    // registry until a response has arrived.
+    // reports it (`currentRuleset` on every board response). EVERY row
+    // carries its "vN" rulebook tag (owner ask 2026-09 — a board where only
+    // old rows are labelled read as "everything is v1"); the current
+    // rulebook's tag is dimmed, older ones amber, and the footnote under
+    // the list points at the Flight manual's "Rulebook versions". Falls
+    // back to this build's own registry until a response has arrived.
     let apiCurrentRuleset = 0;
     function currentRuleset() {
       if (apiCurrentRuleset) return apiCurrentRuleset;
@@ -4054,11 +4186,13 @@
       return url;
     }
     const scoresHint = document.getElementById("scores-hint");
+    const scoresRules = document.getElementById("scores-rules");
     function renderBoardRows(scores) {
       renderedBoardJson = JSON.stringify(scores);
       scoresList.textContent = "";
       scoresEmpty.style.display = scores.length ? "none" : "";
       const cur = currentRuleset();
+      scoresRules.style.display = scores.some(s => s.ruleset) ? "" : "none";
       let locked = 0;
       scores.forEach((s, i) => {
         const li = document.createElement("li");
@@ -4076,10 +4210,12 @@
         // date; it carries no replayPath, so it never grows a watch button.
         if (s.pending) { li.classList.add("pending"); when.textContent = "verifying…"; }
         else when.textContent = s.ts ? fmtDate(s.ts) : "";
-        if (s.ruleset && cur && s.ruleset !== cur) {
+        if (s.ruleset) {
           const tag = document.createElement("span");
-          tag.className = "vtag";
+          tag.className = "vtag" + (cur && s.ruleset === cur ? " cur" : "");
           tag.textContent = "v" + s.ruleset;
+          tag.title = "Rulebook v" + s.ruleset + (cur && s.ruleset === cur ? " (current)" : "")
+            + " — the rules this run was flown under; see About → Flight manual";
           when.appendChild(tag);
         }
         if (s.needsUpdate) { li.classList.add("locked"); locked++; }
