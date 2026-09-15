@@ -1,0 +1,13 @@
+{
+  "name": "pegasus-app-store-screenshots",
+  "private": true,
+  "type": "module",
+  "description": "Generates the App Store screenshot sets from the built site (see README.md)",
+  "scripts": {
+    "shots": "node screenshots.mjs",
+    "compose": "node compose.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.0"
+  }
+}

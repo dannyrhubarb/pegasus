@@ -2140,7 +2140,11 @@ for now:
   safe area — "FLOWN ON v1" for an older registry entry, "FLOWN ON A
   NEWER VERSION" when the header matches no ruleset this build ships
   (it still replays bit-exactly if parameter-only) — hidden when the
-  replay's ruleset is the current one. Verified headless against a
+  replay's ruleset is the current one; on portrait phones/tablets the
+  minimap reaches past the centre line, so the badge centres itself in
+  the free strip between the minimap's right edge and the exit ✕ instead
+  of sitting half under the minimap — found on the App Store screenshot
+  pass, 2026-09). Verified headless against a
   stubbed scores API (real `index.html` render path).
 - **Cosmetic trailer** (2026-08 — the format's FORWARD-compatibility
   channel): optional bytes after the last keyframe, any version — magic
@@ -2652,6 +2656,27 @@ re-acquired on the `visibilitychange` back while still wanted).
 - App icon: `icon.svg` rendered to an opaque 1024×1024 PNG in
   `Assets.xcassets` (no alpha — App Store validation rejects it);
   re-render if the SVG changes.
+- **App Store assets (`ios/app-store/`, 2026-09)**: everything App Store
+  Connect asks for, generated from the repo — `listing.md` (name /
+  subtitle / description / keywords with the character limits checked,
+  categories, the age-rating and App Privacy questionnaire answers derived
+  from `privacy.html` + the analytics section here, review notes, DSA
+  trader status, an optional Swedish localization), `screenshots.mjs`
+  (headless Chromium drives the REAL `site/` build at Apple's two required
+  sizes — iPhone 6.9" 1320×2868 @3x, iPhone 6.5" 1284×2778 @3x (which
+  one ASC marks required depends on the app record's age; both are
+  generated) and iPad 13" 2064×2752 @2x, plus landscape — through the menu, a burn on The Expanse / The Hollows, the
+  live board and a stored replay; synthetic multi-touch on the canvas,
+  corner buttons via `dispatchEvent("click")` because a Playwright click
+  is intercepted by `#hud-btns`, the replay GUI via a REAL
+  `touchscreen.tap` because its toggle listens for `pointerdown`) and
+  `compose.mjs` (captioned store sets in `screenshots/final/`, same pixel
+  size, JetBrains Mono from `fonts/`). `README.md` there has the
+  regeneration recipe and the submission checklist. Re-run for each
+  release whose UI changed; the raw captures are the uncaptioned
+  fallback. **Keep `listing.md`'s privacy table in step with
+  `privacy.html`** — Apple's labels must match what the app actually
+  sends.
 - **CI**: `ios-build.yml` (PRs touching `ios/` — sync + UNSIGNED
   xcodebuild, no secrets) and `ios-testflight.yml` (**manual dispatch
   ONLY** — automatic publish on `main` pushes is PAUSED since 2026-08,
