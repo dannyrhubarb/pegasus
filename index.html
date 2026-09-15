@@ -718,12 +718,13 @@
       text-align: left;
     }
     #scores-list .pdate { color: var(--faint); font-size: 0.72em; white-space: nowrap; }
-    /* Ruleset versioning (#194): a row flown under a non-current ruleset is
-       tagged; a row whose replay this build can't decode is dimmed and has
-       no ▶ (the API withholds replayPath) — the #scores-hint line below the
-       list says why. */
+    /* Ruleset versioning (#194): every row is tagged with the rulebook it
+       was flown under ("v2"), ONE colour for all of them (owner call
+       2026-09: dimming the current one read as two kinds of row); a row
+       whose replay this build can't decode is dimmed and has no ▶ (the API
+       withholds replayPath) — the #scores-hint line below the list says
+       why. */
     #scores-list .vtag { color: var(--amber); margin-left: 0.6em; letter-spacing: 0.06em; }
-    #scores-list .vtag.cur { color: var(--faint); } /* the current rulebook: present, not loud */
     #scores-list li.locked { opacity: 0.72; }
     #scores-hint { color: var(--amber); max-width: 100%; }
     #scores-list .watch {
@@ -1239,7 +1240,7 @@
       <div class="hint" id="scores-status" style="display:none"></div>
       <div class="hint" id="scores-empty">No flights recorded yet</div>
       <div class="hint" id="scores-hint" style="display:none"></div>
-      <div class="hint" id="scores-rules" style="display:none">vN = the rulebook the run was flown under &middot; About &rarr; Flight manual</div>
+      <div class="hint" id="scores-rules" style="display:none">Old runs, old rules: the v-number says which rulebook was in play &middot; About &rarr; Flight manual</div>
       <div class="mbtn back" id="btn-scores-back">&#8249; Back</div>
     </div>
 
@@ -4161,9 +4162,11 @@
     // Ruleset versioning (#194): the newest shipped ruleset, as the API
     // reports it (`currentRuleset` on every board response). EVERY row
     // carries its "vN" rulebook tag (owner ask 2026-09 — a board where only
-    // old rows are labelled read as "everything is v1"); the current
-    // rulebook's tag is dimmed, older ones amber, and the footnote under
-    // the list points at the Flight manual's "Rulebook versions". Falls
+    // old rows are labelled read as "everything is v1"), all one colour
+    // (the current rulebook only differs in its hover title — an earlier
+    // cut dimmed it, which read as two kinds of row), and the footnote
+    // under the list ("Old runs, old rules: …", owner wording) points at
+    // the Flight manual's "Rulebook versions". Falls
     // back to this build's own registry until a response has arrived.
     let apiCurrentRuleset = 0;
     function currentRuleset() {
@@ -4212,7 +4215,7 @@
         else when.textContent = s.ts ? fmtDate(s.ts) : "";
         if (s.ruleset) {
           const tag = document.createElement("span");
-          tag.className = "vtag" + (cur && s.ruleset === cur ? " cur" : "");
+          tag.className = "vtag";
           tag.textContent = "v" + s.ruleset;
           tag.title = "Rulebook v" + s.ruleset + (cur && s.ruleset === cur ? " (current)" : "")
             + " — the rules this run was flown under; see About → Flight manual";
