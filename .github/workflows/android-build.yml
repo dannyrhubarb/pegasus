@@ -48,10 +48,38 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-android-
 
       - name: Assemble webroot
+        env:
+          # The same backend config the web deploy writes — bundled, not
+          # fetched from the live site, so the build is reproducible from
+          # (commit, config); see the script.
+          PEGASUS_BACKEND_CONFIG: ${{ vars.BACKEND_CONFIG_JSON }}
         run: ./android/sync-web.sh
 
       - name: Build debug APK
         run: gradle -p android assembleDebug
+
+      # Reproducibility (#214 step 6): the release bundle and APK must come
+      # out byte-identical from a clean rebuild of the same inputs. No
+      # keystore here, so both are UNSIGNED — the comparable part of a real
+      # release (signing adds only META-INF/ entries and the APK signing
+      # block; every other zip entry is what this checks). The webroot from
+      # the step above is reused: it is an input, and the website's own
+      # reproducibility job already covers it. --rerun-tasks + a wiped
+      # build/ so nothing is served from a cache; a failure names the file.
+      - name: Rebuild the release outputs and compare
+        run: |
+          gradle -p android bundleRelease assembleRelease
+          mkdir -p "$RUNNER_TEMP/first"
+          cp android/app/build/outputs/bundle/release/app-release.aab \
+             android/app/build/outputs/apk/release/app-release-unsigned.apk "$RUNNER_TEMP/first/"
+          rm -rf android/app/build android/build
+          gradle -p android --no-build-cache --rerun-tasks bundleRelease assembleRelease
+          sha256sum "$RUNNER_TEMP"/first/* \
+            android/app/build/outputs/bundle/release/app-release.aab \
+            android/app/build/outputs/apk/release/app-release-unsigned.apk
+          cmp "$RUNNER_TEMP/first/app-release.aab" android/app/build/outputs/bundle/release/app-release.aab
+          cmp "$RUNNER_TEMP/first/app-release-unsigned.apk" android/app/build/outputs/apk/release/app-release-unsigned.apk
+          echo "Reproducible: the unsigned AAB and APK are byte-identical across two builds."
 
       - uses: actions/upload-artifact@v7
         with:

@@ -55,6 +55,11 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-android-
 
       - name: Assemble webroot
+        env:
+          # The same backend config the web deploy writes — bundled, not
+          # fetched from the live site, so the build is reproducible from
+          # (commit, config); see the script.
+          PEGASUS_BACKEND_CONFIG: ${{ vars.BACKEND_CONFIG_JSON }}
         run: ./android/sync-web.sh
 
       - name: Build debug APK
