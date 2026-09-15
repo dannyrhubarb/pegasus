@@ -420,6 +420,28 @@ pub extern "C" fn set_swap_sides(on: i32) {
     SWAP_SIDES.store(on as u32, Ordering::Relaxed);
 }
 
+// "Pro stick" (instant burn from centre — 2026-09): under the one-handed
+// stick-hold scheme the engine normally soft-starts — a flick grace, a
+// throttle ramp and a cold engine through a big flip (the three gates at
+// STICK_THRUST_DELAY / STICK_THRUST_RAMP / FLIP_GATE_RAD). Those gates cost
+// every stick burn ~0.2 s of full-thrust impulse that the split scheme's
+// throttle button never pays, so a one-handed ship visibly loses to a
+// split-flown ghost doing the same burn (Marcus's report, 2026-09). With
+// this on the engine decides ONCE per touch (ProStick): a finger that
+// stays in the centre for STICK_CENTRE_LIGHT_S is a press and lights at
+// full throttle on the spot, like the throttle button; a finger that
+// steers first keeps today's grace + ramp (a nudge never burns); and a
+// lit touch stays at full throttle through any steering until release.
+// The resolved throttle is what the recorder stores, so this is
+// frame-side only: no replay-format, ruleset or verifier change. Set from
+// the Settings toggle, persisted in localStorage; off by default.
+static STICK_INSTANT: AtomicU32 = AtomicU32::new(0);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_stick_instant(on: i32) {
+    STICK_INSTANT.store(on as u32, Ordering::Relaxed);
+}
+
 // Runtime level loading (levels are DATA, not code — levels/*.level files
 // fetched by index.html): JS asks for a buffer with level_buf_ptr(len),
 // writes the UTF-8 level text into wasm memory, then calls load_level(len).
@@ -1156,11 +1178,91 @@ const GHOST_MIN_SECS: f32 = 2.0;
 // Stick-hold engine gating (one-handed scheme): a quick flick shorter than
 // DELAY never lights the engine, thrust then ramps to full over RAMP, and a
 // commanded flip past FLIP_GATE keeps the engine cold until the nose settles
-// within FLIP_DONE of the target (steer first, burn once pointed).
+// within FLIP_DONE of the target (steer first, burn once pointed). Under
+// the "Pro stick" setting (STICK_INSTANT) they apply only until the engine
+// is LIT for the touch — see ProStick — and never under split controls,
+// where the stick never thrusts at all.
 const STICK_THRUST_DELAY: f32 = 0.12;
 const STICK_THRUST_RAMP: f32 = 0.18;
 const FLIP_GATE_RAD: f32 = 1.6;  // ~92°
 const FLIP_DONE_RAD: f32 = 0.35; // ~20°
+// "Pro stick" centre press: a finger that has stayed inside the heading
+// dead-zone (STICK_DZ = 9 px — by definition it has commanded no steering
+// yet) for this long since it landed is a PRESS, not the start of a
+// steering flick, and lights the engine at full throttle on the spot. The
+// window is the whole cost of a centre press against the split button's
+// instant 1.0 (~4 frames at 60 Hz, vs ~0.2 s under the flick grace + ramp);
+// raise it if gentle trim nudges keep lighting the engine, lower it if the
+// press feels late. A finger that leaves the dead-zone before the window
+// closes is steering first and gets the grace + ramp above, unchanged.
+const STICK_CENTRE_LIGHT_S: f32 = 0.06;
+// The press window must be SHORTER than the flick grace, or a centre press
+// would gain nothing over the default feel.
+const _: () = assert!(STICK_CENTRE_LIGHT_S < STICK_THRUST_DELAY);
+
+// The legacy stick-hold ramp: nothing for the flick grace, then linear to
+// full. `eligible_t` = seconds held with no flip settling.
+fn stick_ramp_throttle(eligible_t: f32) -> f32 {
+    ((eligible_t - STICK_THRUST_DELAY) / STICK_THRUST_RAMP).clamp(0.0, 1.0)
+}
+
+// "Pro stick" per-touch engine latch (owner spec 2026-09): the engine
+// decides ONCE per touch how to light, then stays lit for the rest of the
+// touch whatever the finger does.
+//   - Centre press: the finger never leaves the dead-zone for
+//     STICK_CENTRE_LIGHT_S → lit at full throttle, instantly from there
+//     (the split throttle button's instant 1.0, ~4 frames late at most).
+//   - Steer first: the finger leaves the dead-zone before the window
+//     closes → today's flick grace + ramp (+ the flip gate, applied by the
+//     caller while `!lit`), so a nudge or a flick never burns; if the
+//     finger stays down the ramp reaches full and the touch is lit.
+//   - Lit: full throttle until release — steering, a flip, anything;
+//     no gate cuts it. Release resets the latch.
+// Presentation-side state only: the resolved throttle is what the sim and
+// the recorder consume, so replays/verification never see this. Pure,
+// unit-tested.
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+struct ProStick {
+    lit: bool,         // engine committed for this touch
+    left_centre: bool, // the finger has commanded steering since it landed
+}
+
+impl ProStick {
+    // Advance one frame and return this frame's throttle. `deflection` =
+    // the raw knob offset as a fraction of STICK_TRAVEL (BEFORE the
+    // dead-zone rescale); `eligible_t` = seconds held with no flip settling.
+    fn update(&mut self, held: bool, deflection: f32, eligible_t: f32) -> f32 {
+        if !held {
+            *self = ProStick::default();
+            return 0.0;
+        }
+        if deflection >= STICK_DZ {
+            self.left_centre = true;
+        }
+        if !self.left_centre && eligible_t >= STICK_CENTRE_LIGHT_S {
+            self.lit = true;
+        }
+        let ramp = stick_ramp_throttle(eligible_t);
+        if ramp >= 1.0 {
+            self.lit = true;
+        }
+        if self.lit { 1.0 } else { ramp }
+    }
+}
+
+// The one-handed stick-hold throttle for this frame. Default feel: the
+// legacy ramp, whatever the deflection (touch = burn + point). "Pro stick"
+// (`instant`): the per-touch latch above. Pure, unit-tested.
+fn stick_hold_throttle(
+    pro: &mut ProStick, held: bool, instant: bool, eligible_t: f32, deflection: f32,
+) -> f32 {
+    if instant {
+        pro.update(held, deflection, eligible_t)
+    } else {
+        *pro = ProStick::default();
+        if held { stick_ramp_throttle(eligible_t) } else { 0.0 }
+    }
+}
 
 // --- In-canvas floating attitude stick (ported from index.html) ---
 // All positions/sizes are in LOGICAL px — the space `screen_width()` and
@@ -1543,6 +1645,7 @@ async fn main() {
     let mut replay_boom_timer = 0.0f32;
     let mut stick_thrust_t = 0.0f32; // seconds the stick-hold engine has been eligible
     let mut flip_settling = false;   // big flip commanded: engine cold until nose settles
+    let mut pro_stick = ProStick::default(); // "Pro stick" per-touch engine latch
     let mut pad_msg_timer = 0.0f32; // "+100" flash after a first landing
     // Time level completed: "LEVEL COMPLETE" grace before the game-over
     // dialog (the completion analogue of CRASH_DIALOG_DELAY — lets the
@@ -1606,6 +1709,7 @@ async fn main() {
             pad_msg_timer = 0.0;
             stick_thrust_t = 0.0;
             flip_settling = false;
+            pro_stick = ProStick::default();
             replay_boom_timer = 0.0;
             recorder = Recording::new(sim_params(), sim.level.to_params(),
                 (HYBRID_MAX_SECS / PHYSICS_DT) as u32);
@@ -1826,10 +1930,15 @@ async fn main() {
         } else {
             0.0
         };
-        if stick_held && heading_err.abs() > FLIP_GATE_RAD {
+        // "Pro stick": once the touch's engine is LIT nothing gates it any
+        // more — the flip gate applies only while the touch is still
+        // deciding (steer-first pre-lit phase = today's behaviour).
+        let stick_instant = STICK_INSTANT.load(Ordering::Relaxed) != 0;
+        let pro_lit = stick_instant && pro_stick.lit;
+        if stick_held && !pro_lit && heading_err.abs() > FLIP_GATE_RAD {
             flip_settling = true;
         }
-        if !stick_held || heading_err.abs() < FLIP_DONE_RAD {
+        if !stick_held || pro_lit || heading_err.abs() < FLIP_DONE_RAD {
             flip_settling = false;
         }
         if stick_held && !flip_settling {
@@ -1843,7 +1952,8 @@ async fn main() {
         let stick_throttle = if split {
             0.0
         } else {
-            ((stick_thrust_t - STICK_THRUST_DELAY) / STICK_THRUST_RAMP).clamp(0.0, 1.0)
+            stick_hold_throttle(&mut pro_stick, stick_held, stick_instant, stick_thrust_t,
+                stick.knob.length() / STICK_TRAVEL)
         };
         let mut throttle_cmd = stick_throttle;
         if (split && throttle_btn.held())
@@ -2142,6 +2252,7 @@ async fn main() {
             pad_msg_timer = 0.0;
             stick_thrust_t = 0.0;
             flip_settling = false;
+            pro_stick = ProStick::default();
             replay_boom_timer = 0.0;
             phys_accum = 0.0;
             let ended = std::mem::replace(
@@ -4424,6 +4535,61 @@ mod tests {
         let left_only = [touch_at(2, TouchPhase::Moved, 100.0)];
         assert!(fresh_touch_in(&left_only, &[], right).is_none());
         assert_eq!(fresh_touch_in(&left_only, &[], left).map(|t| t.id), Some(2));
+    }
+
+    // "Pro stick" is a per-touch latch (owner spec 2026-09): a finger that
+    // stays in the dead-zone for STICK_CENTRE_LIGHT_S is a press and lights
+    // the engine at full on the spot; a finger that steers first gets the
+    // legacy grace + ramp (so a nudge never burns) and is lit once the ramp
+    // completes; a lit touch keeps full throttle through any steering until
+    // release. The default feel is the legacy ramp regardless of deflection.
+    #[test]
+    fn pro_stick_lights_on_a_centre_press_ramps_when_steering_first_and_stays_lit() {
+        let dt = 1.0 / 60.0;
+        // Centre press: cold through the window, then 1.0 — and steering
+        // afterwards keeps it lit.
+        let mut p = ProStick::default();
+        let mut t = 0.0;
+        while t + dt < STICK_CENTRE_LIGHT_S {
+            t += dt;
+            assert_eq!(p.update(true, 0.0, t), 0.0, "t={t}");
+        }
+        t = STICK_CENTRE_LIGHT_S;
+        assert_eq!(p.update(true, 0.0, t), 1.0);
+        assert!(p.lit);
+        assert_eq!(p.update(true, 1.0, t + dt), 1.0, "a lit touch steers at full");
+        assert_eq!(p.update(true, 0.5, 0.0), 1.0, "…whatever the timer says");
+        // Release resets the latch.
+        assert_eq!(p.update(false, 0.0, 0.0), 0.0);
+        assert_eq!(p, ProStick::default());
+
+        // Steer first: the flick leaves the dead-zone inside the window, so
+        // the centre shortcut never fires — a flick shorter than the grace
+        // burns nothing…
+        let mut p = ProStick::default();
+        assert_eq!(p.update(true, 0.0, 0.0), 0.0);
+        assert_eq!(p.update(true, 0.5, dt), 0.0);
+        assert!(p.left_centre && !p.lit);
+        assert_eq!(p.update(true, 0.0, STICK_CENTRE_LIGHT_S), 0.0,
+            "back at centre inside the grace still isn't a press");
+        assert_eq!(p.update(true, 0.5, STICK_THRUST_DELAY), 0.0);
+        // …then ramps like the default feel, and is lit once full.
+        let mid = p.update(true, 0.5, STICK_THRUST_DELAY + STICK_THRUST_RAMP / 2.0);
+        assert!((mid - 0.5).abs() < 1e-5 && !p.lit, "mid-ramp {mid}");
+        assert_eq!(p.update(true, 0.5, STICK_THRUST_DELAY + STICK_THRUST_RAMP), 1.0);
+        assert!(p.lit);
+        assert_eq!(p.update(true, 1.0, 0.0), 1.0, "lit: a flip afterwards keeps the engine");
+
+        // The wrapper: default feel ignores deflection and the latch.
+        let mut p = ProStick::default();
+        assert_eq!(stick_hold_throttle(&mut p, true, false, 10.0, 0.0), 1.0);
+        assert_eq!(stick_hold_throttle(&mut p, true, false, 0.0, 0.0), 0.0);
+        assert_eq!(stick_hold_throttle(&mut p, false, false, 10.0, 0.0), 0.0);
+        assert_eq!(p, ProStick::default());
+        // Pro: a centre press lights.
+        assert_eq!(stick_hold_throttle(&mut p, true, true, STICK_CENTRE_LIGHT_S, 0.0), 1.0);
+        assert!(p.lit);
+        // (Window < flick grace is a compile-time assertion by the constant.)
     }
 
     // "Swap control sides" (the left-handed layout) mirrors the split: the
