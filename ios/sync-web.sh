@@ -17,9 +17,6 @@ PAGES_URL="https://pegasusmoonlander.com"
 PAGES_URL_LEGACY="https://dannyrhubarb.github.io/pegasus"
 DEST="ios/Pegasus/WebRoot"
 
-rustup target add wasm32-unknown-unknown >/dev/null
-cargo build --release --target wasm32-unknown-unknown
-
 rm -rf "$DEST"
 mkdir -p "$DEST"
 touch "$DEST/.gitkeep"
@@ -28,15 +25,10 @@ cp index.html manifest.json mq_js_bundle.js LICENSE third-party-licenses.html pr
 cp -R levels "$DEST/levels"
 cp -R fonts "$DEST/fonts"
 
-# wasm-opt (brew install binaryen) is optional locally — it only shrinks the
-# binary, same as the deploy.
-WASM_SRC="target/wasm32-unknown-unknown/release/pegasus.wasm"
-if command -v wasm-opt >/dev/null; then
-  wasm-opt -Oz -o "$DEST/pegasus.wasm" "$WASM_SRC"
-else
-  echo "note: wasm-opt not found (brew install binaryen) — bundling unoptimized wasm"
-  cp "$WASM_SRC" "$DEST/pegasus.wasm"
-fi
+# The wasm, built the way the deploy builds it: pinned toolchain
+# (rust-toolchain.toml), pinned wasm-opt, paths remapped — the same bytes
+# the website ships for this commit (#214, reproducible builds).
+tools/build-wasm.sh "$DEST/pegasus.wasm"
 
 # Inject revision + build time like the deploy does (About screen; also the
 # replay build id). The -ios suffix marks app-bundled builds apart in

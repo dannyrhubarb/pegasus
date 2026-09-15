@@ -47,9 +47,14 @@ replay recording.
 ### Build
 
 ```bash
-cargo build --release --target wasm32-unknown-unknown && \
-  cp target/wasm32-unknown-unknown/release/pegasus.wasm pegasus.wasm
+tools/build-wasm.sh pegasus.wasm
 ```
+
+That is the deploy's exact recipe — pinned toolchain (`rust-toolchain.toml`),
+pinned `wasm-opt`, paths remapped — so the printed sha256 matches the
+`pegasus.wasm` the website serves for the same commit. `tools/build-site.sh`
+assembles the whole `site/` directory the same way (see "Reproducible
+builds" in `CLAUDE.md`).
 
 ### Serve locally
 
@@ -98,7 +103,7 @@ site is never affected.
 ## First-time setup
 
 ```bash
-rustup target add wasm32-unknown-unknown
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh  # rustup; the toolchain pin does the rest
 brew install ngrok  # optional, for iOS testing
 ```
 

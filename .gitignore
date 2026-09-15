@@ -16,3 +16,6 @@ node_modules/
 # Python bytecode (tools/, ios/testflight-distribute.py)
 __pycache__/
 *.pyc
+
+# Website assembled by tools/build-site.sh (the deploy runs it in CI)
+/site

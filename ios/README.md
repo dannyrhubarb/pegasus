@@ -13,10 +13,12 @@ over the network when the bundled `config.json` is present.
 ## Prerequisites
 
 - A Mac with Xcode 15 or newer
-- The Rust toolchain (`rustup`); the sync script adds the
-  `wasm32-unknown-unknown` target itself
-- Optional: `brew install binaryen` for `wasm-opt` (smaller wasm, like the
-  deploy), `python3` for the What's New page (preinstalled on macOS)
+- `rustup`; the pinned toolchain and the `wasm32-unknown-unknown` target
+  install themselves from `rust-toolchain.toml` on the first build, and
+  `tools/build-wasm.sh` fetches the pinned `wasm-opt` (no brew package —
+  the deploy's exact Binaryen version, so the wasm matches the website's
+  byte for byte)
+- `python3` for the What's New page (preinstalled on macOS)
 - An iPhone/iPad + any Apple ID (free) for on-device signing, or an Apple
   Developer Program membership for TestFlight/App Store
 

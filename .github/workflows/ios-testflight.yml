@@ -110,9 +110,6 @@ jobs:
           key: ${{ runner.os }}-cargo-ios-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-ios-
 
-      - name: Install wasm-opt
-        run: brew install binaryen
-
       - name: Derive the marketing version from the release tag
         # CFBundleShortVersionString = the tag (tools/version.sh --marketing);
         # the run FAILS on an untagged history — a store release is cut from
