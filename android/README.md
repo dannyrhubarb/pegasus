@@ -136,6 +136,24 @@ The wasm inside `assets/webroot/` is the same bytes the website serves for
 that commit (`tools/build-wasm.sh`), and the release workflow attests the
 signed AAB and APK — see "Verifying a build" below.
 
+## Verifying a build
+
+Every release run signs a **provenance attestation** for the AAB and the
+APK (`actions/attest-build-provenance`, stored under the repo's
+Attestations tab): a Sigstore-signed statement that these exact bytes were
+produced by `android-release.yml` at a given commit and run. The sideload
+APK is served exactly as built, so anyone can check it:
+
+```bash
+curl -fsSLO https://pegasusmoonlander.com/app/pegasus.apk
+gh attestation verify pegasus.apk --repo dannyrhubarb/pegasus
+```
+
+The output names the workflow, the commit and the run number (= the
+build number in About → App build). Play re-signs what it distributes, so
+a store-installed APK is not comparable bytes; the AAB attestation covers
+the artifact that was uploaded.
+
 ## Gotchas
 
 - **`assets/webroot/` is gitignored** (build product, like the wasm); the

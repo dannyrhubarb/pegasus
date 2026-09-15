@@ -47,6 +47,18 @@ After changing the game, re-run `./ios/sync-web.sh` and build again — the
 `WebRoot` folder reference re-copies into the app on every build, no Xcode
 project changes needed.
 
+## Provenance
+
+`ios-testflight.yml` ends by signing a provenance attestation
+(`actions/attest-build-provenance`) for the archive's app executable and
+the bundled `WebRoot/pegasus.wasm`. An IPA is never in anyone's hands
+(Apple re-signs it; TestFlight and App Store installs are not
+downloadable), so this is what is honestly attestable: the wasm goes to
+Apple byte for byte and is the same wasm the website serves for that
+commit, so `gh attestation verify pegasus.wasm --repo dannyrhubarb/pegasus`
+on a reproducible local build (`tools/build-wasm.sh`) lists the iOS build
+numbers that shipped it alongside the web deploys.
+
 ## What the sync script bundles (vs. the web deploy)
 
 `ios/sync-web.sh` mirrors `.github/actions/build-site` with three

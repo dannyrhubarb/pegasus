@@ -64,6 +64,11 @@ concurrency:
   group: ios-testflight
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  id-token: write # sign the provenance attestation (Sigstore, via GitHub's OIDC)
+  attestations: write # store it in the repo's attestation registry
+
 jobs:
   upload:
     runs-on: macos-26
@@ -203,3 +208,20 @@ jobs:
             || python3 -m pip install --quiet --break-system-packages PyJWT cryptography
           export ASC_KEY_PATH="$HOME/private_keys/AuthKey_$ASC_KEY_ID.p8"
           python3 ios/testflight-distribute.py
+
+      # Provenance (#214 step 7), the honest iOS version: the IPA itself is
+      # never in anyone's hands (Apple re-signs and TestFlight/App Store
+      # installs are not downloadable), so what gets attested is the
+      # archive's payload — the app executable and the bundled game wasm.
+      # Export re-signs the executable (its signature blob changes), but
+      # the wasm goes to Apple byte for byte, and it is the SAME bytes the
+      # website serves for this commit (tools/build-wasm.sh): verifying a
+      # local build of the wasm against the attestations shows which iOS
+      # build numbers shipped it. Last on purpose — an attestation hiccup
+      # must never hold back an upload that already happened.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            build/Pegasus.xcarchive/Products/Applications/Pegasus.app/Pegasus
+            build/Pegasus.xcarchive/Products/Applications/Pegasus.app/WebRoot/pegasus.wasm
