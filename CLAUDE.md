@@ -12,6 +12,20 @@ cargo test --workspace    # unit tests; --workspace is required or the sim-core 
 Deploy is automatic: any push to `main` triggers `.github/workflows/deploy.yml` which builds the WASM target and publishes to GitHub Pages. Build takes ~5–10 minutes.
 
 ### Versioning (tag-derived, 2026-09, #214)
+> **⚠ OWNER REMINDER — starting a new App Store / Play cycle? TAG IT.**
+> The first beta upload of a new version is the moment to tag (`v1.0.0`
+> went on 2026-09-13; the current cycle IS the newest tag on `main`).
+> Pick the number from what landed since the last tag — any `feat` →
+> MINOR (`v1.1.0`), only `fix`es → PATCH (`v1.0.1`), a `!` commit →
+> MAJOR — then `git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`.
+> **The tag push IS the release**: it builds and uploads both store apps
+> at that commit. Nothing computes or proposes the number for you (a
+> release-please-style bump workflow was considered and dropped, owner
+> decision 2026-09-15 — this note is the mechanism). Forgetting to tag
+> is harmless but visible: the store workflows keep uploading the OLD
+> marketing version with new build numbers, and a `minVersion` policy
+> wall aimed at the new cycle would have nothing to compare against.
+
 Every build's identity comes from **annotated `vMAJOR.MINOR.PATCH` tags on
 `main`** through `tools/version.sh` — never a file anyone has to bump:
 - **Full form `1.3.0+14`** (`git describe --tags --long`: the tag + the
@@ -84,10 +98,7 @@ Every build's identity comes from **annotated `vMAJOR.MINOR.PATCH` tags on
   and the About screen, and it needs pre-release parsing in the script
   and the policy's tuple order (#214 if ever wanted).
 - CI needs full history AND tags: `fetch-depth: 0` fetches both (every
-  build workflow already uses it for whats-new). A computed bump from
-  the Conventional Commits since the last tag and the reproducible-build
-  work (pinned toolchains, twice-build diff, provenance attestation for
-  the shells) are the remaining follow-ups in #214.
+  build workflow already uses it for whats-new).
 
 ### Deploy pipeline & PR previews
 The site lives at **`https://pegasusmoonlander.com`** (custom domain on this
