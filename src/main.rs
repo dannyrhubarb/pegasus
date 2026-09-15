@@ -3300,7 +3300,18 @@ async fn main() {
                 let fs = 26.0 * ui;
                 let dim = measure_text(&tag, None, fs as u16, 1.0);
                 let pad = 10.0 * ui;
-                let x = (sw - dim.width) / 2.0;
+                let mut x = (sw - dim.width) / 2.0;
+                // Portrait phones/tablets: the minimap (top-left, drawn
+                // later with these same numbers) reaches past the centre
+                // line, so a centred badge sat half under it. Centre it in
+                // the free strip between the minimap and the exit ✕ instead.
+                let mm_right = safe_left + 10.0 * ui + 480.0 * ui;
+                if x - pad < mm_right + 12.0 * ui {
+                    let free_l = mm_right + 12.0 * ui;
+                    let free_r = sw - safe_right - 90.0 * ui;
+                    let bw = dim.width + 2.0 * pad;
+                    x = (free_l + (free_r - free_l - bw) / 2.0).max(free_l) + pad;
+                }
                 let y = safe_top + 16.0 * ui + fs;
                 draw_rectangle(x - pad, y - fs, dim.width + 2.0 * pad, fs + pad * 0.9,
                     Color::from_rgba(20, 14, 4, 190));
