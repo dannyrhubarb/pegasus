@@ -3,8 +3,9 @@
 # Android app's bundled site. The Android twin of ios/sync-web.sh; both
 # mirror .github/actions/build-site (keep all three in sync when the site's
 # file set changes). Same deliberate differences as iOS: no version.json
-# (the stale-cache toast is meaningless in-app), config.json fetched from
-# the live deployment, and the injected revision suffixed -android.
+# (the stale-cache toast is meaningless in-app), config.json from
+# PEGASUS_BACKEND_CONFIG (CI) with the live deployment as the local
+# fallback, and the injected revision suffixed -android.
 #
 # Run from anywhere; re-run after any game change, then rebuild the app.
 set -euo pipefail
@@ -42,9 +43,22 @@ python3 tools/gen-whats-new.py > "$DEST/whats-new.json" || {
   rm -f "$DEST/whats-new.json"
 }
 
-if curl -fsS --max-time 10 "$PAGES_URL/config.json" -o "$DEST/config.json" ||
-   curl -fsSL --max-time 10 "$PAGES_URL_LEGACY/config.json" -o "$DEST/config.json"; then
-  echo "config.json fetched — online high scores enabled"
+# Backend endpoints (online boards / ghost / analytics in the app). CI
+# passes the BACKEND_CONFIG_JSON repo variable as PEGASUS_BACKEND_CONFIG —
+# the same JSON the web deploy writes, validated the same way — so the
+# bundle is a function of (commit, config) and two builds of one commit
+# match; fetching whatever the live site served at build time was the one
+# input the Android reproducibility check could not pin (#214 step 6).
+# Locally the variable is not available, so an unset PEGASUS_BACKEND_CONFIG
+# falls back to the live deployment (offline ⇒ online scores off). To
+# reproduce a CI build, pass the config.json it shipped.
+if [ -n "${PEGASUS_BACKEND_CONFIG:-}" ]; then
+  printf '%s' "$PEGASUS_BACKEND_CONFIG" | python3 -c 'import json,sys; c = json.load(sys.stdin); assert c["apiBaseUrl"].startswith("https://") and c["replayBaseUrl"].startswith("https://")'
+  printf '%s\n' "$PEGASUS_BACKEND_CONFIG" > "$DEST/config.json"
+  echo "config.json from PEGASUS_BACKEND_CONFIG — online high scores enabled"
+elif curl -fsS --max-time 10 "$PAGES_URL/config.json" -o "$DEST/config.json" ||
+     curl -fsSL --max-time 10 "$PAGES_URL_LEGACY/config.json" -o "$DEST/config.json"; then
+  echo "config.json fetched from the live site (PEGASUS_BACKEND_CONFIG unset) — online high scores enabled"
 else
   rm -f "$DEST/config.json"
   echo "note: no config.json ($PAGES_URL unreachable or none deployed) — online scores off"

@@ -108,6 +108,34 @@ hassle.
    production access. Internal testing (up to 100 testers by email) works
    immediately, and the signed APK artifact sideloads freely regardless.
 
+## Reproducing a release build
+
+A release is a function of the commit, the build number, the marketing
+version and the backend config it bundled (`android-build.yml` proves the
+Gradle half on every PR: an unsigned rebuild must be byte-identical). To
+rebuild build `N` of a tagged commit and compare it with the workflow's
+`pegasus-release` artifact:
+
+```bash
+git checkout v1.0.0            # the tag (or the exact commit the run built)
+PEGASUS_BACKEND_CONFIG="$(curl -fsS https://pegasusmoonlander.com/config.json)" \
+  ./android/sync-web.sh        # the config.json the run bundled (same value as the repo variable)
+PEGASUS_VERSION_CODE=N PEGASUS_VERSION_NAME=1.0.0 gradle -p android bundleRelease assembleRelease
+```
+
+Your outputs are unsigned; the artifact is signed with the upload key.
+Signing only ADDS entries (`META-INF/*` in the AAB, the APK signing block
+plus `META-INF/` in the APK), so compare the zip contents entry by entry
+and ignore those:
+
+```bash
+unzip -v app-release.aab | grep -v META-INF   # name, size, CRC-32 per entry — diff the two listings
+```
+
+The wasm inside `assets/webroot/` is the same bytes the website serves for
+that commit (`tools/build-wasm.sh`), and the release workflow attests the
+signed AAB and APK — see "Verifying a build" below.
+
 ## Gotchas
 
 - **`assets/webroot/` is gitignored** (build product, like the wasm); the
@@ -121,6 +149,10 @@ hassle.
   activity recreate would reload the page and kill the run mid-flight.
 - The injected revision is suffixed **`-android`**; analytics tags these
   sessions as Android webview device-mix.
+- `config.json` comes from `PEGASUS_BACKEND_CONFIG` (CI passes the
+  `BACKEND_CONFIG_JSON` repo variable, the same JSON the web deploy
+  writes); unset, `sync-web.sh` falls back to fetching the live site's
+  copy so a local build still gets online scores.
 - Launcher icons are rendered from the repo's `icon.svg` (adaptive
   foreground at 108dp densities + legacy sizes); re-render if it changes.
 

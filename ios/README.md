@@ -55,9 +55,12 @@ deliberate differences:
 - **No `version.json`** — the stale-cache reload toast makes no sense when
   the page ships inside the app binary; app updates replace the whole
   bundle. The page treats the 404 as "feature off".
-- **`config.json` is fetched from the live GitHub Pages deployment** (the
-  repo variable that writes it at deploy time isn't available locally).
-  Offline build machine ⇒ the app runs with online scores disabled.
+- **`config.json` comes from `PEGASUS_BACKEND_CONFIG`** — CI passes the
+  `BACKEND_CONFIG_JSON` repo variable, the same JSON the web deploy
+  writes, so the bundle is reproducible from (commit, config). Locally
+  the variable isn't available, so the script falls back to fetching the
+  live deployment's copy; offline build machine ⇒ the app runs with
+  online scores disabled.
 - **The injected revision carries an `-ios` suffix** so app builds are
   distinguishable in the About screen, analytics and replay build ids.
 

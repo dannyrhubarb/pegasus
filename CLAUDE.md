@@ -139,10 +139,15 @@ the two DEPLOY inputs that come from repository settings rather than git,
   A red run names the differing file; the usual suspects are a new
   unpinned tool or a path leaking into the binary. Build time (`__BUILD_TIME__`)
   is the committer date for this reason (see "Versioning").
+- **The shells (#214 step 6)**: both `sync-web.sh` take `config.json`
+  from `PEGASUS_BACKEND_CONFIG` (see "Android app" / "iOS app"), which
+  removed the last build-time network input, and `android-build.yml`
+  rebuilds the unsigned release outputs and `cmp`s them on every PR. iOS
+  stays unassertable (Xcode timestamps, a fresh signing certificate per
+  run) — provenance attestation covers it instead, see below.
 - Not asserted: cross-OS identity (a macOS `sync-web.sh` wasm vs the
   Linux deploy — expected to match, same toolchain and Binaryen, but only
-  Linux-vs-Linux is checked) and the shells (see "Provenance
-  attestation" below for what covers them instead).
+  Linux-vs-Linux is checked).
 
 ### Deploy pipeline & PR previews
 The site lives at **`https://pegasusmoonlander.com`** (custom domain on this
@@ -2461,12 +2466,16 @@ re-acquired on the `visibilitychange` back while still wanted).
   It mirrors `.github/actions/build-site` — **keep them in sync when the
   site's file set changes** — with three deliberate differences: **no
   `version.json`** (the stale-cache toast is meaningless in-app; the page
-  treats the 404 as feature-off), **`config.json` fetched from the live
-  Pages deployment** (the `BACKEND_CONFIG_JSON` variable isn't available
-  locally; unreachable ⇒ online scores off; both sync scripts try
-  `pegasusmoonlander.com` first and fall back to the legacy github.io
-  origin with `-L` — it 301s once the custom domain is live — until the
-  domain has soaked, #171), and the injected revision
+  treats the 404 as feature-off), **`config.json` from
+  `PEGASUS_BACKEND_CONFIG`** (2026-09, #214 step 6: every app workflow
+  passes the `BACKEND_CONFIG_JSON` repo variable — the same JSON the web
+  deploy writes, validated the same way — so a bundle is a function of
+  (commit, config) rather than of whatever the live site served at build
+  time; locally, unset ⇒ fetched from the live Pages deployment as before:
+  both sync scripts try `pegasusmoonlander.com` first and fall back to
+  the legacy github.io origin with `-L` — it 301s once the custom domain
+  is live — until the domain has soaked, #171; unreachable ⇒ online
+  scores off), and the injected revision
   suffixed **`-ios`** (About screen / analytics / replay build id — the
   page still env-tags these builds `prod`, so app sessions show up in
   analytics as iOS webview device-mix); the `__BUILD_VERSION__` and
@@ -2580,9 +2589,18 @@ build, offline-capable, buildable anywhere with a JDK + Android SDK (no
 Mac). `android/README.md` has the build/signing/Play walkthrough.
 - `android/sync-web.sh` assembles `app/src/main/assets/webroot/`
   (**gitignored**, `.gitkeep` holds the folder) — mirrors `ios/sync-web.sh`
-  and `.github/actions/build-site` (keep all three in sync); revision
-  suffixed **`-android`**, no `version.json`, `config.json` from the live
-  deployment.
+  and `tools/build-site.sh` (keep all three in sync); revision
+  suffixed **`-android`**, no `version.json`, `config.json` from
+  `PEGASUS_BACKEND_CONFIG` (live-site fallback locally — see the iOS
+  bullet). **`android-build.yml` also proves the Gradle half reproducible
+  on every PR** (2026-09, #214 step 6): after the debug APK it builds the
+  UNSIGNED release AAB + APK, wipes `build/`, rebuilds with
+  `--rerun-tasks --no-build-cache` and `cmp`s both — signing only adds
+  `META-INF/` entries and the APK signing block, so the unsigned outputs
+  are exactly the comparable part of a real release (`android/README.md`
+  "Reproducing a release build" has the recipe: same commit, same
+  `PEGASUS_VERSION_CODE` / `PEGASUS_VERSION_NAME`, the bundled
+  `config.json`, then diff the `unzip -v` listings minus `META-INF`).
 - `MainActivity.kt` serves webroot via **`WebViewAssetLoader`** on the
   reserved `appassets.androidplatform.net` origin (fetch/localStorage need
   a real origin — same reason as the iOS scheme handler) with a CUSTOM

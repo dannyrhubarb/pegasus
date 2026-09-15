@@ -118,6 +118,11 @@ jobs:
         run: echo "MARKETING_VERSION=$(tools/version.sh --marketing)" >> "$GITHUB_ENV"
 
       - name: Assemble WebRoot
+        env:
+          # The same backend config the web deploy writes — bundled, not
+          # fetched from the live site, so the build is reproducible from
+          # (commit, config); see the script.
+          PEGASUS_BACKEND_CONFIG: ${{ vars.BACKEND_CONFIG_JSON }}
         run: ./ios/sync-web.sh
 
       - name: Write API key

@@ -118,6 +118,10 @@ jobs:
           # The About screen's revision row: the PR head sha, not the
           # meaningless merge-commit sha the checkout sits on.
           PEGASUS_REV: ${{ steps.rev.outputs.sha }}-pr-${{ env.PR }}-android
+          # Bundled, not fetched from the live site (reproducible from
+          # (commit, config)); the prod config, as the live fetch gave — a
+          # test APK is a device build of the real app, unlike a web preview.
+          PEGASUS_BACKEND_CONFIG: ${{ vars.BACKEND_CONFIG_JSON }}
         run: ./android/sync-web.sh
 
       - name: Write keystore
