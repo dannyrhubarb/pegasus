@@ -1,8 +1,8 @@
 [
  {
-  "rev": "0f19dca",
-  "date": "2026-09-13T09:40:19Z",
-  "note": "New: High-score rows now say which edition of the rules they were flown under — \"rules 2\", no decoder ring needed"
+  "rev": "59c4470",
+  "date": "2026-09-15T04:22:53Z",
+  "note": "New: The high-score boards now say, in plain words, what those little v-numbers mean"
  },
  {
   "rev": "a8bec16",
