@@ -16,9 +16,6 @@ PAGES_URL="https://pegasusmoonlander.com"
 PAGES_URL_LEGACY="https://dannyrhubarb.github.io/pegasus"
 DEST="android/app/src/main/assets/webroot"
 
-rustup target add wasm32-unknown-unknown >/dev/null
-cargo build --release --target wasm32-unknown-unknown
-
 rm -rf "$DEST"
 mkdir -p "$DEST"
 touch "$DEST/.gitkeep"
@@ -27,13 +24,10 @@ cp index.html manifest.json mq_js_bundle.js LICENSE third-party-licenses.html pr
 cp -R levels "$DEST/levels"
 cp -R fonts "$DEST/fonts"
 
-WASM_SRC="target/wasm32-unknown-unknown/release/pegasus.wasm"
-if command -v wasm-opt >/dev/null; then
-  wasm-opt -Oz -o "$DEST/pegasus.wasm" "$WASM_SRC"
-else
-  echo "note: wasm-opt not found (apt/brew install binaryen) — bundling unoptimized wasm"
-  cp "$WASM_SRC" "$DEST/pegasus.wasm"
-fi
+# The wasm, built the way the deploy builds it: pinned toolchain
+# (rust-toolchain.toml), pinned wasm-opt, paths remapped — the same bytes
+# the website ships for this commit (#214, reproducible builds).
+tools/build-wasm.sh "$DEST/pegasus.wasm"
 
 # PEGASUS_REV lets CI name the build itself — the on-demand PR test APK
 # passes the PR HEAD sha, since the merge ref this checkout sits on has a

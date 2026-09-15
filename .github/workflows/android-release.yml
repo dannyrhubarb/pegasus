@@ -119,9 +119,6 @@ jobs:
           key: ${{ runner.os }}-cargo-android-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-android-
 
-      - name: Install wasm-opt
-        run: sudo apt-get install -y binaryen
-
       - name: Derive the marketing version from the release tag
         run: echo "PEGASUS_VERSION_NAME=$(tools/version.sh --marketing)" >> "$GITHUB_ENV"
 

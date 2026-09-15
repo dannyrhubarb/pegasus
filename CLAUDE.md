@@ -8,8 +8,9 @@ Rust + macroquad 0.4.15 + Rapier 2D game compiled to WebAssembly and served via 
 ```bash
 cargo build               # native dev build (quick sanity check; silent — audio is wasm-only)
 cargo test --workspace    # unit tests; --workspace is required or the sim-core crate's tests are skipped
+tools/build-wasm.sh pegasus.wasm   # the deploy's exact wasm (pinned toolchain + wasm-opt, see "Reproducible builds")
 ```
-Deploy is automatic: any push to `main` triggers `.github/workflows/deploy.yml` which builds the WASM target and publishes to GitHub Pages. Build takes ~5–10 minutes.
+Deploy is automatic: any push to `main` triggers `.github/workflows/deploy.yml` which builds the WASM target and publishes to GitHub Pages. Build takes ~5–10 minutes. The toolchain is **pinned in `rust-toolchain.toml`** (rustup installs it on first use, wasm target included) — bump it like any other pin, but see the file's comment: a rustc bump is a sim-adjacent input.
 
 ### Versioning (tag-derived, 2026-09, #214)
 > **⚠ OWNER REMINDER — starting a new App Store / Play cycle? TAG IT.**
@@ -100,6 +101,49 @@ Every build's identity comes from **annotated `vMAJOR.MINOR.PATCH` tags on
 - CI needs full history AND tags: `fetch-depth: 0` fetches both (every
   build workflow already uses it for whats-new).
 
+### Reproducible builds (2026-09, #214 step 5)
+The website is a **pure function of the commit**: two builds of the same
+sha, anywhere, produce byte-identical `site/` trees (wasm, the stamped
+`index.html`, `whats-new.json`, `version.json`, icons — everything except
+the two DEPLOY inputs that come from repository settings rather than git,
+`config.json` and the AASA Team ID). Every build input is pinned:
+- **`tools/build-wasm.sh <out.wasm>`** — the one wasm recipe, used by
+  `build-site.sh` and both `sync-web.sh`: `rust-toolchain.toml` pins
+  rustc (channel + wasm target + clippy, minimal profile), `cargo build
+  --locked` refuses a drifted `Cargo.lock`, `--remap-path-prefix` maps
+  the checkout to `/pegasus` and `$CARGO_HOME` to `/cargo` (panic-location
+  strings are the only place a path reaches the binary; the release
+  profile has no debug info) — passed via `cargo --config`, which MERGES
+  with `.cargo/config.toml`'s wasm link-arg (arrays join; a `RUSTFLAGS`
+  env var would have REPLACED it) — and **wasm-opt is a pinned Binaryen
+  release** (`BINARYEN_VERSION` + per-platform sha256 in the script,
+  fetched from GitHub releases into `target/tools/`, which the CI cargo
+  cache keeps). Never the apt/brew package: distro Binaryen versions
+  differ per image and emit different bytes, and the old `sudo apt-get
+  install binaryen` was the largest unpinned input. Bumping Binaryen =
+  new version + four sha256s (download the four assets and hash them).
+- **`tools/build-site.sh`** — the whole site recipe (`GIT_REV` required;
+  `BACKEND_CONFIG` / `APPLE_TEAM_ID` optional), extracted from the
+  build-site action so the reproducibility check runs EXACTLY what
+  deploys; the action is now just the cargo cache around it. It also
+  prints the wasm's sha256, so a deploy log can be compared with a
+  local build.
+- **The web icons are COMMITTED** (`icon-512/192/180.png`, renders of
+  `icon.svg`) instead of generated at deploy time by whatever librsvg
+  the runner image carried. Re-render by hand when `icon.svg` changes
+  (`rsvg-convert -w N -h N icon.svg -o icon-N.png`, same rule as the
+  native launcher icons).
+- **`ci.yml`'s `reproducible` job is the proof, on every PR**: two
+  checkouts at different paths (`build-a/`, `build-b/`), each building
+  its own `target/`, then a sha256 listing diff of the two `site/` trees.
+  A red run names the differing file; the usual suspects are a new
+  unpinned tool or a path leaking into the binary. Build time (`__BUILD_TIME__`)
+  is the committer date for this reason (see "Versioning").
+- Not asserted: cross-OS identity (a macOS `sync-web.sh` wasm vs the
+  Linux deploy — expected to match, same toolchain and Binaryen, but only
+  Linux-vs-Linux is checked) and the shells (see "Provenance
+  attestation" below for what covers them instead).
+
 ### Deploy pipeline & PR previews
 The site lives at **`https://pegasusmoonlander.com`** (custom domain on this
 repo's GitHub Pages, issue #171 — the old
@@ -119,8 +163,9 @@ build at the root, one **per-PR preview** in `pr-<n>/` (served at
 in `index.html`/`manifest.json` is relative; the preview/test-APK sticky
 comments ask the Pages API for `html_url`, so their links follow the
 custom domain automatically). Five workflows, sharing two
-composite actions (`.github/actions/build-site` = wasm build + icons + overlay
-injection; `.github/actions/sync-pages-branch` = commit into `gh-pages` with a
+composite actions (`.github/actions/build-site` = the cargo cache around
+`tools/build-site.sh`, the whole site recipe — see "Reproducible builds";
+`.github/actions/sync-pages-branch` = commit into `gh-pages` with a
 push-retry loop for concurrent deploys):
 - `deploy.yml` (**Main deploy**, push to `main`): build → sync branch **root**
   (live previews in `pr-*/` and the Android APK in `app/` are kept — the
@@ -190,6 +235,7 @@ push-retry loop for concurrent deploys):
 - `tools/gen-third-party-licenses.py` + `third-party-licenses.html` — the generated third-party attribution page served with the site and linked from the About screen; regenerate when `Cargo.lock` changes (see "License")
 - `privacy.html` — standalone privacy policy served with the site (and bundled into both apps), written for the Play Store listing's required privacy-policy URL; same substance as the About screen's `#privacy-note` — keep the two in agreement when the analytics story changes
 - `app-policy.json` — the **checked-in update/config policy** every client fetches at launch (`{}` = no verdicts): **the remote lever over ALREADY-INSTALLED apps and stale web tabs** — commit a `config` override to repoint old installs at a moved backend with no store release, a `minBuild`/`minVersion` wall for a genuinely breaking change, or a `recommendBuild`/`recommendVersion` nudge (same screen with a Not-now button) for an update that is strongly advised but not required. **Reach for this whenever a backend move or compatibility break is being planned** (it exists because the #171 migration had no such lever and drained for weeks — pegasus-backend#38); see "App update policy" under "Game menu"
+- `tools/build-wasm.sh` + `tools/build-site.sh` + `rust-toolchain.toml` — the **reproducible build recipe** (see "Reproducible builds" under "Build & deploy"): pinned rustc, pinned Binaryen `wasm-opt` (sha256-verified download), path remapping; `build-site.sh` is what the deploy, the previews and the CI twice-build check all run; `icon-512/192/180.png` are its committed icon renders
 - `tools/version.sh` — **the one version source** (tag-derived, see "Versioning" under "Build & deploy"): `1.3.0+14` full form / `--marketing` (the tag) / `--commit-date`, used by `build-site`, both `sync-web.sh` and the store release workflows
 - `tools/gen-whats-new.py` + `tools/whats-new-backfill.json` + `tools/whats-new-overrides.json` — deploy-time generator for `whats-new.json`, the About screen's What's New changelog (see "What's new page" — **every user-facing commit needs a `Whats-new:` trailer**; the overrides file rewords already-merged entries)
 - `.github/labels.json` + `tools/sync-labels.py` + `.github/workflows/labels.yml` — the **checked-in issue-label convention** (`type:` / `area:` / `status:` groups); edit the JSON, never the GitHub UI — see "Git workflow"
@@ -2634,11 +2680,11 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   and forgetting the shells is otherwise SILENT (the sync scripts still
   exit 0, just one file lighter — running them in CI does not catch it),
   and the apps ship incomplete. Intentional web-only files live in the
-  script's `WEB_ONLY` set, each with a reason: the generated `icon-*.png`
-  (nothing in a WKWebView/WebView reads `apple-touch-icon` or the web
-  manifest, and generating them would make librsvg an app-build
-  prerequisite) and `editor.html` (deliberately unlinked, so unreachable
-  from an app shell). Release signing reads
+  script's `WEB_ONLY` set, each with a reason: the committed `icon-*.png`
+  renders (nothing in a WKWebView/WebView reads `apple-touch-icon` or the
+  web manifest) and `editor.html` (deliberately unlinked, so unreachable
+  from an app shell). The website list it parses is `tools/build-site.sh`
+  (the action used to hold it inline). Release signing reads
   `PEGASUS_KEYSTORE_*` env vars in `app/build.gradle.kts`; nothing
   signing-related lives in the repo. The release also **publishes the
   signed APK to GitHub Pages** at `app/pegasus.apk` (direct-download

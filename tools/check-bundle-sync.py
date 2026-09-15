@@ -4,7 +4,7 @@
 Three places independently hand-maintain the list of files that make up a
 Pegasus build:
 
-    .github/actions/build-site/action.yml   the website
+    tools/build-site.sh                     the website
     ios/sync-web.sh                         the iOS app's WebRoot
     android/sync-web.sh                     the Android app's webroot
 
@@ -27,11 +27,11 @@ ROOT = Path(__file__).resolve().parent.parent
 # needs a reason — this set is the whole point of the check, so growing it
 # without one defeats it.
 WEB_ONLY = {
-    # Generated at deploy time by rsvg-convert from icon.svg, and only
-    # meaningful to a browser: the apps carry real native launcher icons,
-    # and neither WKWebView nor Android WebView consumes apple-touch-icon
-    # or the web manifest's icon list. Generating them in the sync scripts
-    # would make librsvg a prerequisite for building the apps, for nothing.
+    # Committed renders of icon.svg (re-rendered by hand when the SVG
+    # changes — see tools/build-site.sh), only meaningful to a browser:
+    # the apps carry real native launcher icons, and neither WKWebView nor
+    # Android WebView consumes apple-touch-icon or the web manifest's icon
+    # list.
     "icon-512.png",
     "icon-192.png",
     "icon-180.png",
@@ -64,9 +64,9 @@ CP = re.compile(r"^\s*cp\s+(?P<rest>.+?)\s*$")
 def sources(path: Path) -> set[str]:
     """Every REPO-FILE source operand of every `cp` in the file.
 
-    Operands containing `$` are computed paths (the wasm-opt fallback's
-    "$WASM_SRC", destinations like "$DEST/") rather than files checked into
-    the repo, so they are not part of the comparison.
+    Operands containing `$` are computed paths (destinations like "$DEST/")
+    rather than files checked into the repo, so they are not part of the
+    comparison.
     """
     found: set[str] = set()
     for line in path.read_text().splitlines():
@@ -91,7 +91,7 @@ def sources(path: Path) -> set[str]:
 
 
 def main() -> int:
-    site = sources(ROOT / ".github/actions/build-site/action.yml")
+    site = sources(ROOT / "tools/build-site.sh")
     ios = sources(ROOT / "ios/sync-web.sh")
     android = sources(ROOT / "android/sync-web.sh")
 

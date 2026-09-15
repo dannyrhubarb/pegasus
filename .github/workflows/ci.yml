@@ -50,6 +50,58 @@ jobs:
       - name: Tests
         run: cargo test --workspace
 
+  # Reproducible build (#214 step 5): the deployable site is a pure function
+  # of the commit. Two independent checkouts at DIFFERENT paths, built by the
+  # same tools/build-site.sh the deploy runs, must produce byte-identical
+  # site/ trees — wasm, the stamped index.html, whats-new.json, icons, all of
+  # it. Only the deploy-variable inputs (config.json, the AASA Team ID) are
+  # left out; they are repository settings, not build inputs. A failure here
+  # names the file that differs; the usual suspects are an unpinned tool
+  # (see tools/build-wasm.sh) or a path leaking into the binary.
+  reproducible:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # whats-new.json needs the trailers
+          path: build-a
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          path: build-b
+
+      # Registry only — each checkout compiles into its OWN target/, which
+      # is the point (a shared one would just reuse the first build).
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('build-a/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-registry-
+
+      - name: Build the site twice
+        env:
+          GIT_REV: ${{ github.sha }}
+        run: |
+          for d in build-a build-b; do
+            echo "::group::$d"
+            (cd "$d" && GIT_REV="${GIT_REV:0:7}" tools/build-site.sh)
+            echo "::endgroup::"
+          done
+
+      - name: Compare
+        run: |
+          (cd build-a/site && find . -type f | sort | xargs sha256sum) > a.sum
+          (cd build-b/site && find . -type f | sort | xargs sha256sum) > b.sum
+          cat a.sum
+          if ! diff a.sum b.sum; then
+            echo "::error::site/ is not reproducible — the files above differ between two builds of the same commit"
+            exit 1
+          fi
+          echo "Reproducible: $(wc -l < a.sum) files identical across two independent builds."
+
   # The in-canvas touch stick, driven end to end in a real browser: browser
   # event -> mq_js_bundle -> wasm -> the game's claim rule. Its own job so a
   # browser download doesn't slow the Rust checks. See docs/touch-input.md

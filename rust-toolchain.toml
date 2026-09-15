@@ -1,0 +1,16 @@
+# The one Rust toolchain every build of a commit compiles with — CI, a Mac
+# running sync-web.sh, anyone reproducing the deploy (#214, reproducible
+# builds). rustup installs it on first use; the wasm target rides along.
+#
+# Bump it like the other version pins (latest stable, a small housekeeping
+# PR), but know that it is a SIM-ADJACENT input: a rustc bump can change the
+# wasm's compiled float-library code (compiler-builtins' libm port) and with
+# it the last bits of a simulation. Stored replays absorb that through the
+# keyframe drift snap and the backend verifier's tolerances — the same
+# mechanism that already covered the silent bumps every runner-image update
+# used to make — so it is not a repin event, but note it in the bump PR.
+[toolchain]
+channel = "1.98.1"
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"
+components = ["clippy"]
