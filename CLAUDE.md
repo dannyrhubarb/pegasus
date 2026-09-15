@@ -149,6 +149,40 @@ the two DEPLOY inputs that come from repository settings rather than git,
   Linux deploy — expected to match, same toolchain and Binaryen, but only
   Linux-vs-Linux is checked).
 
+### Provenance attestation (2026-09, #214 step 7)
+Where byte identity is out of reach, a **signed statement of origin**
+stands in: `actions/attest-build-provenance@v4` (a SLSA provenance
+predicate in an in-toto statement, Sigstore-signed with the workflow
+run's OIDC identity, stored under the repo's **Attestations** tab; needs
+`id-token: write` + `attestations: write` on the workflow) runs in three
+places:
+- **`deploy.yml`** attests `site/pegasus.wasm` + `site/index.html` — the
+  served files. Verify the live site with `curl -fsSO
+  https://pegasusmoonlander.com/pegasus.wasm && gh attestation verify
+  pegasus.wasm --repo dannyrhubarb/pegasus`. Lookup is BY DIGEST, so a
+  byte-identical local `tools/build-wasm.sh` output verifies the same
+  way: reproducibility and provenance vouch for each other.
+- **`android-release.yml`** attests the signed AAB and APK right after
+  the build. The Pages sideload APK is served as built, so
+  `gh attestation verify pegasus.apk --repo dannyrhubarb/pegasus` is the
+  flagship recipe (`android/README.md` "Verifying a build"); Play
+  re-signs what it distributes, so store installs are not comparable
+  bytes — the AAB attestation covers the uploaded artifact.
+- **`ios-testflight.yml`** attests the archive's app executable and
+  `Pegasus.app/WebRoot/pegasus.wasm` — LAST in the job, so an
+  attestation hiccup can never hold back an upload that already
+  happened. The honest iOS story: no IPA is ever in anyone's hands
+  (Apple re-signs; TestFlight/App Store installs are not downloadable),
+  export re-signs the executable, but the wasm reaches Apple byte for
+  byte and is the website's wasm for that commit, so verifying a local
+  build lists the iOS build numbers that shipped it.
+Free on a public repo. What it proves: the chain commit → workflow →
+bytes ran on GitHub's runners unmodified. What it does not: that the
+code is correct, or anything about store-re-signed binaries. Previews
+and PR test APKs are not attested (not releases). Verified only by
+reading the action's inputs — the first release run after this merges
+is the live test of the three steps.
+
 ### Deploy pipeline & PR previews
 The site lives at **`https://pegasusmoonlander.com`** (custom domain on this
 repo's GitHub Pages, issue #171 — the old

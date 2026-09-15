@@ -65,6 +65,8 @@ concurrency:
 permissions:
   contents: write # push the APK into the gh-pages state branch
   actions: write # dispatch publish-pages.yml after the sync (see that step)
+  id-token: write # sign the provenance attestation (Sigstore, via GitHub's OIDC)
+  attestations: write # store it in the repo's attestation registry
 
 jobs:
   release:
@@ -137,6 +139,21 @@ jobs:
 
       - name: Build signed AAB + APK
         run: gradle -p android bundleRelease assembleRelease
+
+      # Provenance (#214 step 7): a signed statement that these exact bytes
+      # came out of this run of this workflow at this commit. Play re-signs
+      # the AAB, so what a phone installs from the store is not verifiable
+      # bytes — but the sideload APK is served as built:
+      #   curl -fsSLO https://pegasusmoonlander.com/app/pegasus.apk
+      #   gh attestation verify pegasus.apk --repo dannyrhubarb/pegasus
+      # prints the workflow, commit and run that built it (see
+      # android/README.md "Verifying a build").
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            android/app/build/outputs/bundle/release/app-release.aab
+            android/app/build/outputs/apk/release/app-release.apk
 
       - uses: actions/upload-artifact@v7
         with:

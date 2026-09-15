@@ -84,6 +84,20 @@ To enable it, go to **Settings → Pages** in the repository and set
 **Source** to **GitHub Actions** (one-time setup). The deploy workflow can also
 be run manually from the **Actions** tab via *Run workflow*.
 
+### Verifying a build
+
+Every `main` deploy signs a provenance attestation for the served wasm and
+page, and `tools/build-wasm.sh` reproduces the wasm byte for byte from the
+commit. To check the live site:
+
+```bash
+curl -fsSO https://pegasusmoonlander.com/pegasus.wasm
+gh attestation verify pegasus.wasm --repo dannyrhubarb/pegasus
+```
+
+The same command on a local `tools/build-wasm.sh` output verifies too, as
+long as the bytes match — attestations are looked up by digest.
+
 ### PR previews
 
 Every pull request gets its own preview deployment — no merge to `main`

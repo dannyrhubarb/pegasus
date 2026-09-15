@@ -12,6 +12,8 @@ on:
 
 permissions:
   contents: write # push to the gh-pages state branch
+  id-token: write # sign the provenance attestation (Sigstore, via GitHub's OIDC)
+  attestations: write # store it in the repo's attestation registry
 
 concurrency:
   group: main-deploy
@@ -35,6 +37,21 @@ jobs:
           revision: ${{ steps.rev.outputs.short }}
           backend-config: ${{ vars.BACKEND_CONFIG_JSON }}
           apple-team-id: ${{ secrets.APPLE_TEAM_ID }}
+
+      # Provenance (#214 step 7): a signed statement that THESE bytes were
+      # built by this workflow from this commit, stored under the repo's
+      # Attestations tab. Anyone can check the live site against it:
+      #   curl -fsSO https://pegasusmoonlander.com/pegasus.wasm
+      #   gh attestation verify pegasus.wasm --repo dannyrhubarb/pegasus
+      # Lookup is by digest, so a byte-identical local tools/build-wasm.sh
+      # output verifies the same way — reproducibility and provenance vouch
+      # for each other.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            site/pegasus.wasm
+            site/index.html
 
       - name: Sync site root into gh-pages branch
         uses: ./.github/actions/sync-pages-branch
