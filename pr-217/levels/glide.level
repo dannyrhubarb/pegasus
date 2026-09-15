@@ -1,0 +1,10 @@
+# Level 2 — The Glide: The Expanse without the boulders. Pure cave flying —
+# distance is the score, refueling pads every ~130 m, nothing in the tunnel
+# but the walls you clip.
+name = The Glide
+description = Pure cave flying. Just you, the walls and the distance
+scoring = distance
+shafts = off
+obstacles = off
+pad_spacing = 130
+seed = 0
