@@ -12,6 +12,7 @@
 // Device sets (App Store Connect, 2026): the 6.9" iPhone and the 13" iPad
 // are the two REQUIRED sets — every smaller size scales down from them.
 //   iPhone 6.9"  1320×2868 (440×956 CSS px @3x)   iPhone 16 Pro Max class
+//   iPhone 6.5"  1284×2778 (428×926 CSS px @3x)   iPhone 11 Pro Max / XS Max class
 //   iPad 13"     2064×2752 (1032×1376 CSS px @2x)  iPad Pro 13" class
 import http from "node:http";
 import fs from "node:fs";
@@ -81,6 +82,7 @@ const server = http.createServer((req, res) => {
 // landscape variants of the flight shots come from a second pass.
 const DEVICES = [
   { name: "iphone-6.9", w: 440,  h: 956,  dpr: 3, mobile: true },
+  { name: "iphone-6.5", w: 428,  h: 926,  dpr: 3, mobile: true },
   { name: "ipad-13",    w: 1032, h: 1376, dpr: 2, mobile: false },
 ];
 const only = process.env.DEVICE; // e.g. DEVICE=iphone-6.9 for a quick run

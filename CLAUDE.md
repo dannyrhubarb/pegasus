@@ -2663,8 +2663,9 @@ re-acquired on the `visibilitychange` back while still wanted).
   from `privacy.html` + the analytics section here, review notes, DSA
   trader status, an optional Swedish localization), `screenshots.mjs`
   (headless Chromium drives the REAL `site/` build at Apple's two required
-  sizes — iPhone 6.9" 1320×2868 @3x and iPad 13" 2064×2752 @2x, plus
-  landscape — through the menu, a burn on The Expanse / The Hollows, the
+  sizes — iPhone 6.9" 1320×2868 @3x, iPhone 6.5" 1284×2778 @3x (which
+  one ASC marks required depends on the app record's age; both are
+  generated) and iPad 13" 2064×2752 @2x, plus landscape — through the menu, a burn on The Expanse / The Hollows, the
   live board and a stored replay; synthetic multi-touch on the canvas,
   corner buttons via `dispatchEvent("click")` because a Playwright click
   is intercepted by `#hud-btns`, the replay GUI via a REAL

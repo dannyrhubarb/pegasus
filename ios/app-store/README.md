@@ -12,17 +12,22 @@ repo so it can be re-made for every release:
 | Privacy policy page | `https://pegasusmoonlander.com/privacy.html` | `privacy.html` at the repo root, served with the site |
 | The build | TestFlight | `ios-testflight.yml` via the `vX.Y.Z` tag push (see CLAUDE.md "Versioning") |
 
-Sets and sizes (App Store Connect's two REQUIRED display sizes; every
-smaller iPhone/iPad size is scaled down from them automatically):
+Sets and sizes. Which iPhone slot App Store Connect marks as required
+depends on the app record — newer records ask for 6.9", older ones for
+6.5" — so both are generated; the other sizes scale down from whichever
+is filled:
 
 | Set | Pixels | Upload slot |
 |---|---|---|
 | `iphone-6.9` | 1320 × 2868 portrait | iPhone 6.9" Display |
 | `iphone-6.9-landscape` | 2868 × 1320 | same slot (optional extras) |
+| `iphone-6.5` | 1284 × 2778 portrait | iPhone 6.5" Display |
+| `iphone-6.5-landscape` | 2778 × 1284 | same slot (optional extras) |
 | `ipad-13` | 2064 × 2752 portrait | iPad 13" Display |
 | `ipad-13-landscape` | 2752 × 2064 | same slot (optional extras) |
 
-Upload `final/iphone-6.9/*.png` and `final/ipad-13/*.png` in file order
+Upload the iPhone set your record asks for (`final/iphone-6.9/` or
+`final/iphone-6.5/`) and `final/ipad-13/*.png` in file order
 (the numbering is the story: flight first, then levels, boards, replay,
 controls — the first three appear in search results). The landscape
 folders are extras for the same slots; up to 10 images per slot.
@@ -44,7 +49,8 @@ two synthetic fingers) → the same on The Hollows → the Expanse all-time
 board → the record run's replay with the transport bar → Settings →
 Flight manual. Without `site/config.json` the board/replay shots are
 skipped and the flight shots show no ghost/record — still valid, just
-emptier. Knobs: `DEVICE=iphone-6.9` (one set), `NO_LANDSCAPE=1`,
+emptier. Knobs: `DEVICE=iphone-6.9` (one set), `NO_LANDSCAPE=1`, `SET=iphone-6.5` on
+`compose` (one set + its landscape),
 `CHROMIUM_PATH=…` (reuse a preinstalled Chromium instead of Playwright's
 download), `RELAY=1` (route the backend through the script via curl —
 for sandboxes whose egress proxy the browser does not trust).

@@ -107,11 +107,12 @@ licensed third-party content.)
 
     First App Store release: ten levels, global high scores with verified replays, and the racing ghost.
 
-**Screenshots**: upload `screenshots/final/iphone-6.9/*.png` to the
-**iPhone 6.9" Display** slot and `screenshots/final/ipad-13/*.png` to the
-**iPad 13" Display** slot, in the numbered order. Those two sets are the
-only required ones; every other size scales down from them unless you
-untick "Use 6.9" screenshots for …". Up to 10 per set; the first three
+**Screenshots**: upload `screenshots/final/iphone-6.5/*.png` to the
+**iPhone 6.5" Display** slot (1284×2778 — the size this app record asks
+for; `iphone-6.9/` at 1320×2868 is there too if the slot ever changes)
+and `screenshots/final/ipad-13/*.png` to the **iPad 13" Display** slot,
+in the numbered order. Every other size scales down from those unless you
+untick "Use … screenshots for …". Up to 10 per set; the first three
 show in search results.
 
 **App Preview** (video): optional, none provided. If wanted later: 15–30 s,

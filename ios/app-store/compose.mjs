@@ -94,6 +94,7 @@ const browser = await chromium.launch(
 );
 try {
   for (const set of fs.readdirSync(RAW).sort()) {
+    if (process.env.SET && !set.startsWith(process.env.SET)) continue; // SET=iphone-6.5 → that set + its landscape
     const landscape = set.endsWith("-landscape");
     const outDir = path.join(FINAL, set);
     fs.rmSync(outDir, { recursive: true, force: true });
