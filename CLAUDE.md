@@ -2120,15 +2120,18 @@ for now:
   (`li.locked`, no ▶) and shows the `#scores-hint` line under the list
   ("N replays need a newer version — update to watch them" — tap =
   the `?fresh=` reload on the website, a no-op in the app shells, which
-  update via the store). EVERY row gets a `.vtag` ("v1" / "v2" / "v3") after the date — the
-  rulebook it was flown under; the one matching the API's
-  `currentRuleset` (`apiCurrentRuleset`, falling back to the
-  `current_ruleset` export) is dimmed (`.vtag.cur`), older ones are
-  amber, the tag's `title` explains it on hover, and the `#scores-rules`
-  footnote under the list points at the Flight manual's **Rulebook
-  versions** section, which explains v1/v2/v3 in player language (owner
-  ask 2026-09: tagging only non-current rows read as "everything is
-  v1"; a new ruleset = a new bullet there).
+  update via the store). EVERY row gets a `.vtag` ("v1" / "v2" / "v3")
+  after the date — the rulebook it was flown under — ALL ONE COLOUR
+  (amber; the one matching the API's `currentRuleset` /
+  `apiCurrentRuleset`, falling back to the `current_ruleset` export,
+  differs only in its hover `title`: an earlier cut dimmed it, which the
+  owner read as two kinds of row), and the `#scores-rules` footnote under
+  the list — "Old runs, old rules: the v-number says which rulebook was
+  in play · About → Flight manual", owner wording 2026-09 after a bare
+  "vN = …" read as too technical — points at the Flight manual's
+  **Rulebook versions** section, which explains v1/v2/v3 in player
+  language (owner ask 2026-09: tagging only non-current rows read as
+  "everything is v1"; a new ruleset = a new bullet there).
   `watch_replay_blob` answers **2** for a blob whose `min_logic` is above
   this build (`try_decode_recording` keeps `ERR_NEEDS_NEWER` distinct);
   `watchGlobalReplay` reads the raw code (`pushBytesToWasmCode`) and says
