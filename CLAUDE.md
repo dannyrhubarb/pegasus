@@ -684,6 +684,68 @@ The menu container and the corner buttons swallow `mousedown`/`touchstart`
 taps never reach the canvas and fire the thruster. Esc toggles the pause
 screen on desktop.
 
+**Top-left back arrow (2026-09)**: `#menu-back`, a fixed 44 px circle
+inside `#menu` (so the swallow covers it; z 35 — over `.screen`, under
+the tap-transparent `.crt`) at `--inset-top/left + 12px`, the sibling of
+the in-flight ✕ top-right: ✕ leaves the game view, ‹ steps back one
+screen. Born from the owner's "the Back button is hidden on tall
+screens" (the manual, Settings, About, a long picker put the bottom
+`.mbtn.back` below the fold). It is a SECOND affordance — the bottom
+button stays: it is what hardware back clicks (`uiBack`) and the
+thumb-reachable exit at the end of the content. `showScreen` toggles
+`#menu.has-back` when `backArrowTarget(id)` finds an `.mbtn.back` on
+the open screen, and the arrow's click just `.click()`s that button, so
+history reconciliation, analytics (a tap logs `menu-back` AND the
+forwarded button's id) and every screen's exit stay one code path.
+`NO_BACK_ARROW` excludes the screens whose `.mbtn.back` is a decision,
+not navigation — scr-name's Skip (discards the run), scr-update's Not
+now, scr-gameover's Back (ends the run) — each keeps its labelled
+button. **It sits ON THE TITLE'S LINE and moves nothing** (owner call
+after the first cut, which gave the arrow its own row via 60 px of extra
+screen padding — "it just pushes everything down"): `placeBackArrow()`
+MEASURES the open screen's `.h2` (called from `showScreen`, on
+resize/orientation, and from a ResizeObserver on the safe-area probe so
+a late iOS/PWA inset moves the arrow with the title) and pins the
+arrow's `top` to that line's centre — measured, not computed from the
+screen padding, because the level picker's `#levels-title` carries 22 px
+of its own top margin and the computed cut floated the arrow a
+title-height above it (owner's phone screenshot). Its LEFT edge sits on
+the content column (`--inset-left + 24px`, where `.rowlist` starts on a
+phone), not the in-flight ✕'s 12 px corner margin — at 12 px it read as
+hugging the bezel while every row started further in ("cramped", same
+screenshot). **Nav-bar screens flow from the TOP** (`#menu.has-back {
+align-items: flex-start }`): `#menu` centres a short screen vertically
+(right for home/pause), but under the arrow that put a five-row board's
+title mid-screen — and MOVED it as the rows arrived after `showScreen`
+had measured the empty screen, leaving the arrow behind (owner
+screenshot). A ResizeObserver on the open screen (`screenRO`,
+re-targeted per `showScreen`) re-places the arrow on any later resize
+as a second guard. The title also gets `margin-bottom: 26px` under
+`has-back` (Settings' rows sat right on it; the picker keeps its own
+34 px), and the two internal 54vh scroll boxes (`#scores-list`,
+`#wn-list`) are GONE — the whole screen scrolls under the arrow, the
+bottom Back at the end (owner: the boxes were only there to keep it
+reachable). Under `has-back` the `.h2` reserves the arrow's footprint
+on BOTH sides (`padding: 0 52px`, symmetric so it stays centred),
+`white-space: nowrap`, and its size is `--h2-fs` = the normal clamp
+capped by a FIT term (`(100vw − 152px) / 11.44` — the longest title,
+"FLIGHT MANUAL", is 13 glyphs at 0.88 em; bump the constant for a
+longer title) so it fits between the reservations on one line at every
+width — at 320 px that is 14.7 px instead of 16; the plain lower floor
+tried first still WRAPPED the title there, which the headless check
+missed until it asserted a single line. The alternative — boxing every
+tall screen into a 54vh scroller like the score board — was rejected:
+that model fits a list under fixed chrome, not prose or a form (the
+manual through a ~200 px window on a landscape phone). Verified
+headless at 320/360/393/landscape/desktop (scratch Playwright): arrow
+centre within 1 px of the manual's, Settings' AND the picker's title,
+title top unmoved, one line, glyphs inside the title box and clear of
+the arrow, left edge at 24 px, re-placed after a simulated 59 px inset,
+board + What's new titles at the top and still aligned after 30 rows
+are injected, the board screen scrolling as a whole, ≥ 38 px between
+Settings' title and its first row, fixed while the screen scrolls, no
+sideways overflow, history depth pops per tap, hidden again on home.
+
 ### Hardware / browser back navigation
 Android's back button (and browser Back / iOS edge-swipe) steps back ONE
 step in the game UI instead of leaving the site. Implementation
@@ -2441,8 +2503,10 @@ and can never touch prod boards. All JS-side in `index.html`:
   `2026-07-11 16:00`), not the UI language glued onto the region (`en-SE`
   inserts a comma that isn't the standard Swedish format); `-u-nu-latn`
   pins Latin digits. Regionless zones / old engines / a not-yet-finished
-  scan fall back to a fixed ISO local format. The `#scores-list` scrolls internally (`max-height:54vh`) so
-  the title/chips/Back stay fixed under a long board. **Results are cached**
+  scan fall back to a fixed ISO local format. The board screen scrolls AS A WHOLE under the fixed
+  top-left back arrow (2026-09 — `#scores-list`'s 54vh scroll box, which
+  kept the bottom Back reachable, went with the arrow; owner call; same
+  for `#wn-list`). **Results are cached**
   (`boardCache`, keyed `level|period`, persisted to localStorage): the
   cached board paints instantly on entry while a fresh fetch runs in the
   background; a neon ring spinner (in `#scores-wait`, a FIXED-HEIGHT slot so
@@ -3102,7 +3166,7 @@ commit the refreshed page.
   request for the PR, never approval to merge it; "proceed" in an earlier
   context does not carry over. (Born 2026-09-09, when several PRs were
   merged on assumed permission.)
-- Development branch: `claude/update-wall-skip-button-juh884` (current); previous: `claude/throttle-steering-reversal-5sirm6`
+- Development branch: `claude/back-button-visibility-3nbsmg` (current); previous: `claude/update-wall-skip-button-juh884`
 - Merges to `main` via rebase PRs using the GitHub MCP tools (`mcp__github__create_pull_request`, `mcp__github__merge_pull_request`).
 - **Curate the branch before merging.** Rebase merges land every branch
   commit on `main` verbatim, so branch noise becomes permanent history.
