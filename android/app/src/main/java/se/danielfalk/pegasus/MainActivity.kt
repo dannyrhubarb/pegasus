@@ -28,6 +28,7 @@ import java.io.IOException
  */
 class MainActivity : Activity() {
     private lateinit var webView: WebView
+    private var ble: BleBridge? = null
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -59,6 +60,13 @@ class MainActivity : Activity() {
         webView.setOnLongClickListener { true }
         webView.isHapticFeedbackEnabled = false
         webView.addJavascriptInterface(PegasusBridge(), "PegasusApp")
+        // BLE nearby-link SPIKE (docs/multiplayer-ble.md): a second, single-
+        // method interface the page's pegBle module feature-detects. Inert
+        // until the spike screen sends its first command — no radio, no
+        // permission prompt before that.
+        ble = BleBridge(this, webView).also {
+            webView.addJavascriptInterface(it, "PegasusBle")
+        }
         WebView.setWebContentsDebuggingEnabled(
             applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
         )
@@ -199,6 +207,20 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         if (webView.canGoBack()) webView.goBack() else super.onBackPressed()
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        ble?.onPermissionResult(requestCode, grantResults)
+    }
+
+    override fun onDestroy() {
+        ble?.destroy()
+        super.onDestroy()
     }
 
     override fun onPause() {

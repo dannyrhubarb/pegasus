@@ -1,0 +1,12 @@
+{
+  "name": "pegasus-ble-spike-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Headless check of the BLE nearby-link spike's page half against a fake radio (see docs/multiplayer-ble.md)",
+  "scripts": {
+    "test": "node run.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.0"
+  }
+}

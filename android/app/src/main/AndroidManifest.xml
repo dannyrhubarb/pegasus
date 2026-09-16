@@ -1,9 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Online high scores, the ghost and analytics; the game itself is
          fully bundled and runs offline. -->
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- BLE nearby-link SPIKE (BleBridge.kt, docs/multiplayer-ble.md). All
+         requested lazily, on the first host/scan command from the spike
+         screen — the game never prompts at launch. Android 12+ has the
+         dedicated Bluetooth runtime permissions (SCAN flagged
+         neverForLocation, so Play does not treat it as location access);
+         older releases gate BLE scanning on fine location, capped at API 30
+         so the modern builds never declare it. BLE is not required
+         hardware: the spike screen just reports "no BLE hardware". -->
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="s" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <!-- enableOnBackInvokedCallback=false: targeting API 36 turns predictive
          back ON by default, which stops delivering onBackPressed() — and

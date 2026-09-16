@@ -849,6 +849,25 @@
       box-shadow: 0 0 12px rgba(210, 222, 240, 0.3), inset 0 0 10px rgba(210, 222, 240, 0.1);
     }
     .bug-input::placeholder { color: var(--faint); }
+    /* BLE spike screen: the on-screen link log (developer-only screen) */
+    .ble-log {
+      width: min(420px, 88vw);
+      max-width: 100%; /* never widen the screen (see .rowlist) */
+      max-height: 30vh;
+      overflow-y: auto;
+      margin: 0;
+      background: rgba(4, 10, 24, 0.9);
+      border: 1.5px solid rgba(52, 231, 255, 0.35);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font: 500 12px/1.4 var(--mono);
+      letter-spacing: 0.02em;
+      color: var(--dim);
+      text-align: left;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .ble-log:empty { display: none; }
     /* Attached-file rows: name + a small neon ✕ to remove it */
     #bug-files { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
     .bug-file {
@@ -1293,6 +1312,9 @@
       <!-- Debug-only (shown while the Debug HUD toggle is on): forget the
            consent answer so the scr-consent flow can be re-tested. -->
       <div class="mbtn" id="reset-consent" style="display:none">Reset analytics consent</div>
+      <!-- Debug-only AND app-shell-only: the BLE nearby-link spike screen
+           (docs/multiplayer-ble.md). Hidden on the website — no bridge. -->
+      <div class="mbtn" id="btn-ble" data-goto="scr-ble" style="display:none">Nearby (BLE spike)</div>
       <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
     </div>
 
@@ -1454,6 +1476,24 @@
       <div class="mbtn primary" id="btn-bug-save">Share report</div>
       <div class="hint" id="bug-status" style="display:none"></div>
       <div class="mbtn back" data-goto="scr-about">&#8249; Back</div>
+    </div>
+
+    <!-- Developer spike (app shells only, Settings → while Debug HUD is on):
+         exercises the BLE GATT nearby link end to end — host / find / connect,
+         an RTT ping burst and a 10 s stream at the game's input-batch
+         cadence — and logs the numbers. NOT a game mode; see
+         docs/multiplayer-ble.md for what it is meant to prove. -->
+    <div class="screen" id="scr-ble">
+      <div class="h2">NEARBY &middot; BLE SPIKE</div>
+      <div class="hint" id="ble-status">idle</div>
+      <div class="mbtn" id="ble-host">Host (advertise)</div>
+      <div class="mbtn" id="ble-scan">Find nearby hosts</div>
+      <ul class="rowlist" id="ble-peers"></ul>
+      <div class="mbtn primary" id="ble-ping" style="display:none">Ping &times;20</div>
+      <div class="mbtn primary" id="ble-stream" style="display:none">Stream 10 s @ 15 Hz</div>
+      <div class="mbtn" id="ble-stop">Stop</div>
+      <pre class="ble-log" id="ble-log"></pre>
+      <div class="mbtn back" data-goto="scr-settings">&#8249; Back</div>
     </div>
 
     <div class="screen" id="scr-pause">
@@ -2172,6 +2212,7 @@
         case "scr-manual":   return ["scr-home", "scr-about", "scr-manual"];
         case "scr-whatsnew": return ["scr-home", "scr-about", "scr-whatsnew"];
         case "scr-bugreport": return ["scr-home", "scr-about", "scr-bugreport"];
+        case "scr-ble":      return ["scr-home", "scr-settings", "scr-ble"];
         case "game":         return ["scr-home", "game"];
         case "scr-pause":    return ["scr-home", "game", "scr-pause"];
         case "scr-gameover": return levelFiles.length
@@ -4455,11 +4496,281 @@
       }
     }, 200);
 
+    // --- Nearby BLE link SPIKE (app shells only; docs/multiplayer-ble.md) ----
+    // A reliable, ordered byte-MESSAGE channel between two phones over a
+    // custom GATT service, carried by the shells' BLE bridges — Android:
+    // `window.PegasusBle.cmd(json)` (BleBridge.kt); iOS: the `pegasusBle`
+    // WKScriptMessageHandler + the `__pegBleIos` document-start flag
+    // (BleBridge.swift). The plain website has neither, so `available()` is
+    // false there and nothing below ever runs. Native is a dumb PDU pipe:
+    // one `send` command = ONE GATT notification (host → guest) or
+    // write-without-response (guest → host) of at most (mtu − 3) bytes,
+    // delivered in order; JS owns the framing (u16 big-endian length
+    // prefix) and the chunking, so both platforms share one codec and the
+    // shells stay small. Events come back through `pegBle._on({ev, …})`.
+    // Same never-break-the-game rules as analytics: every entry point is
+    // try/caught, and everything degrades to "feature off".
+    const pegBle = (() => {
+      const listeners = { state: [], peer: [], message: [], log: [] };
+      let bridge = null;
+      let st = { state: "idle", role: null, mtu: 23, reason: "" };
+      const peers = new Map();
+      let rx = new Uint8Array(0); // unframed bytes awaiting a full message
+      function emit(k, v) { (listeners[k] || []).forEach(f => { try { f(v); } catch (_) {} }); }
+      function log(m) {
+        try { if (window.pegLog) pegLog.add("ble", m); } catch (_) {}
+        emit("log", m);
+      }
+      try {
+        if (window.PegasusBle && typeof PegasusBle.cmd === "function") {
+          bridge = j => PegasusBle.cmd(j);
+        } else if (window.__pegBleIos && window.webkit && webkit.messageHandlers &&
+                   webkit.messageHandlers.pegasusBle) {
+          bridge = j => webkit.messageHandlers.pegasusBle.postMessage(j);
+        }
+      } catch (_) { bridge = null; }
+      function call(cmd, args) {
+        if (!bridge) return false;
+        try { bridge(JSON.stringify(Object.assign({ cmd: cmd }, args || {}))); return true; }
+        catch (e) { log("bridge " + cmd + " failed: " + e); return false; }
+      }
+      function b64enc(bytes) {
+        let s = "";
+        for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+        return btoa(s);
+      }
+      function b64dec(s) {
+        const bin = atob(s), out = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+        return out;
+      }
+      function setState(next) { st = Object.assign({}, st, next); emit("state", st); }
+      // Reassemble: PDUs are an arbitrary chunking of the framed stream.
+      function onData(bytes) {
+        const joined = new Uint8Array(rx.length + bytes.length);
+        joined.set(rx); joined.set(bytes, rx.length); rx = joined;
+        for (;;) {
+          if (rx.length < 2) return;
+          const len = (rx[0] << 8) | rx[1];
+          if (rx.length < 2 + len) return;
+          const msg = rx.slice(2, 2 + len);
+          rx = rx.slice(2 + len);
+          emit("message", msg);
+        }
+      }
+      function _on(evt) {
+        try {
+          if (typeof evt === "string") evt = JSON.parse(evt);
+          switch (evt.ev) {
+            case "state":
+              if (evt.state === "connected") rx = new Uint8Array(0);
+              if (evt.state === "idle") peers.clear();
+              setState({ state: evt.state, role: evt.role || st.role,
+                         mtu: evt.mtu || st.mtu, reason: evt.reason || "" });
+              log("state " + evt.state + (evt.role ? " as " + evt.role : "") +
+                  (evt.mtu ? " mtu=" + evt.mtu : "") + (evt.reason ? " (" + evt.reason + ")" : ""));
+              break;
+            case "mtu": setState({ mtu: evt.mtu }); log("mtu " + evt.mtu); break;
+            case "peer":
+              peers.set(evt.id, { id: evt.id, name: String(evt.name || ""), rssi: evt.rssi | 0, seen: Date.now() });
+              emit("peer", peers.get(evt.id));
+              break;
+            case "data": onData(b64dec(evt.b64)); break;
+            case "error": log("error: " + evt.msg); break;
+            case "log": log("native: " + evt.msg); break;
+          }
+        } catch (e) { log("event failed: " + e); }
+      }
+      // One message → [u16 len][bytes], chunked to the link's payload size.
+      // The 20-byte floor is the ATT default (mtu 23) — a bridge that never
+      // reported an MTU still gets valid PDUs.
+      function send(bytes) {
+        if (st.state !== "connected" || bytes.length > 0xffff) return false;
+        const framed = new Uint8Array(2 + bytes.length);
+        framed[0] = bytes.length >> 8; framed[1] = bytes.length & 0xff; framed.set(bytes, 2);
+        const pdu = Math.max(20, (st.mtu | 0) - 3);
+        for (let off = 0; off < framed.length; off += pdu) {
+          const chunk = framed.subarray(off, Math.min(off + pdu, framed.length));
+          if (!call("send", { b64: b64enc(chunk) })) return false;
+        }
+        return true;
+      }
+      return {
+        available: () => !!bridge,
+        state: () => st,
+        peers: () => Array.from(peers.values()),
+        host: name => call("host", { name: String(name || "").slice(0, 24) }),
+        scan: () => call("scan"),
+        connect: id => call("connect", { id: String(id) }),
+        stop: () => { peers.clear(); return call("stop"); },
+        send: send,
+        on: (k, f) => { (listeners[k] || (listeners[k] = [])).push(f); },
+        _on: _on,
+      };
+    })();
+    window.pegBle = pegBle;
+
+    // The spike SCREEN (scr-ble): drives the link and measures it. A tiny
+    // typed message protocol rides pegBle.send — HELLO (callsign), PING/PONG
+    // (round trips), STREAM (the game's input-batch shape: 16 bytes at
+    // 15 Hz for 10 s) and the receiver's REPORT back to the sender. Nothing
+    // here touches the game or the wasm.
+    (() => {
+      if (!pegBle.available()) return;
+      const $ = id => document.getElementById(id);
+      const statusEl = $("ble-status"), peersEl = $("ble-peers"), logEl = $("ble-log");
+      const hostBtn = $("ble-host"), scanBtn = $("ble-scan"), pingBtn = $("ble-ping"),
+            streamBtn = $("ble-stream"), stopBtn = $("ble-stop");
+      const T = { HELLO: 1, PING: 2, PONG: 3, STREAM: 4, REPORT: 5 };
+      const STREAM_N = 150, STREAM_MS = 1000 / 15, PING_N = 20;
+      const lines = [];
+      function line(m) {
+        lines.push(new Date().toISOString().slice(11, 23) + " " + m);
+        if (lines.length > 60) lines.splice(0, lines.length - 60);
+        logEl.textContent = lines.join("\n");
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+      function callsign() {
+        try { return localStorage.getItem("pegasus_player_name") || "PILOT"; } catch (_) { return "PILOT"; }
+      }
+      function frame(type, body) {
+        const b = body || new Uint8Array(0), out = new Uint8Array(1 + b.length);
+        out[0] = type; out.set(b, 1);
+        return out;
+      }
+      function u16(v) { return [(v >> 8) & 255, v & 255]; }
+      function rd16(b, i) { return (b[i] << 8) | b[i + 1]; }
+      function u32(v) { return [(v >>> 24) & 255, (v >>> 16) & 255, (v >>> 8) & 255, v & 255]; }
+      function rd32(b, i) { return ((b[i] << 24) | (b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]) >>> 0; }
+      const now = () => Math.round(performance.now()) >>> 0;
+
+      let peerName = "";
+      function renderStatus() {
+        const s = pegBle.state();
+        const connected = s.state === "connected";
+        statusEl.textContent = s.state + (s.role ? " · " + s.role : "") +
+          (connected ? " · mtu " + s.mtu + " (" + Math.max(20, s.mtu - 3) + " B/pdu)" : "") +
+          (peerName ? " · peer " + peerName : "") + (s.reason ? " · " + s.reason : "");
+        pingBtn.style.display = connected ? "" : "none";
+        streamBtn.style.display = connected ? "" : "none";
+        hostBtn.style.display = s.state === "idle" || s.state === "disconnected" ? "" : "none";
+        scanBtn.style.display = hostBtn.style.display;
+        peersEl.style.display = s.state === "scanning" ? "" : "none";
+      }
+      function renderPeers() {
+        peersEl.textContent = "";
+        pegBle.peers().sort((a, b) => b.rssi - a.rssi).forEach(p => {
+          const li = document.createElement("li");
+          li.className = "row";
+          const col = document.createElement("div"); col.className = "lcol";
+          const n = document.createElement("div"); n.className = "lname"; n.textContent = p.name || "(unnamed)";
+          const d = document.createElement("div"); d.className = "ldesc"; d.textContent = p.rssi + " dBm · " + p.id;
+          col.appendChild(n); col.appendChild(d);
+          const chev = document.createElement("span"); chev.className = "chev"; chev.textContent = "›";
+          li.appendChild(col); li.appendChild(chev);
+          li.addEventListener("click", () => { line("connect → " + (p.name || p.id)); pegBle.connect(p.id); });
+          peersEl.appendChild(li);
+        });
+      }
+
+      // PING burst: PING_N round trips 100 ms apart, then min / median / max.
+      let pings = null;
+      function ping() {
+        if (pings) return;
+        pings = { seq: 0, rtts: [], timer: 0 };
+        line("ping ×" + PING_N + " …");
+        const tick = () => {
+          if (!pings) return;
+          if (pings.seq >= PING_N) { clearInterval(pings.timer); finishPings(); return; }
+          pegBle.send(frame(T.PING, new Uint8Array(u16(pings.seq++).concat(u32(now())))));
+        };
+        pings.timer = setInterval(tick, 100); tick();
+        setTimeout(() => { if (pings) { clearInterval(pings.timer); finishPings(); } }, PING_N * 100 + 2000);
+      }
+      function finishPings() {
+        const r = pings.rtts.slice().sort((a, b) => a - b); pings = null;
+        if (!r.length) { line("ping: no replies"); return; }
+        line("ping: " + r.length + "/" + PING_N + " replies · rtt min " + r[0] +
+             " / med " + r[r.length >> 1] + " / max " + r[r.length - 1] + " ms");
+      }
+      // STREAM: the sender shape of the multiplayer feed (a tick-stamped
+      // input batch ≈ 16 bytes, 10–20 Hz). The receiver reports back what
+      // arrived and how evenly.
+      let stream = null, recv = null;
+      function startStream() {
+        if (stream) return;
+        stream = { seq: 0, timer: 0 };
+        line("stream: " + STREAM_N + " × 16 B @ 15 Hz …");
+        stream.timer = setInterval(() => {
+          if (!stream) return;
+          if (stream.seq >= STREAM_N) { clearInterval(stream.timer); stream = null; line("stream: sent, awaiting report"); return; }
+          const body = new Uint8Array(15); // + type byte = 16 B on the wire
+          body.set(u16(stream.seq++)); body.set(u32(now()), 2);
+          pegBle.send(frame(T.STREAM, body));
+        }, STREAM_MS);
+      }
+      function sendReport() {
+        if (!recv) return;
+        const g = recv.gaps.slice().sort((a, b) => a - b);
+        const mean = g.length ? Math.round(g.reduce((a, b) => a + b, 0) / g.length) : 0;
+        const max = g.length ? g[g.length - 1] : 0;
+        line("stream: got " + recv.count + "/" + STREAM_N + " · gap mean " + mean + " / max " + max + " ms");
+        pegBle.send(frame(T.REPORT, new Uint8Array(u16(recv.count).concat(u16(mean), u16(max)))));
+        recv = null;
+      }
+
+      pegBle.on("message", m => {
+        if (!m.length) return;
+        switch (m[0]) {
+          case T.HELLO: peerName = new TextDecoder().decode(m.subarray(1)); line("hello from " + peerName); renderStatus(); break;
+          case T.PING: pegBle.send(frame(T.PONG, m.subarray(1))); break;
+          case T.PONG: if (pings && m.length >= 7) pings.rtts.push((now() - rd32(m, 3)) >>> 0); break;
+          case T.STREAM: {
+            const seq = rd16(m, 1), t = now();
+            if (seq === 0 || !recv) recv = { count: 0, last: t, gaps: [], timer: 0 };
+            else recv.gaps.push(t - recv.last);
+            recv.last = t; recv.count++;
+            clearTimeout(recv.timer);
+            if (seq === STREAM_N - 1) sendReport();
+            else recv.timer = setTimeout(sendReport, 1500); // a lost tail still reports
+            break;
+          }
+          case T.REPORT:
+            line("report: peer got " + rd16(m, 1) + "/" + STREAM_N + " · gap mean " + rd16(m, 3) + " / max " + rd16(m, 5) + " ms");
+            break;
+        }
+      });
+      pegBle.on("state", s => {
+        if (s.state === "connected") {
+          pegBle.send(frame(T.HELLO, new TextEncoder().encode(callsign())));
+        } else {
+          peerName = ""; pings = null; stream = null; recv = null;
+        }
+        renderStatus(); renderPeers();
+      });
+      pegBle.on("peer", renderPeers);
+      pegBle.on("log", line);
+      hostBtn.addEventListener("click", () => { line("host as " + callsign()); pegBle.host(callsign()); });
+      scanBtn.addEventListener("click", () => { line("scan …"); pegBle.scan(); });
+      pingBtn.addEventListener("click", ping);
+      streamBtn.addEventListener("click", startStream);
+      stopBtn.addEventListener("click", () => { line("stop"); pegBle.stop(); });
+      renderStatus();
+    })();
+
     // "Debug HUD" toggle (OFF by default): shows the developer telemetry line
     // + the minimap. Same plumbing as the others.
     const debugToggle = document.getElementById("debug-toggle");
     debugToggle.checked = localStorage.getItem("pegasus_debug_hud") === "1";
     const resetConsentBtn = document.getElementById("reset-consent");
+    // The BLE spike entry rides the same switch — but NOT the wasm gate
+    // below: the bridge is a shell/page thing, so it shows as soon as the
+    // page runs (and only where a shell bridge exists).
+    const bleBtn = document.getElementById("btn-ble");
+    function syncBleBtn() {
+      bleBtn.style.display = (debugToggle.checked && pegBle.available()) ? "" : "none";
+    }
+    syncBleBtn();
     function applyDebugSetting() {
       call("set_debug_hud", debugToggle.checked ? 1 : 0);
       // The consent-reset test button rides the same switch.
@@ -4473,6 +4784,7 @@
     debugToggle.addEventListener("change", () => {
       localStorage.setItem("pegasus_debug_hud", debugToggle.checked ? "1" : "0");
       applyDebugSetting();
+      syncBleBtn();
     });
     const debugTimer = setInterval(() => {
       if (typeof wasm_exports !== "undefined" && wasm_exports.set_debug_hud) {
