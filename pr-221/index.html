@@ -399,14 +399,24 @@
        is a second affordance, not a replacement: the bottom button stays
        (thumb-reachable at the end of the content, and the element hardware
        back clicks). showScreen toggles #menu.has-back when the open screen
-       carries an `.mbtn.back` it should forward to; the screen's top
-       padding grows by the arrow's row so a long centred title ("FLIGHT
-       MANUAL" at 320 px) never runs under it — the arrow has its own line
-       above the title, not the title's line. Fixed, so content scrolls
-       under it; the translucent backdrop keeps it legible over rows. */
+       carries an `.mbtn.back` it should forward to.
+       ALIGNMENT (owner call): the arrow sits ON THE TITLE'S LINE and moves
+       nothing — no extra top padding. Its top is computed from the title:
+       screen padding + half the .h2's line box (line-height pinned at
+       1.32, the vendored mono's "normal") − half the arrow, so the two
+       share a centre at every viewport width. Horizontally the title
+       reserves the arrow's footprint on BOTH sides (symmetric, so it stays
+       centred) and its font floor drops 22 → 16 px under has-back so the
+       longest title ("FLIGHT MANUAL", 13 chars at 0.88 em each) fits the
+       192 px left on a 320 px phone — on the title's line with the old
+       22 px floor it collided (measured). Fixed, so content scrolls under
+       it; the translucent backdrop keeps it legible over rows. */
+    #menu.has-back {
+      --h2-fs: clamp(16px, 5vw, 30px);
+    }
     #menu-back {
       position: fixed;
-      top: calc(var(--inset-top) + 12px);
+      top: calc(max(var(--inset-top), 28px) + var(--h2-fs, 22px) * 0.66 - 22px);
       left: calc(var(--inset-left) + 12px);
       width: 44px;
       height: 44px;
@@ -427,8 +437,13 @@
     #menu-back:hover { background: rgba(127, 180, 221, 0.12); }
     #menu-back:active { transform: translateY(1px); }
     #menu-back .icn { width: 22px; height: 22px; display: block; }
-    /* 44 px arrow + 12 px above it + a hair below = the title's new top. */
-    #menu.has-back .screen { padding-top: calc(max(var(--inset-top), 28px) + 60px); }
+    /* The title line under the arrow: 12 + 44 px arrow + 8 px gap = 64 px
+       from the screen edge = the screen's 24 px padding + 40 px here. */
+    #menu.has-back .h2 {
+      font-size: var(--h2-fs);
+      padding: 0 40px;
+      max-width: 100%;
+    }
     /* Home-screen (standalone/PWA) launches paint before WebKit delivers
        the safe-area insets, then everything relayouts ~31pt down when they
        land (same late-inset root cause as the iOS app shell — see the
@@ -470,6 +485,7 @@
     }
     .h2 {
       font-size: clamp(22px, 5vw, 30px);
+      line-height: 1.32; /* pinned: #menu-back centres on this line box */
       font-weight: 800;
       letter-spacing: 0.28em;
       margin-right: -0.28em;
@@ -1350,11 +1366,11 @@
       </div>
       <div class="info-row">
         <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">11313cc-pr-221</div>
+        <div class="info-value" id="git-rev">9e440c1-pr-221</div>
       </div>
       <div class="info-row">
         <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-09-16T17:09:55Z</div>
+        <div class="info-value" id="build-time">2026-09-16T17:17:10Z</div>
       </div>
       <!-- App shells only (iOS/Android): the installed app's version +
            build number, filled from the shell bridge; hidden on the web. -->
@@ -2962,7 +2978,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "11313cc-pr-221";
+    const wasmRev = "9e440c1-pr-221";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
