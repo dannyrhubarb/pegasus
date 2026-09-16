@@ -391,6 +391,83 @@
       text-align: center;
     }
     .screen.on { display: flex; }
+    /* Top-left back arrow (2026-09): a fixed corner button over every
+       non-root screen, the sibling of the in-flight ✕ top-right — ✕ leaves
+       the game view, ‹ steps back one screen. It exists because the
+       bottom `.mbtn.back` sits below the fold on tall screens (Flight
+       manual, Settings, About, a long level list) and reads as hidden. It
+       is a second affordance, not a replacement: the bottom button stays
+       (thumb-reachable at the end of the content, and the element hardware
+       back clicks). showScreen toggles #menu.has-back when the open screen
+       carries an `.mbtn.back` it should forward to.
+       ALIGNMENT (owner call): the arrow sits ON THE TITLE'S LINE and moves
+       nothing — no extra top padding. placeBackArrow() (JS, called from
+       showScreen and on resize / orientation / inset arrival) MEASURES the
+       open screen's .h2 and sets the arrow's top to that line's centre −
+       22 px, so a screen with its own title margin (the level picker's
+       #levels-title has 22 px of air above it) lines up like any other —
+       the first cut computed the top from the screen padding alone and
+       the picker's arrow floated a title-height above its title. The CSS
+       top below is only the pre-JS fallback (the same arithmetic, for a
+       margin-less title). The left edge sits on the CONTENT COLUMN (the
+       screen's 24 px padding = where .rowlist starts on a phone), not the
+       12 px corner margin the in-flight ✕ uses — at 12 px it read as
+       hugging the bezel while every row started 12 px further in.
+       Horizontally the title reserves the arrow's footprint on BOTH sides
+       (symmetric, so it stays centred) and its font size is capped by a
+       FIT term under has-back (--h2-fs below) so the longest title fits
+       between the reservations on ONE line (nowrap) — at 320 px that is
+       14.7 px instead of 16; on the title's line at the old size it
+       collided with the arrow, and a plain lower floor still WRAPPED it
+       (both measured by check.mjs's single-line assertion). Fixed, so
+       content scrolls under it; the translucent backdrop keeps it legible
+       over rows. */
+    #menu.has-back {
+      /* A nav-bar screen flows from the TOP: #menu centres a short screen
+         vertically (home, pause), which under the arrow put the title of a
+         five-row board mid-screen — and MOVED it as the board filled in
+         (the arrow was placed against the empty screen's title, then the
+         rows arrived and the title rose without it: owner screenshot). */
+      align-items: flex-start;
+      /* The fit term: the longest title ("FLIGHT MANUAL", 13 glyphs at
+         0.88 em each with the 0.28 em tracking = 11.44 em) must fit the
+         viewport minus the two 76 px reservations. Bump 11.44 if a longer
+         title ever ships (the check.mjs single-line assertion catches it). */
+      --h2-fs: min(clamp(14px, 5vw, 30px), calc((100vw - 152px) / 11.44));
+    }
+    #menu-back {
+      position: fixed;
+      top: calc(max(var(--inset-top), 28px) + var(--h2-fs, 22px) * 0.66 - 22px); /* pre-JS fallback */
+      left: calc(var(--inset-left) + 24px);
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(8, 16, 34, 0.7);
+      border: 1.5px solid var(--faint);
+      color: var(--dim);
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+      z-index: 35; /* over .screen (30), under the tap-transparent .crt (40) */
+    }
+    #menu.has-back #menu-back { display: flex; }
+    #menu-back:hover { background: rgba(127, 180, 221, 0.12); }
+    #menu-back:active { transform: translateY(1px); }
+    #menu-back .icn { width: 22px; height: 22px; display: block; }
+    /* The title line beside the arrow: 24 + 44 px arrow + 8 px gap = 76 px
+       from the screen edge = the screen's 24 px padding + 52 px here. */
+    #menu.has-back .h2 {
+      font-size: var(--h2-fs);
+      padding: 0 52px;
+      white-space: nowrap; /* a title never wraps beside the arrow — the floor keeps it fitting */
+      max-width: 100%;
+      margin-bottom: 26px; /* air under the nav-bar title (Settings' rows sat right on it) */
+    }
+    #menu.has-back #levels-title { margin-bottom: 34px; } /* the picker keeps its own rhythm */
     /* Home-screen (standalone/PWA) launches paint before WebKit delivers
        the safe-area insets, then everything relayouts ~31pt down when they
        land (same late-inset root cause as the iOS app shell — see the
@@ -400,7 +477,7 @@
        the menu CONTENT's first visible paint is already in the final
        position — the dark #menu backdrop still shows meanwhile, matching
        the system launch screen. */
-    #menu.await-insets .screen { visibility: hidden; }
+    #menu.await-insets .screen, #menu.await-insets #menu-back { visibility: hidden; }
 
     .title {
       font-family: var(--mono);
@@ -432,6 +509,7 @@
     }
     .h2 {
       font-size: clamp(22px, 5vw, 30px);
+      line-height: 1.32; /* pinned: #menu-back's pre-JS fallback top assumes it */
       font-weight: 800;
       letter-spacing: 0.28em;
       margin-right: -0.28em;
@@ -600,15 +678,11 @@
       width: min(440px, 88vw);
       max-width: 100%;
     }
-    /* The board can hold 50 entries — scroll the LIST itself (keeping the
-       title, period chips and Back button fixed) rather than the whole
-       screen. A hair of right padding keeps rows clear of the scrollbar. */
-    #scores-list {
-      max-height: 54vh;
-      overflow-y: auto;
-      -webkit-overflow-scrolling: touch;
-      padding-right: 4px;
-    }
+    /* The board can hold 50 entries and the WHOLE screen scrolls under the
+       fixed top-left back arrow (2026-09). It used to be a 54vh scroll box
+       so the bottom Back stayed reachable — the arrow made that moot, and
+       the owner asked for the boxes to go (a list inside a scroller inside
+       a scroller read as two kinds of screen). Same for #wn-list. */
     .rowlist li, .rowlist .row {
       display: flex;
       align-items: center;
@@ -689,13 +763,7 @@
        clusters of a base level + its variants, not one flat stack. */
     #level-list .row.group-start { margin-top: 10px; }
     /* What's New (About): read-only changelog rows — two lines, no tap
-       affordance; the list scrolls internally like the score board. */
-    #wn-list {
-      max-height: 54vh;
-      overflow-y: auto;
-      -webkit-overflow-scrolling: touch;
-      padding-right: 4px;
-    }
+       affordance; the screen scrolls as a whole (see #scores-list). */
     #wn-list li {
       flex-direction: column;
       align-items: flex-start;
@@ -1062,6 +1130,14 @@
   <div id="menu" class="open" role="dialog" aria-modal="true">
     <div class="grid" aria-hidden="true"></div>
 
+    <!-- Top-left back arrow: shown (#menu.has-back) on screens with an
+         .mbtn.back to forward to — see the #menu-back CSS note. -->
+    <div id="menu-back" role="button" aria-label="Back" title="Back">
+      <svg class="icn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <polyline points="14.5 5 7.5 12 14.5 19"></polyline>
+      </svg>
+    </div>
+
     <!-- DORMANT load-time announcement kept for future messages. To show
          one: put the text in .announce-msg, move the `on` class from
          #scr-home to this screen, and set the boot state back to
@@ -1300,11 +1376,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Version</div>
-        <div class="info-value" id="build-version">1.0.0+13</div>
+        <div class="info-value" id="build-version">1.0.0+14</div>
       </div>
       <div class="info-row">
         <div class="info-label">Source revision</div>
-        <div class="info-value" id="git-rev">a05c56f</div>
+        <div class="info-value" id="git-rev">6c7caee</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors, which site
@@ -1948,6 +2024,9 @@
       hudBtns.classList.remove("on");
       menuEl.querySelectorAll(".screen").forEach(s =>
         s.classList.toggle("on", s.id === id));
+      menuEl.classList.toggle("has-back", !!backArrowTarget(id));
+      placeBackArrow();
+      if (screenRO) { screenRO.disconnect(); screenRO.observe(document.getElementById(id)); }
       setPause(1);
       // Entering High scores always re-renders — the global board refetches
       // so it's never stale (renderGlobalScores skips fetching while the
@@ -1962,6 +2041,7 @@
       if (overlay === "scr-bugreport") bugReportLeft();
       overlay = null;
       menuEl.classList.remove("open");
+      menuEl.classList.remove("has-back");
       hudBtns.classList.add("on");
       setPause(0);
       syncWakeLock();
@@ -2015,6 +2095,47 @@
     document.addEventListener("visibilitychange", () => {
       if (wantAwake && document.visibilityState === "visible") acquireWebLock();
     });
+
+    // The top-left back arrow forwards to the open screen's own Back
+    // button — the same element hardware back clicks (uiBack) — so history
+    // reconciliation, analytics and every screen's exit stay one code path.
+    // Screens whose `.mbtn.back` is a DECISION rather than navigation get no
+    // arrow: the submit dialog's Skip discards the run, the update nudge's
+    // Not now dismisses a verdict, game-over's Back ends the run — each
+    // deserves its labelled button, not a chevron (and none is tall). Root
+    // screens have no `.mbtn.back` and fall out naturally.
+    const NO_BACK_ARROW = new Set(["scr-name", "scr-update", "scr-gameover"]);
+    function backArrowTarget(id) {
+      if (NO_BACK_ARROW.has(id)) return null;
+      return document.querySelector("#" + id + " .mbtn.back");
+    }
+    document.getElementById("menu-back").addEventListener("click", () => {
+      const b = overlay && backArrowTarget(overlay);
+      if (b) b.click();
+    });
+    // Pin the arrow to the open screen's title line: measure the .h2 (the
+    // screen is display:flex by now, so the rect is real; add the screen's
+    // scrollTop so a re-place mid-scroll still targets the unscrolled
+    // line — the arrow is fixed and content scrolls under it). Re-run on
+    // resize / orientation and when the safe-area insets land (the probe
+    // div's size IS that event — same trick as the standalone launch
+    // gate), since both move the title.
+    function placeBackArrow() {
+      if (!overlay || !menuEl.classList.contains("has-back")) return;
+      const scr = document.getElementById(overlay);
+      const h2 = scr && scr.querySelector(".h2");
+      if (!h2) return;
+      const r = h2.getBoundingClientRect();
+      document.getElementById("menu-back").style.top =
+        Math.round(r.top + scr.scrollTop + r.height / 2 - 22) + "px";
+    }
+    window.addEventListener("resize", placeBackArrow);
+    window.addEventListener("orientationchange", () => setTimeout(placeBackArrow, 300));
+    if (window.ResizeObserver) new ResizeObserver(placeBackArrow).observe(safeProbe);
+    // Async content (a board fetch, the changelog) resizes the open screen
+    // after showScreen measured it; observe the screen too so the arrow
+    // follows the title wherever layout puts it.
+    const screenRO = window.ResizeObserver ? new ResizeObserver(placeBackArrow) : null;
 
     // Taps inside the menu / corner buttons must never reach the canvas
     // (mousedown fires the thruster on desktop).
@@ -2870,7 +2991,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "a05c56f";
+    const wasmRev = "6c7caee";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -3437,7 +3558,7 @@
     // an app resumed from the switcher for weeks still sees a new verdict:
     // - `minBuild` {android, ios} walls shell builds below it (CI run
     //   number); `minVersion` ("1.3.0" or "1.3.0+14") walls EVERY platform
-    //   whose baked tag-derived 1.0.0+13 sorts below it (tuple
+    //   whose baked tag-derived 1.0.0+14 sorts below it (tuple
     //   order — see CLAUDE.md "Versioning"). A wall NEVER interrupts a live
     //   play: a mid-flight/replay verdict latches in `wallPolicy` and
     //   showScreen raises it at the next screen (pause, crash, game over,
