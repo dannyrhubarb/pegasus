@@ -59,16 +59,13 @@ fi
 # script). Prints the sha256 — compare it against a local build.
 tools/build-wasm.sh site/pegasus.wasm
 
-# Inject the build's identity into the info overlay: the git revision, the
-# tag-derived VERSION (tools/version.sh — `1.3.0+14`, see CLAUDE.md
-# "Versioning") and the commit's own committer date as the build time. All
-# three are pure functions of the checked-out commit — a wall-clock
-# timestamp here was the one input that could never reproduce (#214).
-# ISO-8601 UTC: index.html re-renders it in the viewer's timezone and
-# region-derived locale (fmtDateTime), like the board timestamps.
-BUILD_TIME=$(tools/version.sh --commit-date)
+# Inject the build's identity into the info overlay: the git revision and
+# the tag-derived VERSION (tools/version.sh — `1.3.0+14`, see CLAUDE.md
+# "Versioning"). Both are pure functions of the checked-out commit — the
+# wall-clock build time that once rode along here was the one input that
+# could never reproduce (#214), and the About row that showed it is gone.
 BUILD_VERSION=$(tools/version.sh)
-perl -pi -e "s/__GIT_REVISION__/${GIT_REV}/g; s/__BUILD_TIME__/${BUILD_TIME}/g; s/__BUILD_VERSION__/${BUILD_VERSION}/g" site/index.html
+perl -pi -e "s/__GIT_REVISION__/${GIT_REV}/g; s/__BUILD_VERSION__/${BUILD_VERSION}/g" site/index.html
 # Version marker fetched with cache bypassed by index.html, to detect a
 # stale cached page and offer the "new build" reload toast.
 printf '{"revision":"%s","version":"%s"}\n' "${GIT_REV}" "${BUILD_VERSION}" > site/version.json

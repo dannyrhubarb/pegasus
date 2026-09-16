@@ -165,8 +165,11 @@ the artifact that was uploaded.
   `AssetsPathHandler`.
 - `android:configChanges` keeps the activity alive across rotation — an
   activity recreate would reload the page and kill the run mid-flight.
-- The injected revision is suffixed **`-android`**; analytics tags these
-  sessions as Android webview device-mix.
+- The injected revision is the plain commit sha (the old `-android`
+  suffix was dropped 2026-09 — analytics already tags these sessions as
+  Android webview in the device-mix enums, and the About screen's Version
+  row shows the installed app's version). The PR test APK keeps its
+  `-pr-<n>` marker via `PEGASUS_REV`.
 - `config.json` comes from `PEGASUS_BACKEND_CONFIG` (CI passes the
   `BACKEND_CONFIG_JSON` repo variable, the same JSON the web deploy
   writes); unset, `sync-web.sh` falls back to fetching the live site's
