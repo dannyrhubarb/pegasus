@@ -73,8 +73,10 @@ deliberate differences:
   the variable isn't available, so the script falls back to fetching the
   live deployment's copy; offline build machine ⇒ the app runs with
   online scores disabled.
-- **The injected revision carries an `-ios` suffix** so app builds are
-  distinguishable in the About screen, analytics and replay build ids.
+- **The injected revision is the plain commit sha** (an earlier `-ios`
+  suffix was dropped 2026-09: the About screen's Version row shows the
+  installed app's version and the analytics device-mix enums already
+  name the shell, and the replay build id only ever read the hex prefix).
 
 ## Gotchas
 

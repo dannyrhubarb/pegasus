@@ -10,9 +10,6 @@
 #                                                has no vX.Y.Z tag ancestor —
 #                                                a store release must be cut
 #                                                from a tagged history)
-#   tools/version.sh --commit-date → 2026-09-10T10:34:56+00:00 (HEAD's committer
-#                                                date, UTC — the deterministic
-#                                                stand-in for a build timestamp)
 #
 # Tags are annotated `vMAJOR.MINOR.PATCH` on main. Between tags the full form
 # appends the commit distance (`+14`), so every push to main has a strictly
@@ -40,6 +37,5 @@ case "$mode" in
       exit 1
     fi
     echo "$base" ;;
-  --commit-date) TZ=UTC git log -1 --date=iso-strict-local --format=%cd ;;
-  *) echo "usage: $0 [--marketing|--commit-date]" >&2; exit 2 ;;
+  *) echo "usage: $0 [--marketing]" >&2; exit 2 ;;
 esac

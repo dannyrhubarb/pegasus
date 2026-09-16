@@ -5,7 +5,8 @@
 # file set changes). Same deliberate differences as iOS: no version.json
 # (the stale-cache toast is meaningless in-app), config.json from
 # PEGASUS_BACKEND_CONFIG (CI) with the live deployment as the local
-# fallback, and the injected revision suffixed -android.
+# fallback. The injected revision is the plain sha (no platform suffix —
+# the About screen and the analytics device-mix already name the shell).
 #
 # Run from anywhere; re-run after any game change, then rebuild the app.
 set -euo pipefail
@@ -33,10 +34,9 @@ tools/build-wasm.sh "$DEST/pegasus.wasm"
 # PEGASUS_REV lets CI name the build itself — the on-demand PR test APK
 # passes the PR HEAD sha, since the merge ref this checkout sits on has a
 # merge-commit sha that means nothing to a tester reading the About screen.
-REV="${PEGASUS_REV:-$(git rev-parse --short=8 HEAD)-android}"
-BUILD_TIME="$(tools/version.sh --commit-date)" # the commit date, not the clock — reproducible
+REV="${PEGASUS_REV:-$(git rev-parse --short=8 HEAD)}"
 BUILD_VERSION="$(tools/version.sh)"
-perl -pi -e "s/__GIT_REVISION__/${REV}/g; s/__BUILD_TIME__/${BUILD_TIME}/g; s/__BUILD_VERSION__/${BUILD_VERSION}/g" "$DEST/index.html"
+perl -pi -e "s/__GIT_REVISION__/${REV}/g; s/__BUILD_VERSION__/${BUILD_VERSION}/g" "$DEST/index.html"
 
 python3 tools/gen-whats-new.py > "$DEST/whats-new.json" || {
   echo "note: gen-whats-new failed — the What's New screen will show its dev hint"

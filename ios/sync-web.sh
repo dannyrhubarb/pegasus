@@ -31,13 +31,13 @@ cp -R fonts "$DEST/fonts"
 # the website ships for this commit (#214, reproducible builds).
 tools/build-wasm.sh "$DEST/pegasus.wasm"
 
-# Inject revision + build time like the deploy does (About screen; also the
-# replay build id). The -ios suffix marks app-bundled builds apart in
-# analytics/replays. perl, not sed -i: BSD sed on macOS needs -i ''.
-REV="$(git rev-parse --short=8 HEAD)-ios"
-BUILD_TIME="$(tools/version.sh --commit-date)" # the commit date, not the clock — reproducible
+# Inject revision + version like the deploy does (About screen; also the
+# replay build id). No platform suffix on the revision: the About screen's
+# Version row and the analytics device-mix enums already say which shell
+# a build runs in. perl, not sed -i: BSD sed on macOS needs -i ''.
+REV="$(git rev-parse --short=8 HEAD)"
 BUILD_VERSION="$(tools/version.sh)"
-perl -pi -e "s/__GIT_REVISION__/${REV}/g; s/__BUILD_TIME__/${BUILD_TIME}/g; s/__BUILD_VERSION__/${BUILD_VERSION}/g" "$DEST/index.html"
+perl -pi -e "s/__GIT_REVISION__/${REV}/g; s/__BUILD_VERSION__/${BUILD_VERSION}/g" "$DEST/index.html"
 
 # What's New changelog (needs full git history — fine on a normal clone).
 python3 tools/gen-whats-new.py > "$DEST/whats-new.json" || {

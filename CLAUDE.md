@@ -48,11 +48,12 @@ Every build's identity comes from **annotated `vMAJOR.MINOR.PATCH` tags on
   builds read `0.0.0`. The **build number** (CFBundleVersion /
   versionCode) is unchanged: the CI run number, always increasing — both
   stores require it (see "Android app" / "iOS app").
-- **`--commit-date`** = HEAD's committer date (UTC) = the `__BUILD_TIME__`
-  stamp everywhere. It replaced the wall clock — the one build input that
-  could never reproduce byte-for-byte; the About "Build time" now reads as
-  "when this commit landed", and `index.html` is a pure function of the
-  commit.
+- **No build time any more (2026-09)**: the About screen's "Build time"
+  row, the `__BUILD_TIME__` stamp and the script's `--commit-date` mode
+  are gone. The row had become the commit date (a wall clock was the one
+  input that could never reproduce byte-for-byte, #214), which the
+  Version + revision rows already pin — and `index.html` stays a pure
+  function of the commit without it.
 - **Bump rule (owner convention)**: features bump MINOR, fixes PATCH, a
   sim/replay break (`!` commits) MAJOR — Apple requires each submitted
   marketing version to exceed the last approved one, and any bump
@@ -137,8 +138,8 @@ the two DEPLOY inputs that come from repository settings rather than git,
   checkouts at different paths (`build-a/`, `build-b/`), each building
   its own `target/`, then a sha256 listing diff of the two `site/` trees.
   A red run names the differing file; the usual suspects are a new
-  unpinned tool or a path leaking into the binary. Build time (`__BUILD_TIME__`)
-  is the committer date for this reason (see "Versioning").
+  unpinned tool or a path leaking into the binary. (The old build-time
+  stamp was retired for this reason — see "Versioning".)
 - **The shells (#214 step 6)**: both `sync-web.sh` take `config.json`
   from `PEGASUS_BACKEND_CONFIG` (see "Android app" / "iOS app"), which
   removed the last build-time network input, and `android-build.yml`
@@ -277,7 +278,7 @@ push-retry loop for concurrent deploys):
 - `privacy.html` — standalone privacy policy served with the site (and bundled into both apps), written for the Play Store listing's required privacy-policy URL; same substance as the About screen's `#privacy-note` — keep the two in agreement when the analytics story changes
 - `app-policy.json` — the **checked-in update/config policy** every client fetches at launch (`{}` = no verdicts): **the remote lever over ALREADY-INSTALLED apps and stale web tabs** — commit a `config` override to repoint old installs at a moved backend with no store release, a `minBuild`/`minVersion` wall for a genuinely breaking change, or a `recommendBuild`/`recommendVersion` nudge (same screen with a Not-now button) for an update that is strongly advised but not required. **Reach for this whenever a backend move or compatibility break is being planned** (it exists because the #171 migration had no such lever and drained for weeks — pegasus-backend#38); see "App update policy" under "Game menu"
 - `tools/build-wasm.sh` + `tools/build-site.sh` + `rust-toolchain.toml` — the **reproducible build recipe** (see "Reproducible builds" under "Build & deploy"): pinned rustc, pinned Binaryen `wasm-opt` (sha256-verified download), path remapping; `build-site.sh` is what the deploy, the previews and the CI twice-build check all run; `icon-512/192/180.png` are its committed icon renders
-- `tools/version.sh` — **the one version source** (tag-derived, see "Versioning" under "Build & deploy"): `1.3.0+14` full form / `--marketing` (the tag) / `--commit-date`, used by `build-site`, both `sync-web.sh` and the store release workflows
+- `tools/version.sh` — **the one version source** (tag-derived, see "Versioning" under "Build & deploy"): `1.3.0+14` full form / `--marketing` (the tag), used by `build-site`, both `sync-web.sh` and the store release workflows
 - `tools/gen-whats-new.py` + `tools/whats-new-backfill.json` + `tools/whats-new-overrides.json` — deploy-time generator for `whats-new.json`, the About screen's What's New changelog (see "What's new page" — **every user-facing commit needs a `Whats-new:` trailer**; the overrides file rewords already-merged entries)
 - `.github/labels.json` + `tools/sync-labels.py` + `.github/workflows/labels.yml` — the **checked-in issue-label convention** (`type:` / `area:` / `status:` groups); edit the JSON, never the GitHub UI — see "Git workflow"
 - `index.html` — web wrapper, safe-area insets, the **HTML game menu** (start / pause / game-over screens, level picker, settings, high scores, about — see "Game menu"), **gamepad polling**, and a **boot guard** (touch/stick input moved in-canvas — no touch handlers here any more): a small standalone `<script>` tag ahead of the bundle (script tags parse independently, so no error in the bundle/main script can kill it) that paints any script error on screen with file:line and offers a tap-to-reload if `wasm_exports` is missing 8 s after load. Keep it first and self-contained. It also pushes each reported error into a capped `window.__pegErrs` buffer (push-only — the guard never depends on anything) that the analytics module drains (see "Analytics"). It also wraps `console.error` (installed ahead of the bundle, so the wasm `console_error` import routes through it) and appends the last logged error to the banner when the error event is anonymous or attributed to the `.wasm` file — **a Rust panic reaches JS as an opaque trap** (`RuntimeError: unreachable`; iOS Safari mutes it further to a bare "Script error." with no filename, because wasm frames fail its same-origin check), and the only useful description is the panic-hook line logged just before the trap (`src/main.rs` installs `std::panic::set_hook` → `error!("{}", info)`; the *default* hook prints the useless Debug form `PanicHookInfo { payload: Any { .. }, … }`). Unhandled promise rejections get the same banner (skipped when `reason` is null). **Fully-anonymous errors (no filename AND no console.error trace) are deliberately ignored**: same-origin scripts always carry file:line and a wasm panic always logs via the hook first, so the only things that land there are Safari-injected third-party scripts — reproduced live on iOS: opening the **share sheet** runs share/action extensions' preprocessing JS in the page, and an error in any of them arrives as a muted "Script error." (this was the mystery banner of 2026-07-06, seen right after the Pegasus rename and initially blamed on it).
@@ -620,16 +621,25 @@ fifth home button).
   the analytics consent choice (see "Analytics"); no wasm export behind it —
   and the **Pilot name** row (`#name-row`, hidden offline) — opens the
   submit-score dialog in edit mode (see "Online high scores").
-- **scr-about**: the tag-derived **Version** (`__BUILD_VERSION__`, see
-  "Versioning"), build **git revision** + **build time** (the commit's
-  date; deploy-time `sed` of the `__GIT_REVISION__` / `__BUILD_TIME__` /
-  `__BUILD_VERSION__` placeholders by `build-site`;
-  local fallback "dev (local build)" via `startsWith("__")`), an **App
-  build** row shown only in the app shells (`#app-build-row`, the
-  INSTALLED app's version — "1.0 (42)", marketing version + the CI
-  run-number build — read from the shell bridges: Android
+- **scr-about**: **Version** + **Source revision** (the commit sha — labelled
+  "source" not "build" since 2026-09: in the shells it sits under a
+  Version row that IS the store build; deploy-time `sed` of
+  the `__BUILD_VERSION__` / `__GIT_REVISION__` placeholders by
+  `build-site`; local fallback "dev (local build)" via
+  `startsWith("__")`). On the website Version is the tag-derived
+  `1.3.0+14` (see "Versioning"); **in the app shells the SAME row shows
+  the INSTALLED app instead** — "1.3.0 (42)", marketing version + the CI
+  run-number build, read from the shell bridges (Android
   `PegasusApp.appBuild()`, iOS the `window.__pegAppBuild` document-start
-  user script; hidden on the plain website), the
+  user script) — one version per platform (owner decision 2026-09; the
+  separate App build row and the Build time row were dropped with it).
+  The baked tag-derived stamp still lives in `rawBuildVersion` for the
+  update policy's `minVersion` and the bug-report header, which logs
+  both. The revision carries NO platform suffix any more (the old `-ios`
+  / `-android` went the same day — the Version row and the analytics
+  device-mix enums already say which shell a build runs in; the replay
+  build id only ever read the hex prefix; the PR test APK keeps its
+  `-pr-<n>` marker). Then the
   **What's new** button (`#btn-whatsnew` → **scr-whatsnew**, the changelog
   screen — see "What's new page"), the
   **Flight manual** button (`#btn-manual` → **scr-manual**, the rules
@@ -828,7 +838,7 @@ number, assigned only when the fixed release actually runs — while
 `minVersion` is knowable up front (the fixing commit's tag-derived
 version, see "Versioning"). All keys optional (`{}` = no verdicts):
 - `minBuild` `{android, ios}`: a shell build (CI run number, the "(42)"
-  in the About screen's App build) below the platform's number gets the
+  in the About screen's Version row) below the platform's number gets the
   **scr-update wall** — full-screen, undismissable (`walled` latch:
   `showScreen`/`closeMenu` redirect to it, hardware back no-ops — no
   `.mbtn.back`), with `message` and a store button from `storeUrls`.
@@ -2600,12 +2610,11 @@ re-acquired on the `visibilitychange` back while still wanted).
   both sync scripts try `pegasusmoonlander.com` first and fall back to
   the legacy github.io origin with `-L` — it 301s once the custom domain
   is live — until the domain has soaked, #171; unreachable ⇒ online
-  scores off), and the injected revision
-  suffixed **`-ios`** (About screen / analytics / replay build id — the
-  page still env-tags these builds `prod`, so app sessions show up in
-  analytics as iOS webview device-mix); the `__BUILD_VERSION__` and
-  commit-date stamps come from `tools/version.sh` like the deploy's (see
-  "Versioning").
+  scores off), and the injected revision is the plain sha (the `-ios`
+  suffix was dropped 2026-09 — the page env-tags these builds `prod` and
+  the device-mix enums show them as iOS webview, which is all the suffix
+  ever added); the `__BUILD_VERSION__` stamp comes from `tools/version.sh`
+  like the deploy's (see "Versioning").
 - `ios/Pegasus.xcodeproj` + `ios/Pegasus/*.swift`: WebRoot is served via a
   **custom `pegasus://` scheme handler** (`WKURLSchemeHandler`) because
   `fetch()` doesn't work on `file://` URLs and the game fetches its wasm,
@@ -2634,7 +2643,7 @@ re-acquired on the `visibilitychange` back while still wanted).
   too). A document-start `WKUserScript` injects
   `window.__pegAppBuild` ("1.0 (42)" — CFBundleShortVersionString +
   CFBundleVersion, the latter stamped with the CI run number) for the
-  About screen's App build row. WebRoot ships as an Xcode **folder
+  About screen's Version row. WebRoot ships as an Xcode **folder
   reference**, so re-running the sync + rebuilding needs no project
   edits.
 - **Safe-area inset injection (launch-jank fix, 2026-07)**:
@@ -2714,8 +2723,8 @@ build, offline-capable, buildable anywhere with a JDK + Android SDK (no
 Mac). `android/README.md` has the build/signing/Play walkthrough.
 - `android/sync-web.sh` assembles `app/src/main/assets/webroot/`
   (**gitignored**, `.gitkeep` holds the folder) — mirrors `ios/sync-web.sh`
-  and `tools/build-site.sh` (keep all three in sync); revision
-  suffixed **`-android`**, no `version.json`, `config.json` from
+  and `tools/build-site.sh` (keep all three in sync); plain-sha
+  revision (no `-android` suffix since 2026-09), no `version.json`, `config.json` from
   `PEGASUS_BACKEND_CONFIG` (live-site fallback locally — see the iOS
   bullet). **`android-build.yml` also proves the Gradle half reproducible
   on every PR** (2026-09, #214 step 6): after the debug APK it builds the
@@ -2752,8 +2761,8 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   path masked it by creating the decor as a side effect); the
   edge-to-edge call must come after. The `PegasusApp` JS interface is the
   Android half of the keep-awake bridge (see "iOS app") and also answers
-  `appBuild()` (versionName + versionCode) for the About screen's App
-  build row. **targetSdk/compileSdk = 36** (2026-08, Play requires
+  `appBuild()` (versionName + versionCode) for the About screen's Version
+  row. **targetSdk/compileSdk = 36** (2026-08, Play requires
   targeting within 1 year of the latest Android release or updates are
   blocked — expect this bump roughly yearly). **AGP 9.x** (2026-08, same
   push): Kotlin is BUILT INTO AGP 9 — `org.jetbrains.kotlin.android` must
@@ -2847,7 +2856,7 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   (settings, pilot name, board cache). `initWith` carries the release
   signing config over, so successive PR builds upgrade in place rather than
   tripping a signature mismatch; `versionNameSuffix` comes from
-  `PEGASUS_VERSION_SUFFIX` so the About screen's App build row reads
+  `PEGASUS_VERSION_SUFFIX` so the About screen's Version row reads
   `1.0-pr<n> (<run>)` and names the PR being tested. The workflow also sets
   `PEGASUS_REV` (sync-web.sh honours it) to the PR **head** sha — the merge
   ref the checkout sits on has a merge-commit sha that means nothing to a
