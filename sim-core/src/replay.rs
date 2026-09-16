@@ -72,9 +72,11 @@ pub const REPLAY_MAGIC: [u8; 4] = *b"PGRP";
 // fields (one deterministic layout), whatever the level uses. Per-recording
 // choice, one level up from the others: v6 is written ONLY when the
 // recording's ruleset differs from ruleset 1 (the legacy baseline) OR the
-// level uses a v6 level tunable — while live play flies ruleset 1 on the
-// shipped levels, every new blob stays byte-identical to v3–v5 and every
-// shipped client keeps decoding it.
+// level uses a v6 level tunable. Live play has flown ruleset 3 since
+// 2026-09, so every new blob is v6; the conditional survives so ruleset-1
+// recordings (fixtures, the byte-identity tests) still serialize as the
+// v3–v5 bytes every shipped client decodes. Every format ever written
+// stays readable — post-1.0 a format change adds a reader, never drops one.
 pub const REPLAY_FORMAT_VERSION: u16 = 3;
 pub const REPLAY_FORMAT_VERSION_EXT: u16 = 4;
 pub const REPLAY_FORMAT_VERSION_V5: u16 = 5;

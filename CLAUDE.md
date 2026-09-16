@@ -2051,12 +2051,25 @@ for now:
   The Flux Dash — same per-recording rule, so v3/v4 blobs stay
   byte-identical; **v6** = the RULESET format, see "Ruleset versioning"
   below — written only when the recording's ruleset differs from the
-  ruleset-1 baseline, so while live play flies ruleset 1 every new blob
-  stays byte-identical to v3–v5). **No backward
-  compatibility while iterating** — `deserialize` rejects pre-v3
-  versions, so older server blobs stop decoding (watch/ghost pushes
-  no-op gracefully); add version-tolerant reads when the game is
-  released.
+  ruleset-1 baseline or the level uses a v6 tunable; live play has
+  flown ruleset 3 since 2026-09, so EVERY new blob is v6 and the
+  conditional write now exists only so the ruleset-1 fixtures and the
+  byte-identity tests keep producing v3–v5). **Every format ever
+  written stays readable** (post-1.0 rule, 2026-09 — the old "no
+  backward compatibility while iterating" note is retired): `v1.0.0`
+  is tagged, the store apps are frozen, the legacy Rapier is kept
+  compiled in precisely so every blob ever recorded resims, and
+  `sim-core/fixtures/`, bug-report zips and players' local recent runs
+  are all old-format bytes — so a future format change ADDS a reader
+  and never drops one. `deserialize` still rejects pre-v3 versions
+  (nothing pre-v3 was ever stored). The chunked-container redesign
+  (pegasus-backend#28, parts 2–3) is HELD for the same reason: v6's
+  extension block + `min_logic` + the API's `logic` filter already
+  deliver its evolvability wins piecemeal, and post-1.0 it could never
+  retire the positional readers it meant to replace — revive it only
+  at the first change v6 cannot absorb (a new keyframe field, a level
+  feature that isn't a zero-default float, engine-specific state),
+  since that bump costs a repin anyway.
 - **Ruleset versioning (format v6, issue #194 phase 1, 2026-09)**:
   `SimParams` IS the ruleset — since v6 the sim is BUILT from the header
   (`Sim::with_rules`; `resim`/`ResimPlayer` construct their scratch sims
