@@ -1,10 +1,5 @@
 [
  {
-  "rev": "15e368b",
-  "date": "2026-09-16T18:12:15Z",
-  "note": "New: A back arrow now lives in the top-left corner of every menu screen — no more scrolling to the bottom to find your way out"
- },
- {
   "rev": "930df00",
   "date": "2026-09-15T16:06:46+02:00",
   "note": "New: The high-score boards now say, in plain words, what those little v-numbers mean"
