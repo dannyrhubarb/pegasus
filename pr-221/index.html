@@ -423,6 +423,12 @@
        content scrolls under it; the translucent backdrop keeps it legible
        over rows. */
     #menu.has-back {
+      /* A nav-bar screen flows from the TOP: #menu centres a short screen
+         vertically (home, pause), which under the arrow put the title of a
+         five-row board mid-screen — and MOVED it as the board filled in
+         (the arrow was placed against the empty screen's title, then the
+         rows arrived and the title rose without it: owner screenshot). */
+      align-items: flex-start;
       /* The fit term: the longest title ("FLIGHT MANUAL", 13 glyphs at
          0.88 em each with the 0.28 em tracking = 11.44 em) must fit the
          viewport minus the two 76 px reservations. Bump 11.44 if a longer
@@ -459,7 +465,9 @@
       padding: 0 52px;
       white-space: nowrap; /* a title never wraps beside the arrow — the floor keeps it fitting */
       max-width: 100%;
+      margin-bottom: 26px; /* air under the nav-bar title (Settings' rows sat right on it) */
     }
+    #menu.has-back #levels-title { margin-bottom: 34px; } /* the picker keeps its own rhythm */
     /* Home-screen (standalone/PWA) launches paint before WebKit delivers
        the safe-area insets, then everything relayouts ~31pt down when they
        land (same late-inset root cause as the iOS app shell — see the
@@ -670,15 +678,11 @@
       width: min(440px, 88vw);
       max-width: 100%;
     }
-    /* The board can hold 50 entries — scroll the LIST itself (keeping the
-       title, period chips and Back button fixed) rather than the whole
-       screen. A hair of right padding keeps rows clear of the scrollbar. */
-    #scores-list {
-      max-height: 54vh;
-      overflow-y: auto;
-      -webkit-overflow-scrolling: touch;
-      padding-right: 4px;
-    }
+    /* The board can hold 50 entries and the WHOLE screen scrolls under the
+       fixed top-left back arrow (2026-09). It used to be a 54vh scroll box
+       so the bottom Back stayed reachable — the arrow made that moot, and
+       the owner asked for the boxes to go (a list inside a scroller inside
+       a scroller read as two kinds of screen). Same for #wn-list. */
     .rowlist li, .rowlist .row {
       display: flex;
       align-items: center;
@@ -759,13 +763,7 @@
        clusters of a base level + its variants, not one flat stack. */
     #level-list .row.group-start { margin-top: 10px; }
     /* What's New (About): read-only changelog rows — two lines, no tap
-       affordance; the list scrolls internally like the score board. */
-    #wn-list {
-      max-height: 54vh;
-      overflow-y: auto;
-      -webkit-overflow-scrolling: touch;
-      padding-right: 4px;
-    }
+       affordance; the screen scrolls as a whole (see #scores-list). */
     #wn-list li {
       flex-direction: column;
       align-items: flex-start;
@@ -1382,7 +1380,7 @@
       </div>
       <div class="info-row">
         <div class="info-label">Source revision</div>
-        <div class="info-value" id="git-rev">aaed47f-pr-221</div>
+        <div class="info-value" id="git-rev">15e368b-pr-221</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors, which site
@@ -2028,6 +2026,7 @@
         s.classList.toggle("on", s.id === id));
       menuEl.classList.toggle("has-back", !!backArrowTarget(id));
       placeBackArrow();
+      if (screenRO) { screenRO.disconnect(); screenRO.observe(document.getElementById(id)); }
       setPause(1);
       // Entering High scores always re-renders — the global board refetches
       // so it's never stale (renderGlobalScores skips fetching while the
@@ -2133,6 +2132,10 @@
     window.addEventListener("resize", placeBackArrow);
     window.addEventListener("orientationchange", () => setTimeout(placeBackArrow, 300));
     if (window.ResizeObserver) new ResizeObserver(placeBackArrow).observe(safeProbe);
+    // Async content (a board fetch, the changelog) resizes the open screen
+    // after showScreen measured it; observe the screen too so the arrow
+    // follows the title wherever layout puts it.
+    const screenRO = window.ResizeObserver ? new ResizeObserver(placeBackArrow) : null;
 
     // Taps inside the menu / corner buttons must never reach the canvas
     // (mousedown fires the thruster on desktop).
@@ -2988,7 +2991,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "aaed47f-pr-221";
+    const wasmRev = "15e368b-pr-221";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
