@@ -401,23 +401,38 @@
        back clicks). showScreen toggles #menu.has-back when the open screen
        carries an `.mbtn.back` it should forward to.
        ALIGNMENT (owner call): the arrow sits ON THE TITLE'S LINE and moves
-       nothing — no extra top padding. Its top is computed from the title:
-       screen padding + half the .h2's line box (line-height pinned at
-       1.32, the vendored mono's "normal") − half the arrow, so the two
-       share a centre at every viewport width. Horizontally the title
-       reserves the arrow's footprint on BOTH sides (symmetric, so it stays
-       centred) and its font floor drops 22 → 16 px under has-back so the
-       longest title ("FLIGHT MANUAL", 13 chars at 0.88 em each) fits the
-       192 px left on a 320 px phone — on the title's line with the old
-       22 px floor it collided (measured). Fixed, so content scrolls under
-       it; the translucent backdrop keeps it legible over rows. */
+       nothing — no extra top padding. placeBackArrow() (JS, called from
+       showScreen and on resize / orientation / inset arrival) MEASURES the
+       open screen's .h2 and sets the arrow's top to that line's centre −
+       22 px, so a screen with its own title margin (the level picker's
+       #levels-title has 22 px of air above it) lines up like any other —
+       the first cut computed the top from the screen padding alone and
+       the picker's arrow floated a title-height above its title. The CSS
+       top below is only the pre-JS fallback (the same arithmetic, for a
+       margin-less title). The left edge sits on the CONTENT COLUMN (the
+       screen's 24 px padding = where .rowlist starts on a phone), not the
+       12 px corner margin the in-flight ✕ uses — at 12 px it read as
+       hugging the bezel while every row started 12 px further in.
+       Horizontally the title reserves the arrow's footprint on BOTH sides
+       (symmetric, so it stays centred) and its font size is capped by a
+       FIT term under has-back (--h2-fs below) so the longest title fits
+       between the reservations on ONE line (nowrap) — at 320 px that is
+       14.7 px instead of 16; on the title's line at the old size it
+       collided with the arrow, and a plain lower floor still WRAPPED it
+       (both measured by check.mjs's single-line assertion). Fixed, so
+       content scrolls under it; the translucent backdrop keeps it legible
+       over rows. */
     #menu.has-back {
-      --h2-fs: clamp(16px, 5vw, 30px);
+      /* The fit term: the longest title ("FLIGHT MANUAL", 13 glyphs at
+         0.88 em each with the 0.28 em tracking = 11.44 em) must fit the
+         viewport minus the two 76 px reservations. Bump 11.44 if a longer
+         title ever ships (the check.mjs single-line assertion catches it). */
+      --h2-fs: min(clamp(14px, 5vw, 30px), calc((100vw - 152px) / 11.44));
     }
     #menu-back {
       position: fixed;
-      top: calc(max(var(--inset-top), 28px) + var(--h2-fs, 22px) * 0.66 - 22px);
-      left: calc(var(--inset-left) + 12px);
+      top: calc(max(var(--inset-top), 28px) + var(--h2-fs, 22px) * 0.66 - 22px); /* pre-JS fallback */
+      left: calc(var(--inset-left) + 24px);
       width: 44px;
       height: 44px;
       border-radius: 50%;
@@ -437,11 +452,12 @@
     #menu-back:hover { background: rgba(127, 180, 221, 0.12); }
     #menu-back:active { transform: translateY(1px); }
     #menu-back .icn { width: 22px; height: 22px; display: block; }
-    /* The title line under the arrow: 12 + 44 px arrow + 8 px gap = 64 px
-       from the screen edge = the screen's 24 px padding + 40 px here. */
+    /* The title line beside the arrow: 24 + 44 px arrow + 8 px gap = 76 px
+       from the screen edge = the screen's 24 px padding + 52 px here. */
     #menu.has-back .h2 {
       font-size: var(--h2-fs);
-      padding: 0 40px;
+      padding: 0 52px;
+      white-space: nowrap; /* a title never wraps beside the arrow — the floor keeps it fitting */
       max-width: 100%;
     }
     /* Home-screen (standalone/PWA) launches paint before WebKit delivers
@@ -485,7 +501,7 @@
     }
     .h2 {
       font-size: clamp(22px, 5vw, 30px);
-      line-height: 1.32; /* pinned: #menu-back centres on this line box */
+      line-height: 1.32; /* pinned: #menu-back's pre-JS fallback top assumes it */
       font-weight: 800;
       letter-spacing: 0.28em;
       margin-right: -0.28em;
@@ -1362,21 +1378,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Version</div>
-        <div class="info-value" id="build-version">1.0.0+14</div>
+        <div class="info-value" id="build-version">1.0.0+15</div>
       </div>
       <div class="info-row">
-        <div class="info-label">Build revision</div>
-        <div class="info-value" id="git-rev">9e440c1-pr-221</div>
-      </div>
-      <div class="info-row">
-        <div class="info-label">Build time</div>
-        <div class="info-value" id="build-time">2026-09-16T17:17:10Z</div>
-      </div>
-      <!-- App shells only (iOS/Android): the installed app's version +
-           build number, filled from the shell bridge; hidden on the web. -->
-      <div class="info-row" id="app-build-row" style="display:none">
-        <div class="info-label">App build</div>
-        <div class="info-value" id="app-build"></div>
+        <div class="info-label">Source revision</div>
+        <div class="info-value" id="git-rev">aaed47f-pr-221</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors, which site
@@ -2021,12 +2027,12 @@
       menuEl.querySelectorAll(".screen").forEach(s =>
         s.classList.toggle("on", s.id === id));
       menuEl.classList.toggle("has-back", !!backArrowTarget(id));
+      placeBackArrow();
       setPause(1);
       // Entering High scores always re-renders — the global board refetches
       // so it's never stale (renderGlobalScores skips fetching while the
       // screen isn't up, so this entry point is what keeps it fresh).
       if (id === "scr-scores") renderScores();
-      if (id === "scr-about") renderBuildTime();
       syncWakeLock();
       pegAnalytics.screen(id); // funnel signal (consecutive-deduped inside)
       syncHistory();
@@ -2108,6 +2114,25 @@
       const b = overlay && backArrowTarget(overlay);
       if (b) b.click();
     });
+    // Pin the arrow to the open screen's title line: measure the .h2 (the
+    // screen is display:flex by now, so the rect is real; add the screen's
+    // scrollTop so a re-place mid-scroll still targets the unscrolled
+    // line — the arrow is fixed and content scrolls under it). Re-run on
+    // resize / orientation and when the safe-area insets land (the probe
+    // div's size IS that event — same trick as the standalone launch
+    // gate), since both move the title.
+    function placeBackArrow() {
+      if (!overlay || !menuEl.classList.contains("has-back")) return;
+      const scr = document.getElementById(overlay);
+      const h2 = scr && scr.querySelector(".h2");
+      if (!h2) return;
+      const r = h2.getBoundingClientRect();
+      document.getElementById("menu-back").style.top =
+        Math.round(r.top + scr.scrollTop + r.height / 2 - 22) + "px";
+    }
+    window.addEventListener("resize", placeBackArrow);
+    window.addEventListener("orientationchange", () => setTimeout(placeBackArrow, 300));
+    if (window.ResizeObserver) new ResizeObserver(placeBackArrow).observe(safeProbe);
 
     // Taps inside the menu / corner buttons must never reach the canvas
     // (mousedown fires the thruster on desktop).
@@ -2620,45 +2645,30 @@
     // sed replaces the placeholders everywhere including in string literals,
     // so compare with startsWith("__") rather than a literal match.
     const gitRev = document.getElementById("git-rev");
-    const buildTime = document.getElementById("build-time");
-    const rawBuildTime = buildTime.textContent.trim(); // the commit's date (ISO-8601 UTC) when deployed
     // The tag-derived version ("1.3.0+14" — tools/version.sh, see CLAUDE.md
     // "Versioning"): the page's identity for the update policy on EVERY
-    // platform, so it's captured raw here before the dev fallback below.
+    // platform, so it's captured raw here before the rewrites below.
     const buildVersion = document.getElementById("build-version");
     const rawBuildVersion = buildVersion.textContent.trim();
     if (rawBuildVersion.startsWith("__")) buildVersion.textContent = "dev (local build)";
     if (gitRev.textContent.trim().startsWith("__")) {
       gitRev.textContent = "dev (local build)";
     }
-    if (rawBuildTime.startsWith("__")) {
-      buildTime.textContent = "dev (local build)";
-    }
-    // App shells also show the INSTALLED app's version — "1.0 (42)",
-    // marketing version + the build number CI stamps from the workflow
-    // run (iOS CFBundleVersion / Android versionCode) — which can lag the
-    // bundled web revision above and is what App Store / Play releases
-    // are identified by. Android answers synchronously on the PegasusApp
-    // interface; iOS injects window.__pegAppBuild via a document-start
-    // user script. Neither exists on the plain website: the row stays
-    // hidden.
+    // In the app shells the Version row shows the INSTALLED app instead —
+    // "1.3.0 (42)", marketing version + the build number CI stamps from
+    // the workflow run (iOS CFBundleVersion / Android versionCode) — the
+    // identity App Store / Play releases are known by. The bundled page's
+    // tag-derived stamp stays in rawBuildVersion (the update policy's
+    // minVersion compares against it; the bug report logs both). Android
+    // answers synchronously on the PegasusApp interface; iOS injects
+    // window.__pegAppBuild via a document-start user script. Neither
+    // exists on the plain website, which keeps the tag-derived version.
     try {
       let appBuild = "";
       if (window.PegasusApp && PegasusApp.appBuild) appBuild = String(PegasusApp.appBuild());
       else if (window.__pegAppBuild) appBuild = String(window.__pegAppBuild);
-      if (appBuild) {
-        document.getElementById("app-build").textContent = appBuild;
-        document.getElementById("app-build-row").style.display = "";
-      }
+      if (appBuild) buildVersion.textContent = appBuild;
     } catch (e) { /* a shell bridge must never break the game */ }
-    // Render the baked UTC build time like the board timestamps (viewer's
-    // timezone + region-derived locale). Called when About opens, so the
-    // deferred locale scan has settled; unparseable values (dev fallback,
-    // pre-ISO deploys) are left as-is.
-    function renderBuildTime() {
-      const t = Date.parse(rawBuildTime);
-      if (!isNaN(t)) buildTime.textContent = fmtDateTime(t);
-    }
 
     // --- What's New (About) ---
     // whats-new.json is generated at deploy time (curated backfill +
@@ -2978,7 +2988,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "9e440c1-pr-221";
+    const wasmRev = "aaed47f-pr-221";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -3545,7 +3555,7 @@
     // an app resumed from the switcher for weeks still sees a new verdict:
     // - `minBuild` {android, ios} walls shell builds below it (CI run
     //   number); `minVersion` ("1.3.0" or "1.3.0+14") walls EVERY platform
-    //   whose baked tag-derived 1.0.0+14 sorts below it (tuple
+    //   whose baked tag-derived 1.0.0+15 sorts below it (tuple
     //   order — see CLAUDE.md "Versioning"). A wall NEVER interrupts a live
     //   play: a mid-flight/replay verdict latches in `wallPolicy` and
     //   showScreen raises it at the next screen (pause, crash, game over,
