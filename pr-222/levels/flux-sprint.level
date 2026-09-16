@@ -1,0 +1,18 @@
+# Level — The Flux Sprint: The Flux's endless reshuffling cave under a hard
+# ONE-MINUTE clock (`time_limit = 60`) — get as far as you can before it
+# runs out. Same world recipe as The Flux (`endless = on` value noise,
+# boulders, `seed = random` so every load AND every restart rolls brand-new
+# rock), still distance-scored: the run ends the tick the clock hits zero
+# and the score is the distance the minute allowed. Full throttle burns the
+# whole tank in ~28 s, so the minute is also a fuel problem — burn, coast,
+# or gamble on a pad stop. A crash before the horn still posts whatever
+# distance was banked, like any distance level.
+name = The Flux Sprint
+description = The endless cave, but the clock gives you 60 seconds. Floor it
+scoring = distance
+shafts = off
+obstacles = on
+endless = on
+pad_spacing = 150
+seed = random
+time_limit = 60
