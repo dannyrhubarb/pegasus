@@ -24,6 +24,11 @@
 	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<!-- BLE nearby-link spike (docs/multiplayer-ble.md): required for any
+	     CoreBluetooth use; shown by the system prompt on the spike's first
+	     host/scan command, never at launch. -->
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Pegasus uses Bluetooth to find and race a nearby player.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

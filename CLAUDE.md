@@ -280,6 +280,7 @@ push-retry loop for concurrent deploys):
 - `tools/version.sh` — **the one version source** (tag-derived, see "Versioning" under "Build & deploy"): `1.3.0+14` full form / `--marketing` (the tag) / `--commit-date`, used by `build-site`, both `sync-web.sh` and the store release workflows
 - `tools/gen-whats-new.py` + `tools/whats-new-backfill.json` + `tools/whats-new-overrides.json` — deploy-time generator for `whats-new.json`, the About screen's What's New changelog (see "What's new page" — **every user-facing commit needs a `Whats-new:` trailer**; the overrides file rewords already-merged entries)
 - `.github/labels.json` + `tools/sync-labels.py` + `.github/workflows/labels.yml` — the **checked-in issue-label convention** (`type:` / `area:` / `status:` groups); edit the JSON, never the GitHub UI — see "Git workflow"
+- `docs/multiplayer-ble.md` + `android/…/BleBridge.kt` + `ios/Pegasus/BleBridge.swift` + `tests/ble-spike/` — the **BLE GATT nearby-link SPIKE** (2026-09; see "Nearby BLE spike" under "Android app"): both shells expose a dumb-PDU Bluetooth bridge, `index.html`'s `pegBle` module frames/chunks over it, and a developer-only Settings screen (`scr-ble`, shown while Debug HUD is on AND a bridge exists) measures the link. Not a game mode; nothing in the wasm/sim/backend is touched
 - `index.html` — web wrapper, safe-area insets, the **HTML game menu** (start / pause / game-over screens, level picker, settings, high scores, about — see "Game menu"), **gamepad polling**, and a **boot guard** (touch/stick input moved in-canvas — no touch handlers here any more): a small standalone `<script>` tag ahead of the bundle (script tags parse independently, so no error in the bundle/main script can kill it) that paints any script error on screen with file:line and offers a tap-to-reload if `wasm_exports` is missing 8 s after load. Keep it first and self-contained. It also pushes each reported error into a capped `window.__pegErrs` buffer (push-only — the guard never depends on anything) that the analytics module drains (see "Analytics"). It also wraps `console.error` (installed ahead of the bundle, so the wasm `console_error` import routes through it) and appends the last logged error to the banner when the error event is anonymous or attributed to the `.wasm` file — **a Rust panic reaches JS as an opaque trap** (`RuntimeError: unreachable`; iOS Safari mutes it further to a bare "Script error." with no filename, because wasm frames fail its same-origin check), and the only useful description is the panic-hook line logged just before the trap (`src/main.rs` installs `std::panic::set_hook` → `error!("{}", info)`; the *default* hook prints the useless Debug form `PanicHookInfo { payload: Any { .. }, … }`). Unhandled promise rejections get the same banner (skipped when `reason` is null). **Fully-anonymous errors (no filename AND no console.error trace) are deliberately ignored**: same-origin scripts always carry file:line and a wasm panic always logs via the hook first, so the only things that land there are Safari-injected third-party scripts — reproduced live on iOS: opening the **share sheet** runs share/action extensions' preprocessing JS in the page, and an error in any of them arrives as a muted "Script error." (this was the mystery banner of 2026-07-06, seen right after the Pegasus rename and initially blamed on it).
 - `mq_js_bundle.js` — **vendored** miniquad/quad-snd JS loader (from not-fl3/miniquad-samples). Pinned in-repo so deploys don't depend on a third-party host; includes the audio backend. Update it deliberately if macroquad is upgraded. **Gotcha**: it declares globals at top level (`const canvas`, `var gl`, `wasm_exports`, `function load`, …) that share the page's global scope — redeclaring any of them in `index.html`'s inline script is a SyntaxError that silently kills the *whole* inline script (no `load()` → no wasm, page shows only the HTML chrome). Pick distinct names and check the bundle before adding top-level identifiers.
 
@@ -2853,6 +2854,48 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   built to bisect the Android-app "touches sometimes ignored" report
   (CANCEL jumping = something claims the gesture; nothing incrementing =
   events never delivered).
+
+## Nearby BLE spike (both shells, 2026-09 — feasibility, not a mode)
+
+`docs/multiplayer-ble.md` is the brief. The question it answers: can the
+#148 shadow-race protocol (~1 KB/s of tick-stamped input batches at
+10–20 Hz + 1 Hz keyframes) ride a custom **BLE GATT** link between two
+phones with no internet, no shared Wi-Fi and no room code — cross-OS,
+which rules out MultipeerConnectivity / Nearby Connections (they don't
+interoperate) and is why it is GATT. **The web can never have this**:
+Web Bluetooth is central-only (a page can't advertise or be a
+peripheral), Chromium-only, and absent from WKWebView / Android WebView;
+there is no web discovery API at all. Shape: **host = GATT peripheral**
+(advertises the service, notifies on TX), **guest = central** (scans,
+subscribes, writes RX without response), fixed per side like #148's
+roles. **Native is a dumb PDU pipe** — one `send` command = one GATT
+notification/write of ≤ (mtu − 3) bytes, in order, one in flight
+(Android) / drained on the ready callbacks (iOS) — and **the page owns
+the codec**: `pegBle` frames `[u16 len][bytes]` and chunks to the payload
+size, so both platforms share one implementation and the shells stay
+small. Bridge contract (commands `host`/`scan`/`connect`/`send`/`stop`,
+events `state`/`mtu`/`peer`/`data`/`error`/`log`) is in the brief;
+Android = `PegasusBle.cmd(json)` (`BleBridge.kt`, permissions requested
+LAZILY on the first host/scan and the command re-run on grant — the
+game never prompts at launch; manifest declares the 12+ Bluetooth
+runtime permissions with SCAN `neverForLocation`, and fine location
+capped at API 30 for pre-12 scanning — a launch decision, Play flags it),
+iOS = the `pegasusBle` message handler + `__pegBleIos` document-start
+flag (`BleBridge.swift`; managers created on first use for the same
+prompt reason; `NSBluetoothAlwaysUsageDescription` in Info.plist).
+The **spike screen** (`scr-ble`, Settings → "Nearby (BLE spike)", visible
+only while Debug HUD is on AND `pegBle.available()`; histPath
+`[home, settings, ble]`) does host / find / connect, a 20-ping RTT burst
+and a 10 s stream at 15 Hz with the receiver's report, all logged on
+screen and into `pegLog`. `tests/ble-spike/run.mjs` proves the page half
+headless against a fake radio (two pages, 20-byte PDUs enforced, 1000-B
+message in 51 PDUs) — not in CI, run by hand. **Honest status**: the two
+native bridges were written without an SDK/Xcode in the session and are
+compiled first by `android-build.yml` / `ios-build.yml` on the PR; no
+device pairing has been measured yet (the brief's table is empty). If it
+passes, #148's `pegMP` grows a transport interface with the DataChannel
+and `pegBle` as its two implementations and discovery replaces signaling
+for the nearby path — the DataChannel stays the default.
 
 ## Native-app install prompts (web → store apps, 2026-09)
 
