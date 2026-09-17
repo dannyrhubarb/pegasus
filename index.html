@@ -466,6 +466,12 @@
       white-space: nowrap; /* a title never wraps beside the arrow — the floor keeps it fitting */
       max-width: 100%;
       margin-bottom: 26px; /* air under the nav-bar title (Settings' rows sat right on it) */
+      /* Air ABOVE it too: the screen's padding-top is exactly the safe-area
+         inset under a notch, so a top-aligned title sat flush against the
+         status bar on Settings / a board / About and its sub-pages — while
+         the picker, whose title always carried 22 px of its own margin,
+         looked right. Same 22 px everywhere (owner report, 2026-09). */
+      margin-top: 22px;
     }
     #menu.has-back #levels-title { margin-bottom: 34px; } /* the picker keeps its own rhythm */
     /* Home-screen (standalone/PWA) launches paint before WebKit delivers
