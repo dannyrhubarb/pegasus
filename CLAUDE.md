@@ -728,7 +728,13 @@ screenshot). A ResizeObserver on the open screen (`screenRO`,
 re-targeted per `showScreen`) re-places the arrow on any later resize
 as a second guard. The title also gets `margin-bottom: 26px` under
 `has-back` (Settings' rows sat right on it; the picker keeps its own
-34 px), and the two internal 54vh scroll boxes (`#scores-list`,
+34 px) AND `margin-top: 22px` (2026-09-17 follow-up: the screen's
+padding-top is exactly the safe-area inset under a notch, so a
+top-aligned title sat flush against the status bar on Settings, a
+board, About and its sub-pages — the picker looked right only because
+`#levels-title` always carried that 22 px; now every nav-bar title
+does, verified headless at inset + 22 for Settings and the picker
+alike), and the two internal 54vh scroll boxes (`#scores-list`,
 `#wn-list`) are GONE — the whole screen scrolls under the arrow, the
 bottom Back at the end (owner: the boxes were only there to keep it
 reachable). Under `has-back` the `.h2` reserves the arrow's footprint
