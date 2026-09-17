@@ -126,7 +126,12 @@ PEGASUS_VERSION_CODE=N PEGASUS_VERSION_NAME=1.0.0 gradle -p android bundleReleas
 Your outputs are unsigned; the artifact is signed with the upload key.
 Signing only ADDS entries (`META-INF/*` in the AAB, the APK signing block
 plus `META-INF/` in the APK), so compare the zip contents entry by entry
-and ignore those:
+and ignore those. Release builds are R8-minified (`isMinifyEnabled` in
+`app/build.gradle.kts`; rules in `app/proguard-rules.pro`) — R8 is
+deterministic, so the shrunk dex and the embedded deobfuscation map
+(`BUNDLE-METADATA/com.android.tools.build.obfuscation/proguard.map` in the
+AAB, `build/outputs/mapping/release/mapping.txt` on disk, also attached
+to the `pegasus-release` artifact) reproduce like everything else:
 
 ```bash
 unzip -v app-release.aab | grep -v META-INF   # name, size, CRC-32 per entry — diff the two listings

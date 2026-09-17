@@ -2826,7 +2826,24 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   edge-to-edge call must come after. The `PegasusApp` JS interface is the
   Android half of the keep-awake bridge (see "iOS app") and also answers
   `appBuild()` (versionName + versionCode) for the About screen's Version
-  row. **targetSdk/compileSdk = 36** (2026-08, Play requires
+  row. **Release builds are R8-minified + resource-shrunk** (2026-09,
+  after the first Play release's console warning "no deobfuscation file
+  associated with this App Bundle" — R8 had simply been off): AGP embeds
+  the map in the AAB (`BUNDLE-METADATA/com.android.tools.build.obfuscation/
+  proguard.map`), which is what Play reads for crash/ANR retracing — no
+  separate upload step — and `android-release.yml` attaches
+  `mapping.txt` to the `pegasus-release` artifact for hand retracing of
+  sideload-APK traces (one R8 run feeds both outputs). **`app/proguard-
+  rules.pro` keeps the `@JavascriptInterface` bridge methods by name**:
+  the page calls `PegasusApp.setKeepAwake` / `appBuild` as strings, and a
+  renamed bridge fails SILENTLY (the page feature-detects it and degrades
+  to no wake lock + a blank version row) — AGP's default rules already
+  keep them, the file is the belt-and-braces copy. Any new bridge method
+  is covered by the annotation rule; anything looked up reflectively by
+  name from JS or the manifest needs its own `-keep`. The `preview` build
+  type inherits it via `initWith`; debug stays unminified. R8 is
+  deterministic, so the PR twice-build `cmp` still holds.
+  **targetSdk/compileSdk = 36** (2026-08, Play requires
   targeting within 1 year of the latest Android release or updates are
   blocked — expect this bump roughly yearly). **AGP 9.x** (2026-08, same
   push): Kotlin is BUILT INTO AGP 9 — `org.jetbrains.kotlin.android` must
