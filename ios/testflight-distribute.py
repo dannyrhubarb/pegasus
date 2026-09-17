@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Attach the just-uploaded TestFlight build to a beta group, hands-free.
 
-Runs as the last step of ios-testflight.yml: waits for App Store Connect
-to finish processing the build (matched by CFBundleVersion == the
-workflow run number), submits it to Beta App Review (no-op if a
-submission already exists), and adds it to the named beta group so
-testers receive it without any console clicking.
+Runs as the OPT-IN external-distribution step of ios-testflight.yml (the
+`external` dispatch input — off by default since 2026-09, releases stop
+at internal TestFlight testing): waits for App Store Connect to finish
+processing the build (matched by CFBundleVersion == the workflow run
+number), submits it to Beta App Review (no-op if a submission already
+exists), and adds it to the named beta group so external testers receive
+it without any console clicking.
 
 A missing group is a SOFT no-op (notice + exit 0): the group is created
 once, by hand, when public testing is first set up — until then the

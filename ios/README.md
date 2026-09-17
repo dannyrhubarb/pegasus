@@ -116,13 +116,20 @@ Two workflows, both on free public-repo macOS runners:
   `APPLE_TEAM_ID` — plus an existing App Store Connect app record for the
   bundle id. `Info.plist` sets `ITSAppUsesNonExemptEncryption = false`
   (HTTPS only = exempt) so uploads skip the per-build compliance question.
-  After the upload, `ios/testflight-distribute.py` (App Store Connect
+  **The upload is where a release stops by default** (owner decision
+  2026-09, after the first App Store release): the build reaches the
+  INTERNAL TestFlight testers on its own (an internal group with
+  automatic distribution enabled needs no Beta App Review), and moving it
+  to external testing is a deliberate promotion in App Store Connect. The
+  hands-free external path is still there as an **opt-in**: tick the
+  `external` input on the dispatch form (or `ios_external` on the Release
+  apps wrapper) and `ios/testflight-distribute.py` (App Store Connect
   API, same key) waits for Apple's build processing, submits the build to
   Beta App Review, and attaches it to the beta group named by the
   `TESTFLIGHT_GROUP_NAME` repo variable (default **"Public beta"**) — so
-  external testers and the public link get every build with zero console
+  external testers and the public link get that build with zero console
   clicks. No group with that name yet = soft no-op. The wait adds
-  ~5–15 min of runner time to the job.
+  ~5–15 min of runner time to the job. A tag push never sets the input.
 
 The committed **shared scheme**
 (`Pegasus.xcodeproj/xcshareddata/xcschemes/Pegasus.xcscheme`) is what lets

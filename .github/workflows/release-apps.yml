@@ -13,6 +13,15 @@
 #     the nearest tag supplies the marketing version). Untick a platform
 #     in the dispatch form to release just one; a tag push always does both.
 #
+# Every release stops at INTERNAL testing on both stores (owner decision
+# 2026-09, after the first App Store / Play release): the Android build
+# lands on the Play internal track and the iOS build in TestFlight's
+# internal groups only. Promotion — Play closed/open testing or production,
+# TestFlight external testing via Beta App Review — is the owner's manual
+# step in each console. The two extra dispatch inputs (`ios_external`,
+# `android_track`) forward to the store workflows' own opt-ins for the rare
+# run that should go further at once; a tag push never sets them.
+#
 # It DISPATCHES the two workflows via the API instead of calling them as
 # reusable workflows (`uses:` / workflow_call) — DELIBERATELY, do not "tidy"
 # this: a workflow_call'ed workflow runs under the CALLER's
@@ -35,9 +44,18 @@ on:
         type: boolean
         default: true
       android:
-        description: "Android — Play track + sideload APK"
+        description: "Android — Play internal track + sideload APK"
         type: boolean
         default: true
+      ios_external:
+        description: "iOS — also submit to Beta App Review + the external beta group (default: internal TestFlight only)"
+        type: boolean
+        default: false
+      android_track:
+        description: "Android — Play track (internal = default; alpha = closed testing, beta = open testing)"
+        type: choice
+        options: [internal, alpha, beta]
+        default: internal
 
 permissions:
   actions: write # dispatch the two release workflows
@@ -53,14 +71,20 @@ jobs:
       # dispatch; `gh workflow run --ref` accepts either, and the store
       # workflows check out that ref (full depth + tags, so the tag-derived
       # version resolves). On a tag push `inputs.*` are empty — both
-      # platforms release.
+      # platforms release, and the forwarded inputs collapse to their
+      # internal-only defaults (`== true` renders a clean "false" for an
+      # empty boolean; `|| 'internal'` fills the empty choice).
       - name: Dispatch iOS TestFlight
         if: ${{ github.event_name == 'push' || inputs.ios }}
-        run: gh workflow run ios-testflight.yml --ref "$GITHUB_REF_NAME"
+        run: |
+          gh workflow run ios-testflight.yml --ref "$GITHUB_REF_NAME" \
+            -f external="${{ inputs.ios_external == true }}"
 
       - name: Dispatch Android release
         if: ${{ github.event_name == 'push' || inputs.android }}
-        run: gh workflow run android-release.yml --ref "$GITHUB_REF_NAME"
+        run: |
+          gh workflow run android-release.yml --ref "$GITHUB_REF_NAME" \
+            -f track="${{ inputs.android_track || 'internal' }}"
 
       - name: Where to watch
         run: |

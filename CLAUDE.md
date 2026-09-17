@@ -71,7 +71,13 @@ Every build's identity comes from **annotated `vMAJOR.MINOR.PATCH` tags on
   2. The first TestFlight / Play-testing upload: `git tag -a v1.1.0 -m
      v1.1.0 && git push origin v1.1.0` — **the tag push IS the release**:
      `release-apps.yml` triggers on `v[0-9]*` tag pushes and dispatches
-     both store workflows AT THE TAG REF (2026-09, #214 step 3). Later
+     both store workflows AT THE TAG REF (2026-09, #214 step 3). Every
+     release lands on the INTERNAL tier of both stores (Play internal
+     track, TestFlight internal groups — owner decision 2026-09, after
+     the first store release); pushing a build on to closed/open
+     testing, external TestFlight or production is a manual promotion
+     in the consoles (see "Android app" / "iOS app" for the opt-in
+     inputs that skip that step). Later
      betas in the cycle are a manual **Release apps** dispatch on main
      (no new tag — the nearest tag supplies the marketing version).
      Every beta is marketing `1.1.0` with a fresh build number
@@ -2753,11 +2759,18 @@ re-acquired on the `visibilitychange` back while still wanted).
   on a fresh runner can't see locally auto-generated schemes — and
   `fetch-depth: 0` (What's New). `Info.plist` carries
   `ITSAppUsesNonExemptEncryption = false` so TestFlight builds skip the
-  per-upload compliance question. After the upload,
-  `ios/testflight-distribute.py` (ASC API, same key) waits out Apple's
+  per-upload compliance question. **Internal by default (owner decision
+  2026-09, after the first App Store release)**: the run STOPS at the
+  upload — the build reaches TestFlight's INTERNAL testers by itself (an
+  internal group with automatic distribution needs no Beta App Review),
+  and external testing is the owner's manual promotion in App Store
+  Connect. The hands-free external path is an OPT-IN: the `external`
+  dispatch input (forwarded as `ios_external` by the Release apps
+  wrapper; a tag push never sets it) runs `ios/testflight-distribute.py`
+  (ASC API, same key), which waits out Apple's
   build processing, submits the build to Beta App Review and attaches it
   to the beta group named by the `TESTFLIGHT_GROUP_NAME` repo variable
-  (default "Public beta") — external testers get every build hands-free;
+  (default "Public beta") — external testers get that build hands-free;
   a group that doesn't exist yet is a soft no-op, and the group ATTACH
   retries through ASC's propagation lag (a just-processed build can 404
   on the betaGroups relationship endpoint while /v1/builds already calls
@@ -2848,7 +2861,13 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   `android-release.yml` (**manual dispatch ONLY** — see the paused-trigger
   note below — signed AAB + universal APK artifacts; uploads the AAB to
   the **Play internal track** when `PLAY_SERVICE_ACCOUNT_JSON` is set,
-  skipped otherwise; needs the four `ANDROID_KEYSTORE_*`/`ANDROID_KEY_*`
+  skipped otherwise — **internal by default (owner decision 2026-09,
+  after the first Play release)**: closed/open testing and production
+  are the owner's manual "Promote release" in Play Console, and the
+  `track` dispatch input (`android_track` on the Release apps wrapper;
+  a tag push never sets it) is the opt-in to aim one run straight at
+  `alpha`/`beta` — the 2026-08 closed test used to hard-code `alpha`
+  this way; needs the four `ANDROID_KEYSTORE_*`/`ANDROID_KEY_*`
   secrets; versionCode = workflow run number, versionName = the release
   tag via `tools/version.sh --marketing` (see "Versioning" — the run fails
   on an untagged history); **the first Play upload
@@ -2858,7 +2877,10 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   could reach a device; store publishing is now a deliberate manual action
   (Actions → run workflow). **`release-apps.yml` (Release apps)** is the
   one-click wrapper: dispatching it fires both store workflows (per-platform
-  boolean inputs to skip one), and **it also fires on a `v[0-9]*` tag
+  boolean inputs to skip one, plus the `ios_external` / `android_track`
+  opt-ins it forwards — **every release stops at INTERNAL testing on both
+  stores unless those are set**, and a tag push never sets them; the
+  owner promotes from the consoles), and **it also fires on a `v[0-9]*` tag
   push** (2026-09 — the tag IS the release; both platforms, at the tag
   ref, see "Versioning"; a tag push is a human action, so the pause
   stands). It API-dispatches them (`gh workflow run`)

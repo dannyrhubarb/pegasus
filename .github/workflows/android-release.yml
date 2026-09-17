@@ -1,7 +1,15 @@
 # Build the signed Android release (AAB for Play + universal APK for direct
 # sideloading) and, when the Play service-account secret is configured,
-# upload the AAB to the Play internal testing track — the Android twin of
+# upload the AAB to the Play INTERNAL testing track — the Android twin of
 # ios-testflight.yml.
+#
+# INTERNAL BY DEFAULT (owner decision 2026-09, after the first Play
+# release): every run lands on the internal track; promoting a build to
+# closed (alpha) / open (beta) testing or production is a deliberate step
+# the owner takes in Play Console ("Promote release" keeps the same build).
+# The `track` input can aim a run straight at alpha/beta instead — the
+# 2026-08 closed test fed alpha this way — but the wrapper and a tag push
+# never set it, so a release always stops at internal.
 #
 # Runs on MANUAL DISPATCH ONLY (Actions → Android release → Run workflow).
 # Automatic publishing on every main push is PAUSED (owner request, 2026-08);
@@ -30,6 +38,12 @@ name: Android release
 
 on:
   workflow_dispatch:
+    inputs:
+      track:
+        description: "Play track to upload to (internal = default; alpha = closed testing, beta = open testing)"
+        type: choice
+        options: [internal, alpha, beta]
+        default: internal
   # Push trigger PAUSED — restore by uncommenting this block verbatim.
   # push:
   #   branches: [main]
@@ -199,9 +213,7 @@ jobs:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           packageName: se.danielfalk.pegasus
           releaseFiles: android/app/build/outputs/bundle/release/app-release.aab
-          # TEMPORARY while the closed test runs (2026-08): feed the alpha
-          # track directly so every merge reaches the 12 testers during the
-          # 14-day window. Switch back to `internal` once production access
-          # is granted.
-          tracks: alpha
+          # Internal unless the dispatch form says otherwise (see the header);
+          # the `||` covers a dispatch that carries no inputs at all.
+          tracks: ${{ inputs.track || 'internal' }}
           status: completed
