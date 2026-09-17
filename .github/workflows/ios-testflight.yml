@@ -5,6 +5,15 @@
 # the commented-out push trigger below — including its hard-won paths-ignore
 # rationale — is kept intact so resuming is just uncommenting it.
 #
+# INTERNAL BY DEFAULT (owner decision 2026-09, after the first App Store
+# release): a run uploads the build and stops there. Uploaded builds reach
+# the INTERNAL TestFlight testers on their own (an internal group with
+# "automatic distribution" enabled needs no Beta App Review and no console
+# click); promoting a build to external testing — Beta App Review + the
+# external beta group — is a deliberate step the owner takes in App Store
+# Connect, or by re-running this workflow with the `external` input ticked,
+# which runs testflight-distribute.py exactly as it always did.
+#
 # If two builds land inside Apple's Beta App Review window the second gets
 # ANOTHER_BUILD_IN_REVIEW; testflight-distribute.py treats that as a soft
 # notice and carries on, so the run stays green and the next build
@@ -29,6 +38,11 @@ name: iOS TestFlight
 
 on:
   workflow_dispatch:
+    inputs:
+      external:
+        description: "Also submit to Beta App Review + attach to the external beta group (default: internal TestFlight only)"
+        type: boolean
+        default: false
   # Push trigger PAUSED — restore by uncommenting this block verbatim.
   # push:
   #   branches: [main]
@@ -193,12 +207,16 @@ jobs:
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             -authenticationKeyPath "$HOME/private_keys/AuthKey_$ASC_KEY_ID.p8"
 
-      # Hands-free distribution: wait for Apple to process the build, submit
-      # it to Beta App Review, and attach it to the beta group so testers
+      # OPT-IN external distribution (the `external` input; off by default —
+      # see the header): wait for Apple to process the build, submit it to
+      # Beta App Review, and attach it to the beta group so external testers
       # (incl. the public link) get it with zero console clicks. The group
       # name comes from the TESTFLIGHT_GROUP_NAME repo variable (default
-      # "Public beta"); a group that doesn't exist yet is a soft no-op.
-      - name: Assign build to TestFlight group
+      # "Public beta"); a group that doesn't exist yet is a soft no-op. A
+      # run dispatched by release-apps.yml or a tag push leaves the input
+      # at its default, so those releases stop at internal testing.
+      - name: Submit to Beta App Review and assign the external group
+        if: ${{ inputs.external == true }}
         env:
           BUNDLE_ID: se.danielfalk.pegasus
           BUILD_VERSION: ${{ github.run_number }}

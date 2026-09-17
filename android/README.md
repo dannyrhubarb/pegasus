@@ -42,7 +42,13 @@ changes.
   direct-download sideload link, refreshed every release run), and uploads
   the AAB to the **Play internal testing track** once
   `PLAY_SERVICE_ACCOUNT_JSON` is configured (the step is skipped until
-  then). `versionCode` = the workflow run number.
+  then). `versionCode` = the workflow run number. **Internal is where a
+  release stops** (owner decision 2026-09, after the first Play release):
+  promoting a build to closed/open testing or production is a manual
+  "Promote release" in Play Console. The dispatch form's `track` input
+  (`android_track` on the Release apps wrapper) can aim one run straight
+  at `alpha` (closed testing) or `beta` (open testing) instead; a tag
+  push never sets it.
 - **`android-test-apk.yml`** — **opt-in per PR**: add the **`test-apk`
   label** to a pull request and it builds an installable APK, published at
   `https://pegasusmoonlander.com/pr-<n>/app/pegasus.apk` and
@@ -105,8 +111,11 @@ hassle.
    are manual-dispatch only while automatic publishing is paused).
 5. **Wider testing/production**: personal accounts created after 2023
    must run a closed test (≥ 12 testers for 14 days) before applying for
-   production access. Internal testing (up to 100 testers by email) works
-   immediately, and the signed APK artifact sideloads freely regardless.
+   production access (done — the 2026-08 closed test fed the alpha track
+   directly via what is now the `track` input). Internal testing (up to
+   100 testers by email) works immediately, and the signed APK artifact
+   sideloads freely regardless. Since the first Play release every run
+   lands on internal and is promoted from there in the console.
 
 ## Reproducing a release build
 
