@@ -41,7 +41,21 @@ android {
 
     buildTypes {
         val releaseType = getByName("release").apply {
-            isMinifyEnabled = false
+            // R8 on (2026-09): shrinks the shell (Kotlin stdlib + androidx.webkit
+            // are the bulk of the dex) and, load-bearing for Play, makes AGP
+            // embed the deobfuscation map in the AAB
+            // (BUNDLE-METADATA/com.android.tools.build.obfuscation/proguard.map)
+            // — Play Console warned "no deobfuscation file associated with this
+            // App Bundle" on every release while this was off. The map also
+            // lands at build/outputs/mapping/release/mapping.txt, which the
+            // release workflow attaches next to the AAB. proguard-rules.pro
+            // keeps the JS bridge's method names (see it).
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
             if (System.getenv("PEGASUS_KEYSTORE_FILE") != null) {
                 signingConfig = signingConfigs.getByName("release")
             }

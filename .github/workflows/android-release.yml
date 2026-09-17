@@ -155,12 +155,18 @@ jobs:
             android/app/build/outputs/bundle/release/app-release.aab
             android/app/build/outputs/apk/release/app-release.apk
 
+      # mapping.txt = the R8 deobfuscation map for THIS build number. Play
+      # reads the copy AGP embeds in the AAB (BUNDLE-METADATA/…/proguard.map),
+      # so nothing uploads it separately; it rides the artifact so a crash
+      # trace from the sideload APK (same map — one R8 run feeds both) can be
+      # retraced by hand: `retrace mapping.txt trace.txt`.
       - uses: actions/upload-artifact@v7
         with:
           name: pegasus-release
           path: |
             android/app/build/outputs/bundle/release/app-release.aab
             android/app/build/outputs/apk/release/app-release.apk
+            android/app/build/outputs/mapping/release/mapping.txt
           retention-days: 30
 
       # Publish the signed APK for direct download at
