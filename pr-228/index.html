@@ -421,23 +421,16 @@
   <div class="crt" aria-hidden="true"></div>
 
   <script>
-    // Two small, fail-safe touches; the page is complete without either.
-    // 1. Forward the query string into the game: utm-tagged links keep
-    //    their attribution (the game's analytics reads utm_* from ITS
-    //    page URL) and future in-game links (`?join=<code>`, #148) reach
-    //    the page that handles them. Same-origin, so the game still sees
-    //    no referrer — exactly as if the player had typed play/ directly.
-    // 2. Same origin as the game, so its localStorage is readable here:
-    //    a returning web player gets "Continue playing" on the browser link.
+    // One small, fail-safe touch; the page is complete without it: forward
+    // the query string into the game, so utm-tagged links keep their
+    // attribution (the game's analytics reads utm_* from ITS page URL) and
+    // future in-game links (`?join=<code>`, #148) reach the page that
+    // handles them. Same-origin, so the game still sees no referrer —
+    // exactly as if the player had typed play/ directly.
     try {
-      var play = document.getElementById("play");
-      if (location.search.length > 1) play.href = "./play/" + location.search;
-      var returning = false;
-      try {
-        returning = !!(localStorage.getItem("pegasus_level") ||
-                       localStorage.getItem("pegasus_play_count"));
-      } catch (e) { /* storage blocked: first-visit wording */ }
-      if (returning) play.textContent = "Continue playing in your browser ›";
+      if (location.search.length > 1) {
+        document.getElementById("play").href = "./play/" + location.search;
+      }
     } catch (e) { /* never break the page */ }
   </script>
 </body>
