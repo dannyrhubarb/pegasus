@@ -30,7 +30,14 @@ changes.
 
 - **`android-build.yml`** — on every PR touching `android/`: builds a
   debug APK on an ubuntu runner and attaches it as an artifact, so every
-  PR produces a directly installable build. No secrets needed.
+  PR produces a directly installable build. It then builds the unsigned
+  release AAB + APK twice and `cmp`s them, proving the Gradle half of a
+  release reproducible (see "Reproducing a release build"). No secrets
+  needed.
+- **`android-smoke.yml`** — on every PR touching `android/`: boots the
+  debug APK on an emulator, screenshots it and dumps logcat (fails on a
+  `FATAL EXCEPTION`). Added after a boot crash that couldn't be diagnosed
+  without a stack trace; the screenshot + logcat are always uploaded.
 - **`android-release.yml`** — on **manual dispatch only** (Actions →
   Android release → Run workflow, or release both apps at once via the
   **Release apps** wrapper workflow; automatic publishing on `main`
@@ -42,8 +49,13 @@ changes.
   direct-download sideload link, refreshed every release run), and uploads
   the AAB to the **Play internal testing track** once
   `PLAY_SERVICE_ACCOUNT_JSON` is configured (the step is skipped until
-  then). `versionCode` = the workflow run number. **Internal is where a
-  release stops** (owner decision 2026-09, after the first Play release):
+  then). `versionCode` = the workflow run number; `versionName` = the
+  nearest `vX.Y.Z` tag via `tools/version.sh --marketing` (the run fails
+  on an untagged history — a store release is always cut from a tagged
+  commit, and pushing a tag dispatches this workflow through the Release
+  apps wrapper). The signed AAB and APK are attested with
+  `actions/attest-build-provenance` (see "Verifying a build"). **Internal
+  is where a release stops** (owner decision 2026-09, after the first Play release):
   promoting a build to closed/open testing or production is a manual
   "Promote release" in Play Console. The dispatch form's `track` input
   (`android_track` on the Release apps wrapper) can aim one run straight
@@ -61,9 +73,11 @@ changes.
   in the launcher. That means a tester installs it **alongside** the real
   app — nothing is replaced, no uninstall, and the installed app keeps its
   settings, pilot name and cached boards. It's signed with the same upload
-  key, so re-testing a PR upgrades the test app in place. Check
-  About → **App build** reads `1.0-pr<n> (<run>)` before testing; Android
+  key, so re-testing a PR upgrades the test app in place. Check that
+  About → **Version** reads `<tag>-pr<n> (<run>)` — e.g. `1.0.0-pr12 (57)`,
+  or `0.0.0-pr12 (57)` on an untagged branch — before testing; Android
   will otherwise happily serve a cached APK and the test proves nothing.
+  The Source revision row shows the PR's head sha with a `-pr-<n>` marker.
 
   The APK lands **inside** the PR's preview directory, so
   `preview-teardown.yml` deletes it along with the rest of the preview when
@@ -159,7 +173,8 @@ gh attestation verify pegasus.apk --repo dannyrhubarb/pegasus
 ```
 
 The output names the workflow, the commit and the run number (= the
-build number in About → App build). Play re-signs what it distributes, so
+build number in parentheses on About → Version). Play re-signs what it
+distributes, so
 a store-installed APK is not comparable bytes; the AAB attestation covers
 the artifact that was uploaded.
 
@@ -174,6 +189,19 @@ the artifact that was uploaded.
   `AssetsPathHandler`.
 - `android:configChanges` keeps the activity alive across rotation — an
   activity recreate would reload the page and kill the run mid-flight.
+- System bars stay visible (transparent, over the game). Don't hide the
+  navigation bar with swipe-to-reveal: any upward swipe near the bottom —
+  where the stick lives — reveals the bars and the next touch is eaten
+  dismissing them.
+- Targeting SDK 36 enables predictive back, which stops delivering
+  `onBackPressed()`; the manifest opts out
+  (`android:enableOnBackInvokedCallback="false"`) so system back keeps
+  driving the game's screen stack. A future Android release will drop
+  that opt-out — migrate to `OnBackInvokedDispatcher` then.
+- Kotlin is built into AGP 9 — don't apply `org.jetbrains.kotlin.android`
+  (it conflicts). The Gradle version is pinned in the four android
+  workflows (`gradle-version:`), the only place it lives (no wrapper in
+  the repo).
 - The injected revision is the plain commit sha (the old `-android`
   suffix was dropped 2026-09 — analytics already tags these sessions as
   Android webview in the device-mix enums, and the About screen's Version

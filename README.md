@@ -1,94 +1,188 @@
 # Pegasus
 
-Pilot a fragile ship through a procedurally-generated cave system that twists,
-narrows, and branches into vertical shafts connecting infinite layers below.
-Thread the rock, dodge boulders, and stick the landing on fuel pads before you
-run dry — real 2D physics via [Rapier](https://rapier.rs), rendered with
-[macroquad](https://macroquad.rs), running straight in the browser via
-WebAssembly.
+Pilot a fragile lander through a cave that twists, narrows and fills with
+boulders. Thread the rock, stick the landing on refuel pads before the tank
+runs dry, and chase the world record — with a translucent ghost of the
+record run flying beside you.
+
+Real 2D physics via [Rapier](https://rapier.rs), rendered with
+[macroquad](https://macroquad.rs), compiled to WebAssembly. It runs in any
+modern browser and ships as thin native shells for iOS and Android.
+
+- **Play**: [pegasusmoonlander.com](https://pegasusmoonlander.com) (works as
+  an installable PWA)
+- **App Store**: [apps.apple.com/app/id6792584910](https://apps.apple.com/app/id6792584910)
+- **Google Play**: [se.danielfalk.pegasus](https://play.google.com/store/apps/details?id=se.danielfalk.pegasus)
+- **Backend** (global high scores, replay verification, analytics):
+  [dannyrhubarb/pegasus-backend](https://github.com/dannyrhubarb/pegasus-backend)
 
 ## Controls
 
 | Input | Action |
 |-------|--------|
-| Click / Down arrow | Thrust in the direction the box is pointing |
-| Left / Right arrow | Rotate |
-| R | Reset |
-| Touch (mobile) | Floating stick: hold = main engine, direction = point the nose (auto-rotates the short way) |
+| `↓` / hold left mouse button | Main engine (full throttle while held) |
+| `←` / `→` | Rotate |
+| `R` / ⟳ corner button | Restart the run |
+| `Esc` / ✕ corner button | Pause menu |
+| `Enter` | Watch the replay from the crash screen |
+| Gamepad (standard layout) | A / R2 / D-pad up = thrust, left stick X or D-pad = rotate, Start or Y = restart |
+
+**Touch** (phones and tablets) uses two floating controls that appear
+wherever your fingers land:
+
+- **Split controls** (default): a touch on the left half of the screen
+  spawns a **throttle button** under the finger (hold = full throttle); a
+  touch on the right half spawns an **attitude stick** — push in a
+  direction and the ship rotates the short way to point its nose there
+  (a nudge trims, a rim push flips). Settings → *Swap control sides*
+  mirrors the layout for left-handed play.
+- **One-handed** (Settings → *Split controls* off): the stick does both —
+  holding it fires the engine, its direction points the nose, release to
+  coast.
+- *Invert stick* reverses the commanded direction, like pulling back on a
+  flight stick.
 
 How the controls feel is governed by a small set of constants — see
-[`docs/control-tuning.md`](docs/control-tuning.md) for the full knob
-reference and preset recipes.
+[`docs/control-tuning.md`](docs/control-tuning.md) for the knob reference
+and preset recipes, and [`docs/touch-input.md`](docs/touch-input.md) for
+how a touch event reaches the stick (and the trap on the way).
+
+## Flying
+
+- **Landing** = both feet on a pad deck, slow (under 1 m/s), not turning,
+  held for 0.4 s — a green settle ring fills while the landing registers.
+  Parked ships refuel and repair.
+- **Impacts** are graduated: a gentle touch is free, a scrape damages the
+  hull in proportion to the impact, a hard hit (or a scrape on an empty
+  hull) destroys the ship. Running out of fuel ends the run a few seconds
+  later.
+- **Replays**: every run is recorded as inputs + periodic keyframes and
+  re-simulated for playback, with play/pause, scrubbing and ¼×–4× speed
+  (in-canvas: `Space` pause, `←`/`→` step, `S` speed). Watch your own
+  crash, or any board entry's run.
+- The in-game **Flight manual** (About → Flight manual) spells out the
+  rules in player language.
 
 ## Levels
 
-Levels are plain-text **data files** in [`levels/`](levels/), fetched at
-runtime and selectable from the ⓘ info overlay — adding a level means adding a
-`.level` file and listing it in `levels/manifest.json`, no wasm rebuild:
+Levels are plain-text `key = value` files in [`levels/`](levels/), fetched
+at runtime and listed in `levels/manifest.json` — adding a level means
+adding a file and a manifest entry, no wasm rebuild. Three families ship,
+each in three modes:
 
-- **The Expanse** — fly as far as you can in either direction; the high score
-  is the farthest |x| you reach. No vertical shafts, boulders on, refueling
-  pads every ~130 m.
-- **The Glide** — The Expanse without the boulders.
-- **The Caves** — the original shafted, pad-scoring world, kept as the
-  demo/experimentation level.
+| World | Distance | Sprint (60 s clock) | Dash (1,000 m time trial) |
+|-------|----------|---------------------|---------------------------|
+| **The Expanse** — one long winding tunnel full of boulders | ✓ | ✓ | ✓ |
+| **The Glide** — pure cave flying, no boulders | ✓ | ✓ | ✓ |
+| **The Flux** — an endless cave that reshuffles itself on every attempt | ✓ | ✓ | ✓ |
 
-Each level keeps its **top 5 longest flights** (with date/time and a ▶ button
-to watch the recorded replay) in the info overlay, and the best run races
-alongside you as a translucent **ghost** — toggle it with the "Race best
-ghost" checkbox. Scores and replays persist per device in `localStorage`.
+Plus **The Hollows**, a hand-drawn map: five chambers, five pads, visit
+them all against the clock.
 
-See the "Levels" and "High scores" sections in `CLAUDE.md` for the file
-format, the score/replay store, and how the level parameters ride in every
-replay recording.
+Three scoring modes: **distance** (farthest |x| reached, metres),
+**time** (visit every pad, or reach the finish pad — fastest wins) and
+**pads** (+100 per first landing; the built-in fallback world). Level files
+can also tune gravity, thrust, tank, hull and refuel rate per level.
+Hand-drawn worlds are polygons of solid rock, authored in `editor.html`
+(a standalone page, not yet linked from the game's menus).
+
+See "Levels" in [`CLAUDE.md`](CLAUDE.md) for the full key reference.
+
+## High scores, replays and the ghost
+
+Boards are **global** (today / this week / all time, per level) and served
+by the backend. Every submission carries its replay, which the backend
+**re-simulates with the same physics crate** before the score can reach a
+board — the boards stay physics-true. The level's record run is fetched on
+load and raced as a **ghost**; board rows tagged `v1` / `v2` / … name the
+rulebook version each run was flown under (old runs keep replaying under
+their own rules).
+
+Offline or without a backend config the game plays identically — no
+boards, no ghost, a session-only best.
+
+## Project layout
+
+| Path | What |
+|------|------|
+| `src/` | The game: frame loop, input, rendering, HUD, replay playback, wasm ↔ JS bridge |
+| `sim-core/` | `pegasus-sim` — the deterministic simulation (physics, world generation, replay format), consumed by the backend verifier as a git dependency |
+| `index.html` | Web wrapper: HTML menus, settings, boards, gamepad polling, analytics |
+| `levels/` | Runtime level data |
+| `editor.html` | Standalone hand-drawn level editor |
+| `ios/`, `android/` | Native app shells — see their READMEs |
+| `tools/` | Build recipe, version script, changelog and license generators |
+| `docs/` | Control tuning, touch input, multiplayer design brief |
+| `tests/touch-e2e/` | Headless browser regression test for the touch stick |
+
+[`CLAUDE.md`](CLAUDE.md) is the detailed architecture and conventions
+reference.
 
 ## Development
 
-### Build
+### Prerequisites
 
 ```bash
-tools/build-wasm.sh pegasus.wasm
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # rustup
 ```
 
-That is the deploy's exact recipe — pinned toolchain (`rust-toolchain.toml`),
-pinned `wasm-opt`, paths remapped — so the printed sha256 matches the
-`pegasus.wasm` the website serves for the same commit. `tools/build-site.sh`
-assembles the whole `site/` directory the same way (see "Reproducible
-builds" in `CLAUDE.md`).
+The toolchain is pinned in `rust-toolchain.toml` (rustup installs it, wasm
+target included, on first use). `python3` is needed for the changelog and
+license generators.
 
-### Serve locally
+### Build & test
 
 ```bash
-python3 -m http.server 8080
+cargo build                        # native sanity build (silent — audio is wasm-only)
+cargo test --workspace             # unit tests (--workspace includes sim-core)
+tools/build-wasm.sh pegasus.wasm   # the deploy's exact wasm into the repo root
 ```
 
-Then open [http://localhost:8080](http://localhost:8080).
+`tools/build-wasm.sh` is the one wasm recipe — pinned toolchain, pinned
+`wasm-opt` (sha256-verified download), paths remapped — so its output is
+byte-identical to what the website serves for the same commit.
+`tools/build-site.sh` assembles the whole `site/` directory the same way.
 
-### Serve over HTTPS (required for iOS)
+### Run locally
 
 ```bash
-ngrok http 8080
+python3 -m http.server 8080        # then open http://localhost:8080
 ```
 
-Open the `https://` URL ngrok prints on your iPhone.
+The page loads `pegasus.wasm` from the repo root. With no `config.json`
+the online layer is off (no boards, no ghost). For phone testing, tunnel
+it with `ngrok http 8080` — some browser features (wake lock, share sheet)
+need a secure context.
+
+### Touch regression test
+
+```bash
+cd tests/touch-e2e && npm ci && npm test
+```
+
+Runs headless Chromium against the built wasm (`CHROMIUM_PATH=…` reuses a
+preinstalled browser). CI runs it on every PR, together with clippy, the
+unit tests, the wasm build and a twice-build reproducibility check.
 
 ## Deployment
 
-The project deploys to GitHub Pages automatically. On every push to `main`,
-[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) builds the WASM
-from source and syncs the site into the root of the `gh-pages` state branch;
-[`.github/workflows/publish-pages.yml`](.github/workflows/publish-pages.yml)
-then snapshots that branch and deploys it to Pages.
+Every push to `main` deploys the site: `deploy.yml` builds and syncs the
+`gh-pages` state branch, `publish-pages.yml` snapshots that branch to
+GitHub Pages. Every pull request gets a preview at
+`https://pegasusmoonlander.com/pr-<n>/` (posted as a sticky PR comment,
+torn down on close), and a `test-apk` label builds an installable Android
+test build for the PR.
 
-To enable it, go to **Settings → Pages** in the repository and set
-**Source** to **GitHub Actions** (one-time setup). The deploy workflow can also
-be run manually from the **Actions** tab via *Run workflow*.
+**Versions** come from annotated `vMAJOR.MINOR.PATCH` tags via
+`tools/version.sh` — `1.3.0+14` on the web (tag + commits since), the
+bare tag as the store apps' marketing version. Pushing a tag builds and
+uploads both store apps at that commit; see "Versioning" in `CLAUDE.md`
+for the release cycle.
 
 ### Verifying a build
 
 Every `main` deploy signs a provenance attestation for the served wasm and
-page, and `tools/build-wasm.sh` reproduces the wasm byte for byte from the
-commit. To check the live site:
+page, and the build is reproducible from the commit:
 
 ```bash
 curl -fsSO https://pegasusmoonlander.com/pegasus.wasm
@@ -98,34 +192,16 @@ gh attestation verify pegasus.wasm --repo dannyrhubarb/pegasus
 The same command on a local `tools/build-wasm.sh` output verifies too, as
 long as the bytes match — attestations are looked up by digest.
 
-### PR previews
+## Contributing
 
-Every pull request gets its own preview deployment — no merge to `main`
-required. [`preview-deploy.yml`](.github/workflows/preview-deploy.yml) builds
-each PR push and publishes it at
-
-```
-https://pegasusmoonlander.com/pr-<n>/
-```
-
-posting a sticky comment with the link on the PR.
-[`preview-teardown.yml`](.github/workflows/preview-teardown.yml) removes the
-preview when the PR closes. Previews live in `pr-<n>/` directories on the
-`gh-pages` branch alongside the `main` build at the root, so the production
-site is never affected.
-
-## First-time setup
-
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh  # rustup; the toolchain pin does the rest
-brew install ngrok  # optional, for iOS testing
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md). Commits follow Conventional
+Commits, and every player-visible change carries a `Whats-new:` trailer
+that becomes an entry on the in-game What's New page.
 
 ## License
 
 Pegasus is licensed under [GPL-3.0-or-later](LICENSE). Contributions are
-accepted under the terms of the [Contributor License Agreement](CLA.md) —
-see [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+accepted under the terms of the [Contributor License Agreement](CLA.md).
 
 Third-party components are attributed in
 [third-party-licenses.html](third-party-licenses.html) (also linked from
