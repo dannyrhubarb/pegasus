@@ -177,106 +177,68 @@
     }
     .pitch b { color: var(--amber); font-weight: 700; }
 
-    /* Buttons: the menu's .mbtn, as real links. */
-    .btn {
-      display: block;
-      width: min(340px, 100%);
-      padding: 14px 18px;
-      margin: 0 0 12px;
-      border: 1.5px solid var(--cyan);
-      border-radius: 10px;
-      background: var(--panel);
-      color: var(--cyan);
-      font: 700 16px/1.2 var(--mono);
-      letter-spacing: 0.2em;
-      text-transform: uppercase;
-      text-decoration: none;
-      text-shadow: 0 0 8px rgba(52, 231, 255, 0.6);
-      box-shadow: 0 0 8px rgba(52, 231, 255, 0.25), inset 0 0 10px rgba(52, 231, 255, 0.08);
-      transition: background 0.12s, box-shadow 0.12s, transform 0.05s;
-      -webkit-tap-highlight-color: transparent;
-    }
-    .btn:hover, .btn:focus-visible {
-      background: rgba(52, 231, 255, 0.12);
-      box-shadow: 0 0 18px rgba(52, 231, 255, 0.5), inset 0 0 14px rgba(52, 231, 255, 0.15);
-      outline: none;
-    }
-    .btn:active { transform: scale(0.98); }
-    .btn small {
-      display: block;
-      font-size: 11px;
-      font-weight: 400;
-      letter-spacing: 0.12em;
-      text-transform: none;
-      color: var(--dim);
-      text-shadow: none;
-      margin-top: 4px;
-    }
-    .btn.primary {
-      border-color: var(--green);
-      color: var(--green);
-      text-shadow: 0 0 10px rgba(70, 255, 156, 0.8);
-      box-shadow: 0 0 12px rgba(70, 255, 156, 0.4), inset 0 0 12px rgba(70, 255, 156, 0.12);
-      animation: pulse 1.4s ease-in-out infinite;
-    }
-    .btn.primary:hover, .btn.primary:focus-visible {
-      background: rgba(70, 255, 156, 0.12);
-    }
-    @keyframes pulse {
-      0%, 100% { box-shadow: 0 0 12px rgba(70, 255, 156, 0.4), inset 0 0 12px rgba(70, 255, 156, 0.12); }
-      50%      { box-shadow: 0 0 22px rgba(70, 255, 156, 0.7), inset 0 0 16px rgba(70, 255, 156, 0.2); }
-    }
+    /* Store badges — the OFFICIAL artwork, used as-is per Apple's and
+       Google's badge guidelines (no recolouring, no reshaping, only
+       scaling; the files live in badges/). Both render at the same
+       visible height (--bh). Google's PNG carries its own transparent
+       padding (41 px on every side of a 646×250 image, measured), so the
+       image is scaled up by 250/168 and pulled in by 41/250 of that
+       height on every side to make its VISIBLE box --bh tall, matching
+       Apple's SVG, which has no padding. Apple asks for ≥ 40 px height
+       and clear space of a quarter of the badge height around it — the
+       gap and margins here satisfy both. */
     .stores {
+      --bh: 52px;
       display: flex;
       flex-wrap: wrap;
       justify-content: center;
-      gap: 0 12px;
-      width: min(340px, 100%);
-      margin-top: 6px;
+      align-items: center;
+      gap: 16px 20px;
+      margin: 4px 0 22px;
     }
-    .stores .btn {
-      flex: 1 1 150px;
-      width: auto;
-      font-size: 13px;
-      letter-spacing: 0.14em;
-      padding: 12px 10px;
-    }
-    .or {
-      color: var(--faint);
-      font-size: 11px;
-      letter-spacing: 0.4em;
-      margin: 10px 0 14px;
-    }
-
-    .features {
-      list-style: none;
-      width: min(440px, 100%);
-      margin: 34px 0 0;
-      text-align: left;
-    }
-    .features li {
-      display: flex;
-      gap: 14px;
-      align-items: flex-start;
-      padding: 12px 14px;
-      margin-bottom: 8px;
-      border: 1px solid rgba(52, 231, 255, 0.35);
+    .stores a {
+      display: block;
+      line-height: 0;
       border-radius: 8px;
-      background: var(--panel);
+      -webkit-tap-highlight-color: transparent;
+      transition: transform 0.08s, filter 0.12s;
+    }
+    .stores a:hover, .stores a:focus-visible {
+      filter: drop-shadow(0 0 10px rgba(52, 231, 255, 0.55));
+      outline: none;
+    }
+    .stores a:active { transform: scale(0.97); }
+    .stores img { display: block; height: var(--bh); width: auto; }
+    .stores .badge-play { overflow: hidden; height: var(--bh); }
+    .stores .badge-play img {
+      height: calc(var(--bh) * 250 / 168);
+      margin: calc(var(--bh) * -41 / 168);
+    }
+    /* Phones: a hair smaller so the two badges share one row from 360 px
+       up (they stack below that). */
+    @media (max-width: 480px) { .stores { --bh: 46px; gap: 14px 16px; } }
+
+    /* The browser route: deliberately quiet — a text link under the
+       badges, not a button (owner call 2026-09: the store apps are the
+       headline, the web build is the "no install" alternative). */
+    .browser {
+      display: inline-block;
+      white-space: nowrap;
+      color: var(--dim);
       font-size: 13.5px;
-      line-height: 1.5;
+      letter-spacing: 0.08em;
+      text-decoration: none;
+      border-bottom: 1px solid rgba(127, 180, 221, 0.4);
+      padding-bottom: 2px;
+      -webkit-tap-highlight-color: transparent;
+      transition: color 0.12s, border-color 0.12s;
     }
-    .features .k {
-      flex: 0 0 auto;
-      color: var(--amber);
-      font-weight: 700;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      font-size: 11px;
-      padding-top: 3px;
-      min-width: 5.5em;
+    .browser:hover, .browser:focus-visible {
+      color: var(--cyan);
+      border-color: var(--cyan);
+      text-shadow: 0 0 8px rgba(52, 231, 255, 0.5);
+      outline: none;
     }
-    .features .v { color: var(--text); }
 
     footer {
       margin-top: 40px;
@@ -285,7 +247,7 @@
       color: var(--faint);
       line-height: 2;
     }
-    footer a { color: var(--dim); text-decoration: none; border-bottom: 1px solid rgba(127, 180, 221, 0.35); }
+    footer a { color: var(--dim); text-decoration: none; border-bottom: 1px solid rgba(127, 180, 221, 0.35); white-space: nowrap; }
     footer a:hover { color: var(--cyan); border-color: var(--cyan); }
     footer .sep { margin: 0 8px; opacity: 0.5; }
 
@@ -294,7 +256,8 @@
     @media (max-height: 640px) {
       main { padding-top: calc(var(--inset-top) + 22px); }
       .ship-hero { width: 84px; margin: 2px 0 6px; }
-      .pitch { font-size: 13px; margin-bottom: 18px; }
+      .pitch { font-size: 13px; margin-bottom: 14px; }
+      .stores { --bh: 42px; gap: 10px 16px; margin-bottom: 14px; }
     }
     /* Short viewports (landscape phones): drop the hero so the Play
        button stays above the fold — the same rule as the game menu. */
@@ -303,7 +266,7 @@
       .title { font-size: clamp(30px, 7vw, 52px); }
     }
     @media (prefers-reduced-motion: reduce) {
-      .ship-hero, .ship-hero .flame, .title, .grid::before, .btn.primary { animation: none; }
+      .ship-hero, .ship-hero .flame, .title, .grid::before { animation: none; }
     }
   </style>
 </head>
@@ -443,20 +406,11 @@
       score on the boards is a replay the server re-flew.
     </p>
 
-    <a class="btn primary" id="play" href="./play/">Play in your browser<small>Nothing to install — phone, tablet or desktop</small></a>
-    <div class="or">OR GET THE APP</div>
     <div class="stores">
-      <a class="btn" id="ios" href="https://apps.apple.com/app/id6792584910" rel="noopener">App Store<small>iPhone &amp; iPad</small></a>
-      <a class="btn" id="android" href="https://play.google.com/store/apps/details?id=se.danielfalk.pegasus" rel="noopener">Google Play<small>Android</small></a>
+      <a id="ios" href="https://apps.apple.com/app/id6792584910" rel="noopener"><img src="./badges/app-store.svg" alt="Download on the App Store"></a>
+      <a id="android" class="badge-play" href="https://play.google.com/store/apps/details?id=se.danielfalk.pegasus" rel="noopener"><img src="./badges/google-play.png" alt="Get it on Google Play"></a>
     </div>
-
-    <ul class="features">
-      <li><span class="k">Fly</span><span class="v">One finger: hold to burn, push to point. Or a keyboard, a mouse, a gamepad.</span></li>
-      <li><span class="k">Explore</span><span class="v">Endless procedural caves that never repeat, hand-drawn chambers, timed sprints and dashes.</span></li>
-      <li><span class="k">Compete</span><span class="v">Global boards for every level — today, this week, all time. Watch any record's replay.</span></li>
-      <li><span class="k">Race</span><span class="v">The record holder flies beside you as a ghost. Beat them and it's your name on the pad.</span></li>
-      <li><span class="k">Free</span><span class="v">No ads, no accounts, no tracking you didn't opt into. Open source under the GPL.</span></li>
-    </ul>
+    <a class="browser" id="play" href="./play/">or play in your browser ›</a>
 
     <footer>
       <a href="./privacy.html">Privacy policy</a><span class="sep">·</span>
@@ -474,7 +428,7 @@
     //    the page that handles them. Same-origin, so the game still sees
     //    no referrer — exactly as if the player had typed play/ directly.
     // 2. Same origin as the game, so its localStorage is readable here:
-    //    a returning player gets "Continue playing" as the call to action.
+    //    a returning web player gets "Continue playing" on the browser link.
     try {
       var play = document.getElementById("play");
       if (location.search.length > 1) play.href = "./play/" + location.search;
@@ -483,10 +437,7 @@
         returning = !!(localStorage.getItem("pegasus_level") ||
                        localStorage.getItem("pegasus_play_count"));
       } catch (e) { /* storage blocked: first-visit wording */ }
-      if (returning) {
-        play.firstChild.nodeValue = "Continue playing";
-        play.querySelector("small").textContent = "Your settings and callsign are right where you left them";
-      }
+      if (returning) play.textContent = "Continue playing in your browser ›";
     } catch (e) { /* never break the page */ }
   </script>
 </body>
