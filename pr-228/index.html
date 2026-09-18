@@ -108,8 +108,8 @@
       z-index: 1;
       max-width: 620px;
       margin: 0 auto;
-      padding: calc(var(--inset-top) + 40px) calc(var(--inset-right) + 24px)
-               calc(var(--inset-bottom) + 40px) calc(var(--inset-left) + 24px);
+      padding: calc(var(--inset-top) + 56px) calc(var(--inset-right) + 24px)
+               calc(var(--inset-bottom) + 56px) calc(var(--inset-left) + 24px);
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -138,7 +138,7 @@
       font-size: clamp(12px, 3vw, 16px);
       letter-spacing: 0.62em;
       margin-right: -0.62em;
-      margin-bottom: 4px;
+      margin-bottom: 10px;
       color: var(--magenta);
       text-shadow: 0 0 10px rgba(255, 84, 214, 0.8);
     }
@@ -148,7 +148,7 @@
     .ship-hero {
       width: clamp(110px, 28vw, 160px);
       height: auto;
-      margin: 4px 0 10px;
+      margin: 10px 0 22px;
       animation: bob 3.4s ease-in-out infinite;
     }
     .ship-hero .hull {
@@ -170,10 +170,10 @@
     }
     .pitch {
       font-size: clamp(14px, 3.6vw, 17px);
-      line-height: 1.55;
+      line-height: 1.7;
       color: var(--text);
-      max-width: 34em;
-      margin: 0 0 26px;
+      max-width: 32em;
+      margin: 0 0 38px;
     }
     .pitch b { color: var(--amber); font-weight: 700; }
 
@@ -194,7 +194,7 @@
       justify-content: center;
       align-items: center;
       gap: 16px 20px;
-      margin: 4px 0 22px;
+      margin: 0 0 30px;
     }
     .stores a {
       display: block;
@@ -241,7 +241,7 @@
     }
 
     footer {
-      margin-top: 40px;
+      margin-top: 64px;
       font-size: 11.5px;
       letter-spacing: 0.08em;
       color: var(--faint);
@@ -251,13 +251,24 @@
     footer a:hover { color: var(--cyan); border-color: var(--cyan); }
     footer .sep { margin: 0 8px; opacity: 0.5; }
 
+    /* Short desktops and laptops (1366×768, 1280×800): the roomier
+       spacing above would push the badges under the fold, so trim the
+       vertical rhythm a little there. Phones are handled below. */
+    @media (min-width: 700px) and (max-height: 860px) {
+      main { padding-top: calc(var(--inset-top) + 36px); }
+      .subtitle { margin-bottom: 6px; }
+      .ship-hero { width: 140px; margin: 6px 0 14px; }
+      .pitch { margin-bottom: 28px; }
+    }
     /* Small phones (iPhone SE class, ~568 px tall): tighten so the Play
        button still lands in the first viewport. */
     @media (max-height: 640px) {
       main { padding-top: calc(var(--inset-top) + 22px); }
-      .ship-hero { width: 84px; margin: 2px 0 6px; }
-      .pitch { font-size: 13px; margin-bottom: 14px; }
-      .stores { --bh: 42px; gap: 10px 16px; margin-bottom: 14px; }
+      .subtitle { margin-bottom: 4px; }
+      .ship-hero { width: 84px; margin: 2px 0 8px; }
+      .pitch { font-size: 13px; line-height: 1.55; margin-bottom: 16px; }
+      .stores { --bh: 42px; gap: 10px 16px; margin-bottom: 16px; }
+      footer { margin-top: 40px; }
     }
     /* Short viewports (landscape phones): drop the hero so the Play
        button stays above the fold — the same rule as the game menu. */
@@ -400,10 +411,10 @@
       </g>
     </svg>
     <p class="pitch">
-      A cave, a lander and a tank of fuel. <b>Thrust</b> and <b>rotate</b> your
-      way through procedurally generated rock, touch down soft on the pads,
-      and chase world records that are <b>verified by physics</b> — every
-      score on the boards is a replay the server re-flew.
+      Land a ship on a pad without wrecking it. Sounds easy. Then do it
+      <b>faster than everyone else</b>. Every level has a world record, every
+      record has a replay, and the record holder flies beside you as a
+      <b>ghost</b> so you can see exactly where you are losing time.
     </p>
 
     <div class="stores">
