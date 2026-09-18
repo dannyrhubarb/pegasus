@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Pegasus — Moon Lander</title>
+  <meta name="description" content="Pegasus is a moon-lander game: pilot a ship through procedurally generated caves with thrust and rotation, land on the pads, and race verified world records. Free in the browser, on the App Store and on Google Play.">
+  <meta name="theme-color" content="#14141e">
+  <!-- Link previews (shares, chats, social). The image is an absolute URL
+       on purpose: preview scrapers do not resolve relative paths. A PR
+       preview therefore advertises the live site's icon, which is fine. -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Pegasus — Moon Lander">
+  <meta property="og:description" content="Fly a lander through endless caves. Land soft, refuel, race the record ghost. Play in the browser or get the app.">
+  <meta property="og:url" content="https://pegasusmoonlander.com/">
+  <meta property="og:image" content="https://pegasusmoonlander.com/play/icon-512.png">
+  <meta name="twitter:card" content="summary">
+  <link rel="icon" href="./play/icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="./play/icon-180.png">
+  <!-- Safari's native Smart App Banner (same Apple ID as the game page):
+       Safari renders nothing until the app is purchasable in the viewer's
+       storefront, so it needs no gating. -->
+  <meta name="apple-itunes-app" content="app-id=6792584910">
+  <!-- The vendored menu font, shared with the game (play/fonts/). Same
+       preload rule as index.html: crossorigin is required on font
+       preloads even same-origin or the browser fetches it twice. -->
+  <link rel="preload" href="./play/fonts/jetbrains-mono.woff2" as="font" type="font/woff2" crossorigin>
+  <style>
+    /* This is the LANDING PAGE served at the site root (see CLAUDE.md
+       "Landing page"). It is deliberately self-contained — no scripts or
+       styles shared with index.html, no CDNs — and reuses the game menu's
+       neon vector-arcade look (same palette, same font, the same ship hero
+       markup as scr-home) so the hand-off into play/ feels like one
+       product. Keep it static: nothing here talks to the backend. */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    @font-face {
+      font-family: "JetBrains Mono";
+      font-style: normal;
+      font-weight: 400 800;
+      font-display: swap;
+      src: url("./play/fonts/jetbrains-mono.woff2") format("woff2");
+    }
+    :root {
+      --text: #cfe7ff;
+      --dim: #7fb4dd;
+      --faint: #5f7fa8;
+      --cyan: #34e7ff;
+      --magenta: #ff54d6;
+      --amber: #ffc24b;
+      --green: #46ff9c;
+      --panel: rgba(12, 22, 44, 0.55);
+      --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
+      --inset-top: env(safe-area-inset-top, 0px);
+      --inset-bottom: env(safe-area-inset-bottom, 0px);
+      --inset-left: env(safe-area-inset-left, 0px);
+      --inset-right: env(safe-area-inset-right, 0px);
+    }
+    html { background: #05060f; }
+    body {
+      min-height: 100vh;
+      min-height: 100dvh;
+      background:
+        radial-gradient(120% 80% at 50% 0%, rgba(40, 60, 120, 0.35), transparent 60%),
+        #05060f;
+      color: var(--text);
+      font-family: var(--mono);
+      overflow-x: hidden;
+      position: relative;
+    }
+    /* Drifting perspective grid, compositor-only like the menu's (the
+       static perspective + mask on .grid, the drift on ::before). */
+    .grid {
+      position: fixed;
+      inset: -20% -20% -20% -20%;
+      transform: perspective(420px) rotateX(62deg) translateY(12%);
+      transform-origin: center 70%;
+      mask-image: linear-gradient(180deg, transparent 40%, #000 100%);
+      -webkit-mask-image: linear-gradient(180deg, transparent 40%, #000 100%);
+      overflow: hidden;
+      pointer-events: none;
+      z-index: 0;
+    }
+    .grid::before {
+      content: "";
+      position: absolute;
+      left: 0; right: 0; top: -46px; bottom: 0;
+      background:
+        repeating-linear-gradient(0deg,  rgba(52, 231, 255, 0.09) 0 1px, transparent 1px 46px),
+        repeating-linear-gradient(90deg, rgba(52, 231, 255, 0.09) 0 1px, transparent 1px 46px);
+      background-position: center;
+      animation: gridflow 6s linear infinite;
+      will-change: transform;
+    }
+    @keyframes gridflow { to { transform: translateY(46px); } }
+    .crt {
+      position: fixed;
+      inset: 0;
+      z-index: 40;
+      pointer-events: none;
+      background:
+        repeating-linear-gradient(0deg, rgba(0,0,0,0) 0 2px, rgba(0,0,0,0.16) 2px 3px),
+        radial-gradient(120% 120% at 50% 50%, transparent 55%, rgba(0,0,0,0.55) 100%);
+      mix-blend-mode: multiply;
+    }
+
+    main {
+      position: relative;
+      z-index: 1;
+      max-width: 620px;
+      margin: 0 auto;
+      padding: calc(var(--inset-top) + 40px) calc(var(--inset-right) + 24px)
+               calc(var(--inset-bottom) + 40px) calc(var(--inset-left) + 24px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+    }
+    .title {
+      font-size: clamp(42px, 10vw, 82px);
+      font-weight: 800;
+      letter-spacing: 0.22em;
+      margin-right: -0.22em;
+      color: #eafcff;
+      text-shadow:
+        0 0 6px #fff,
+        0 0 14px var(--cyan),
+        0 0 30px var(--cyan),
+        0 0 60px rgba(52, 231, 255, 0.6);
+      animation: flicker 5s infinite;
+    }
+    @keyframes flicker {
+      0%, 96%, 100% { opacity: 1; }
+      97% { opacity: 0.75; }
+      98% { opacity: 1; }
+      99% { opacity: 0.85; }
+    }
+    .subtitle {
+      font-size: clamp(12px, 3vw, 16px);
+      letter-spacing: 0.62em;
+      margin-right: -0.62em;
+      margin-bottom: 4px;
+      color: var(--magenta);
+      text-shadow: 0 0 10px rgba(255, 84, 214, 0.8);
+    }
+    /* Smaller than the menu's hero: this page has a pitch and three
+       buttons under it, and the Play button must sit in the FIRST
+       viewport on a desktop (the SVG is ~2.2× taller than wide). */
+    .ship-hero {
+      width: clamp(110px, 28vw, 160px);
+      height: auto;
+      margin: 4px 0 10px;
+      animation: bob 3.4s ease-in-out infinite;
+    }
+    .ship-hero .hull {
+      filter: url(#sh-glow) drop-shadow(0 0 18px rgba(120, 190, 255, 0.45));
+    }
+    @keyframes bob {
+      0%, 100% { transform: translateY(0); }
+      50%      { transform: translateY(-10px); }
+    }
+    .ship-hero .flame {
+      transform-box: fill-box;
+      transform-origin: 50% 0%;
+      animation: flame 0.11s steps(2, jump-none) infinite;
+      will-change: transform, opacity;
+    }
+    @keyframes flame {
+      0%   { opacity: 0.8;  transform: scaleY(0.86); }
+      100% { opacity: 1;    transform: scaleY(1.08); }
+    }
+    .pitch {
+      font-size: clamp(14px, 3.6vw, 17px);
+      line-height: 1.55;
+      color: var(--text);
+      max-width: 34em;
+      margin: 0 0 26px;
+    }
+    .pitch b { color: var(--amber); font-weight: 700; }
+
+    /* Buttons: the menu's .mbtn, as real links. */
+    .btn {
+      display: block;
+      width: min(340px, 100%);
+      padding: 14px 18px;
+      margin: 0 0 12px;
+      border: 1.5px solid var(--cyan);
+      border-radius: 10px;
+      background: var(--panel);
+      color: var(--cyan);
+      font: 700 16px/1.2 var(--mono);
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      text-decoration: none;
+      text-shadow: 0 0 8px rgba(52, 231, 255, 0.6);
+      box-shadow: 0 0 8px rgba(52, 231, 255, 0.25), inset 0 0 10px rgba(52, 231, 255, 0.08);
+      transition: background 0.12s, box-shadow 0.12s, transform 0.05s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn:hover, .btn:focus-visible {
+      background: rgba(52, 231, 255, 0.12);
+      box-shadow: 0 0 18px rgba(52, 231, 255, 0.5), inset 0 0 14px rgba(52, 231, 255, 0.15);
+      outline: none;
+    }
+    .btn:active { transform: scale(0.98); }
+    .btn small {
+      display: block;
+      font-size: 11px;
+      font-weight: 400;
+      letter-spacing: 0.12em;
+      text-transform: none;
+      color: var(--dim);
+      text-shadow: none;
+      margin-top: 4px;
+    }
+    .btn.primary {
+      border-color: var(--green);
+      color: var(--green);
+      text-shadow: 0 0 10px rgba(70, 255, 156, 0.8);
+      box-shadow: 0 0 12px rgba(70, 255, 156, 0.4), inset 0 0 12px rgba(70, 255, 156, 0.12);
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+    .btn.primary:hover, .btn.primary:focus-visible {
+      background: rgba(70, 255, 156, 0.12);
+    }
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 12px rgba(70, 255, 156, 0.4), inset 0 0 12px rgba(70, 255, 156, 0.12); }
+      50%      { box-shadow: 0 0 22px rgba(70, 255, 156, 0.7), inset 0 0 16px rgba(70, 255, 156, 0.2); }
+    }
+    .stores {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 0 12px;
+      width: min(340px, 100%);
+      margin-top: 6px;
+    }
+    .stores .btn {
+      flex: 1 1 150px;
+      width: auto;
+      font-size: 13px;
+      letter-spacing: 0.14em;
+      padding: 12px 10px;
+    }
+    .or {
+      color: var(--faint);
+      font-size: 11px;
+      letter-spacing: 0.4em;
+      margin: 10px 0 14px;
+    }
+
+    .features {
+      list-style: none;
+      width: min(440px, 100%);
+      margin: 34px 0 0;
+      text-align: left;
+    }
+    .features li {
+      display: flex;
+      gap: 14px;
+      align-items: flex-start;
+      padding: 12px 14px;
+      margin-bottom: 8px;
+      border: 1px solid rgba(52, 231, 255, 0.35);
+      border-radius: 8px;
+      background: var(--panel);
+      font-size: 13.5px;
+      line-height: 1.5;
+    }
+    .features .k {
+      flex: 0 0 auto;
+      color: var(--amber);
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      font-size: 11px;
+      padding-top: 3px;
+      min-width: 5.5em;
+    }
+    .features .v { color: var(--text); }
+
+    footer {
+      margin-top: 40px;
+      font-size: 11.5px;
+      letter-spacing: 0.08em;
+      color: var(--faint);
+      line-height: 2;
+    }
+    footer a { color: var(--dim); text-decoration: none; border-bottom: 1px solid rgba(127, 180, 221, 0.35); }
+    footer a:hover { color: var(--cyan); border-color: var(--cyan); }
+    footer .sep { margin: 0 8px; opacity: 0.5; }
+
+    /* Small phones (iPhone SE class, ~568 px tall): tighten so the Play
+       button still lands in the first viewport. */
+    @media (max-height: 640px) {
+      main { padding-top: calc(var(--inset-top) + 22px); }
+      .ship-hero { width: 84px; margin: 2px 0 6px; }
+      .pitch { font-size: 13px; margin-bottom: 18px; }
+    }
+    /* Short viewports (landscape phones): drop the hero so the Play
+       button stays above the fold — the same rule as the game menu. */
+    @media (max-height: 560px) {
+      .ship-hero { display: none; }
+      .title { font-size: clamp(30px, 7vw, 52px); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .ship-hero, .ship-hero .flame, .title, .grid::before, .btn.primary { animation: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="grid" aria-hidden="true"></div>
+  <main>
+    <h1 class="title">PEGASUS</h1>
+    <div class="subtitle">MOON LANDER</div>
+    <!-- Ship hero: the real vector ship (same geometry as icon.svg /
+         src/ship_mesh.rs), copied verbatim from index.html's scr-home. -->
+    <svg class="ship-hero" viewBox="150 70 212 460" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <defs>
+        <radialGradient id="sh-thrustOuter" cx="50%" cy="0%" r="100%">
+          <stop offset="0%" stop-color="#ff6600" stop-opacity="0.9"/>
+          <stop offset="100%" stop-color="#ff6600" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="sh-thrustInner" cx="50%" cy="0%" r="100%">
+          <stop offset="0%" stop-color="#ffe066" stop-opacity="1"/>
+          <stop offset="100%" stop-color="#ffe066" stop-opacity="0"/>
+        </radialGradient>
+        <filter id="sh-glow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="6" result="blur"/>
+          <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+        <!-- Halo gradients approximating the old feGaussianBlur(18) on
+             flat ellipses (perf, 2026-08): the flame flickers 9x/s, and
+             re-running two Gaussian blurs per tick helped drag the menu
+             to 2-3 fps on weak Android phones. Radii grew by ~30 (the
+             blur's spread) so the visible blob size matches. -->
+        <radialGradient id="sh-halo1" cx="50%" cy="50%" r="50%">
+          <stop offset="0%"  stop-color="#ff5500" stop-opacity="1"/>
+          <stop offset="30%" stop-color="#ff5500" stop-opacity="0.85"/>
+          <stop offset="55%" stop-color="#ff5500" stop-opacity="0.45"/>
+          <stop offset="78%" stop-color="#ff5500" stop-opacity="0.15"/>
+          <stop offset="100%" stop-color="#ff5500" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="sh-halo2" cx="50%" cy="50%" r="50%">
+          <stop offset="0%"  stop-color="#ffaa00" stop-opacity="0.8"/>
+          <stop offset="35%" stop-color="#ffaa00" stop-opacity="0.55"/>
+          <stop offset="65%" stop-color="#ffaa00" stop-opacity="0.22"/>
+          <stop offset="100%" stop-color="#ffaa00" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+      <g class="flame">
+        <ellipse cx="256.0" cy="417.7" rx="98" ry="112" fill="url(#sh-halo1)" opacity="0.35"/>
+        <ellipse cx="256.0" cy="402.7" rx="66" ry="100" fill="url(#sh-halo2)" opacity="0.45"/>
+        <polygon points="256.0,472.8 213.2,372.0 298.8,372.0" fill="url(#sh-thrustOuter)"/>
+        <polygon points="256.0,431.5 234.6,372.0 277.4,372.0" fill="url(#sh-thrustInner)"/>
+      </g>
+      <g class="hull" filter="url(#sh-glow)">
+        <polygon points="256.0,96.9 249.4,96.9 241.9,100.5" fill="rgb(247,59,53)"/>
+        <polygon points="256.0,96.9 241.9,100.5 230.8,112.2" fill="rgb(246,59,53)"/>
+        <polygon points="256.0,96.9 230.8,112.2 221.8,127.8" fill="rgb(244,58,52)"/>
+        <polygon points="256.0,96.9 221.8,127.8 213.1,152.4" fill="rgb(240,57,52)"/>
+        <polygon points="256.9,96.0 256.0,96.9 213.1,152.4" fill="rgb(243,58,52)"/>
+        <polygon points="256.9,96.0 213.1,152.4 205.6,183.6" fill="rgb(236,56,51)"/>
+        <polygon points="256.9,96.0 205.6,183.6 202.6,212.4" fill="rgb(185,191,207)"/>
+        <polygon points="256.9,96.0 202.6,212.4 201.7,262.2" fill="rgb(179,186,201)"/>
+        <polygon points="256.9,96.0 201.7,262.2 204.7,289.8" fill="rgb(174,180,195)"/>
+        <polygon points="199.6,292.8 193.6,291.9 184.9,298.5" fill="rgb(158,164,177)"/>
+        <polygon points="199.6,292.8 184.9,298.5 178.0,312.0" fill="rgb(157,163,176)"/>
+        <polygon points="204.7,289.8 199.6,292.8 178.0,312.0" fill="rgb(158,163,176)"/>
+        <polygon points="204.7,289.8 178.0,312.0 175.0,326.1" fill="rgb(155,161,174)"/>
+        <polygon points="204.7,289.8 175.0,326.1 175.0,352.2" fill="rgb(153,158,171)"/>
+        <polygon points="204.7,289.8 175.0,352.2 181.0,371.4" fill="rgb(150,155,168)"/>
+        <polygon points="204.7,289.8 181.0,371.4 181.0,381.0" fill="rgb(148,153,165)"/>
+        <polygon points="256.9,96.0 204.7,289.8 181.0,381.0" fill="rgb(166,172,186)"/>
+        <polygon points="181.0,381.0 210.1,381.0 210.1,372.9" fill="rgb(142,147,159)"/>
+        <polygon points="256.9,96.0 181.0,381.0 210.1,372.9" fill="rgb(161,166,180)"/>
+        <polygon points="256.9,96.0 210.1,372.9 221.8,354.3" fill="rgb(162,168,182)"/>
+        <polygon points="256.9,96.0 221.8,354.3 231.4,370.5" fill="rgb(163,168,182)"/>
+        <polygon points="256.9,96.0 231.4,370.5 231.4,381.0" fill="rgb(161,167,180)"/>
+        <polygon points="256.9,96.0 231.4,381.0 280.6,381.0" fill="rgb(160,166,179)"/>
+        <polygon points="256.9,96.0 280.6,381.0 280.6,372.9" fill="rgb(161,166,180)"/>
+        <polygon points="256.9,96.0 280.6,372.9 292.3,355.8" fill="rgb(162,168,182)"/>
+        <polygon points="256.9,96.0 292.3,355.8 301.3,372.9" fill="rgb(162,168,182)"/>
+        <polygon points="301.3,372.9 301.3,381.0 330.1,381.0" fill="rgb(142,147,159)"/>
+        <polygon points="256.9,96.0 301.3,372.9 330.1,381.0" fill="rgb(161,166,180)"/>
+        <polygon points="330.1,381.0 337.0,347.7 336.1,324.6" fill="rgb(147,152,165)"/>
+        <polygon points="330.1,381.0 336.1,324.6 327.1,298.5" fill="rgb(150,156,168)"/>
+        <polygon points="330.1,381.0 327.1,298.5 318.4,291.9" fill="rgb(153,158,171)"/>
+        <polygon points="330.1,381.0 318.4,291.9 312.4,292.8" fill="rgb(153,158,171)"/>
+        <polygon points="330.1,381.0 312.4,292.8 308.8,289.8" fill="rgb(153,159,171)"/>
+        <polygon points="256.9,96.0 330.1,381.0 308.8,289.8" fill="rgb(166,172,186)"/>
+        <polygon points="256.9,96.0 308.8,289.8 311.5,253.5" fill="rgb(175,181,196)"/>
+        <polygon points="256.9,96.0 311.5,253.5 310.9,216.9" fill="rgb(180,186,201)"/>
+        <polygon points="256.9,96.0 310.9,216.9 307.3,183.6" fill="rgb(184,191,206)"/>
+        <polygon points="256.9,96.0 307.3,183.6 300.4,152.4" fill="rgb(236,56,51)"/>
+        <polygon points="256.9,96.0 300.4,152.4 291.7,127.8" fill="rgb(240,57,52)"/>
+        <polygon points="256.9,96.0 291.7,127.8 282.7,112.2" fill="rgb(244,58,52)"/>
+        <polygon points="282.7,112.2 271.0,100.5 256.9,96.0" fill="rgb(246,59,53)"/>
+      </g>
+      <g>
+        <polygon points="312.7,292.8 297.7,366.0 299.8,372.0" fill="rgb(200,48,43)"/>
+        <polygon points="312.7,292.8 299.8,372.0 331.3,372.0" fill="rgb(200,48,43)"/>
+        <polygon points="312.7,292.8 331.3,372.0 333.1,367.5" fill="rgb(200,48,43)"/>
+        <polygon points="312.7,292.8 333.1,367.5 337.0,345.9" fill="rgb(200,48,43)"/>
+        <polygon points="312.7,292.8 337.0,345.9 337.3,339.6" fill="rgb(200,48,43)"/>
+        <polygon points="312.7,292.8 337.3,339.6 337.0,333.3" fill="rgb(200,48,43)"/>
+        <polygon points="312.7,292.8 337.0,333.3 334.3,315.9" fill="rgb(200,48,43)"/>
+        <polygon points="312.7,292.8 334.3,315.9 330.7,306.0" fill="rgb(200,48,43)"/>
+        <polygon points="312.7,292.8 330.7,306.0 326.2,298.5" fill="rgb(200,48,43)"/>
+        <polygon points="312.7,292.8 326.2,298.5 321.1,293.7" fill="rgb(200,48,43)"/>
+        <polygon points="312.7,292.8 321.1,293.7 318.4,292.5" fill="rgb(200,48,43)"/>
+        <polygon points="318.4,292.5 315.4,292.2 312.7,292.8" fill="rgb(200,48,43)"/>
+        <polygon points="214.6,366.0 199.3,292.8 196.6,292.2" fill="rgb(200,48,43)"/>
+        <polygon points="214.6,366.0 196.6,292.2 190.9,293.7" fill="rgb(200,48,43)"/>
+        <polygon points="214.6,366.0 190.9,293.7 185.8,298.5" fill="rgb(200,48,43)"/>
+        <polygon points="214.6,366.0 185.8,298.5 181.3,306.0" fill="rgb(200,48,43)"/>
+        <polygon points="214.6,366.0 181.3,306.0 177.7,315.9" fill="rgb(200,48,43)"/>
+        <polygon points="214.6,366.0 177.7,315.9 175.6,327.3" fill="rgb(200,48,43)"/>
+        <polygon points="214.6,366.0 175.6,327.3 174.7,339.6" fill="rgb(200,48,43)"/>
+        <polygon points="214.6,366.0 174.7,339.6 175.6,351.6" fill="rgb(200,48,43)"/>
+        <polygon points="214.6,366.0 175.6,351.6 177.4,362.4" fill="rgb(200,48,43)"/>
+        <polygon points="214.6,366.0 177.4,362.4 181.0,372.0" fill="rgb(200,48,43)"/>
+        <polygon points="181.0,372.0 212.2,372.0 214.6,366.0" fill="rgb(200,48,43)"/>
+        <polygon points="291.7,354.0 220.9,352.2 226.6,363.3" fill="rgb(120,125,138)"/>
+        <polygon points="291.7,354.0 226.6,363.3 232.3,372.0" fill="rgb(120,125,138)"/>
+        <polygon points="291.7,354.0 232.3,372.0 281.2,372.0" fill="rgb(120,125,138)"/>
+        <polygon points="291.7,354.0 281.2,372.0 286.6,363.9" fill="rgb(120,125,138)"/>
+        <polygon points="286.6,363.9 289.9,357.6 291.7,354.0" fill="rgb(120,125,138)"/>
+        <polygon points="280.9,381.0 280.9,372.0 231.7,372.0" fill="rgb(198,202,212)"/>
+        <polygon points="231.7,372.0 231.7,381.0 280.9,381.0" fill="rgb(198,202,212)"/>
+        <polygon points="181.3,372.0 181.3,381.0 210.4,381.0" fill="rgb(180,150,52)"/>
+        <polygon points="210.4,381.0 210.4,372.0 181.3,372.0" fill="rgb(180,150,52)"/>
+        <polygon points="256.0,157.5 264.4,177.0 247.6,177.0" fill="rgb(125,198,236)"/>
+        <polygon points="211.0,199.5 220.6,199.5 214.0,283.5" fill="rgb(48,124,208)"/>
+        <polygon points="211.0,199.5 214.0,283.5 204.4,283.5" fill="rgb(48,124,208)"/>
+        <polygon points="291.4,199.5 301.0,199.5 307.6,283.5" fill="rgb(48,124,208)"/>
+        <polygon points="291.4,199.5 307.6,283.5 298.0,283.5" fill="rgb(48,124,208)"/>
+      </g>
+    </svg>
+    <p class="pitch">
+      A cave, a lander and a tank of fuel. <b>Thrust</b> and <b>rotate</b> your
+      way through procedurally generated rock, touch down soft on the pads,
+      and chase world records that are <b>verified by physics</b> — every
+      score on the boards is a replay the server re-flew.
+    </p>
+
+    <a class="btn primary" id="play" href="./play/">Play in your browser<small>Nothing to install — phone, tablet or desktop</small></a>
+    <div class="or">OR GET THE APP</div>
+    <div class="stores">
+      <a class="btn" id="ios" href="https://apps.apple.com/app/id6792584910" rel="noopener">App Store<small>iPhone &amp; iPad</small></a>
+      <a class="btn" id="android" href="https://play.google.com/store/apps/details?id=se.danielfalk.pegasus" rel="noopener">Google Play<small>Android</small></a>
+    </div>
+
+    <ul class="features">
+      <li><span class="k">Fly</span><span class="v">One finger: hold to burn, push to point. Or a keyboard, a mouse, a gamepad.</span></li>
+      <li><span class="k">Explore</span><span class="v">Endless procedural caves that never repeat, hand-drawn chambers, timed sprints and dashes.</span></li>
+      <li><span class="k">Compete</span><span class="v">Global boards for every level — today, this week, all time. Watch any record's replay.</span></li>
+      <li><span class="k">Race</span><span class="v">The record holder flies beside you as a ghost. Beat them and it's your name on the pad.</span></li>
+      <li><span class="k">Free</span><span class="v">No ads, no accounts, no tracking you didn't opt into. Open source under the GPL.</span></li>
+    </ul>
+
+    <footer>
+      <a href="./privacy.html">Privacy policy</a><span class="sep">·</span>
+      <a href="./play/third-party-licenses.html">Licenses</a><span class="sep">·</span>
+      <a href="https://github.com/dannyrhubarb/pegasus" rel="noopener">Source on GitHub</a>
+    </footer>
+  </main>
+  <div class="crt" aria-hidden="true"></div>
+
+  <script>
+    // Two small, fail-safe touches; the page is complete without either.
+    // 1. Forward the query string into the game: utm-tagged links keep
+    //    their attribution (the game's analytics reads utm_* from ITS
+    //    page URL) and future in-game links (`?join=<code>`, #148) reach
+    //    the page that handles them. Same-origin, so the game still sees
+    //    no referrer — exactly as if the player had typed play/ directly.
+    // 2. Same origin as the game, so its localStorage is readable here:
+    //    a returning player gets "Continue playing" as the call to action.
+    try {
+      var play = document.getElementById("play");
+      if (location.search.length > 1) play.href = "./play/" + location.search;
+      var returning = false;
+      try {
+        returning = !!(localStorage.getItem("pegasus_level") ||
+                       localStorage.getItem("pegasus_play_count"));
+      } catch (e) { /* storage blocked: first-visit wording */ }
+      if (returning) {
+        play.firstChild.nodeValue = "Continue playing";
+        play.querySelector("small").textContent = "Your settings and callsign are right where you left them";
+      }
+    } catch (e) { /* never break the page */ }
+  </script>
+</body>
+</html>
