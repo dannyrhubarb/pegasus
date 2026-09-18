@@ -12,7 +12,9 @@ over the network when the bundled `config.json` is present.
 
 ## Prerequisites
 
-- A Mac with Xcode 15 or newer
+- A Mac with a recent Xcode (the deployment target is iOS 15; uploads to
+  App Store Connect must be built with the current iOS SDK, which is why
+  CI selects the newest stable Xcode on `macos-26` runners)
 - `rustup`; the pinned toolchain and the `wasm32-unknown-unknown` target
   install themselves from `rust-toolchain.toml` on the first build, and
   `tools/build-wasm.sh` fetches the pinned `wasm-opt` (no brew package —
@@ -61,7 +63,12 @@ numbers that shipped it alongside the web deploys.
 
 ## What the sync script bundles (vs. the web deploy)
 
-`ios/sync-web.sh` mirrors `.github/actions/build-site` with three
+`ios/sync-web.sh` mirrors `tools/build-site.sh` (what the web deploy
+runs) — `tools/check-bundle-sync.py` pins the two copy lists against each
+other in CI, so a file added to the website but forgotten here fails the
+build instead of shipping an incomplete app. The wasm comes from
+`tools/build-wasm.sh` (the same bytes the website serves for the commit)
+and the version stamp from `tools/version.sh`, like the deploy's. Three
 deliberate differences:
 
 - **No `version.json`** — the stale-cache reload toast makes no sense when
@@ -91,7 +98,16 @@ deliberate differences:
   screen in the game UI", same as in Safari.
 - The app icon (`Assets.xcassets/AppIcon.appiconset/AppIcon1024.png`) is
   rendered from the repo's `icon.svg`. If the icon changes, re-render at
-  1024×1024 (any SVG rasterizer; the icon has its own opaque background).
+  1024×1024 (any SVG rasterizer; the icon has its own opaque background —
+  App Store validation rejects alpha).
+- The safe-area insets are injected by the shell: `env(safe-area-inset-*)`
+  reads 0 at a WKWebView's first paint, so `GameViewController` defers
+  the load until the view has its real insets and pushes them in as the
+  `--app-inset-*` CSS variables (the page folds them into `--inset-*`).
+  Without this the menu painted under the notch and jumped ~31 pt a beat
+  into launch.
+- A document-start user script sets `window.__pegAppBuild` ("1.0.0 (42)")
+  so the About screen's Version row shows the installed app.
 
 ## CI (GitHub Actions)
 
@@ -110,7 +126,11 @@ Two workflows, both on free public-repo macOS runners:
   fetches the distribution certificate + profile on the fly — nothing
   signing-related lives in the repo) and uploads to TestFlight.
   `CFBundleVersion` = the workflow run number, so every upload is a new
-  build. Requires four repository secrets:
+  build; `MARKETING_VERSION` = the nearest `vX.Y.Z` tag via
+  `tools/version.sh --marketing` (overriding the pbxproj value; the run
+  fails on an untagged history, and pushing a tag dispatches this
+  workflow through the Release apps wrapper). Requires four repository
+  secrets:
   `APP_STORE_CONNECT_API_KEY_ID`, `APP_STORE_CONNECT_API_ISSUER_ID`,
   `APP_STORE_CONNECT_API_KEY_P8` (the whole `.p8` file), and
   `APPLE_TEAM_ID` — plus an existing App Store Connect app record for the
@@ -136,10 +156,17 @@ The committed **shared scheme**
 `xcodebuild -scheme Pegasus` work on a fresh runner — Xcode only
 auto-generates schemes locally. Keep it checked in.
 
+Cloud signing mints a new Apple Development certificate on every run and
+the dead ones pile up until the account's certificate cap breaks every
+archive; `ios/asc-cleanup-certs.py` (the step before Archive) revokes
+development certificates each run, best-effort. Distribution certificates
+are left alone. If its warnings ever report 403, the API key's role can't
+manage certificates (needs Admin) — clear the pile by hand at
+developer.apple.com → Certificates.
+
 The TestFlight pipeline was verified end-to-end 2026-07-20 (build 5, the
-first accepted upload). Re-checked 2026-07-24 after Apple approved the
-Beta App Review — this run exercises the full hands-free path incl. the
-automatic beta-group assignment.
+first accepted upload) and again 2026-07-24 through the full hands-free
+external path incl. the automatic beta-group assignment.
 
 ## Universal Links
 
