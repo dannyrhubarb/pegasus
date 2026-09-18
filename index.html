@@ -4982,7 +4982,12 @@
 
     // Manual reload button in the About screen — same ?fresh= mechanism as
     // the toast, for when you want the newest build without waiting.
+    // HIDDEN in the app shells: they serve the bundled page from a local
+    // origin, so there is no cached HTML to bypass and no newer build to
+    // fetch — the shells update via the store (same rule as the board's
+    // "update to watch" hint and the update wall's Reload/Update split).
     const forceReload = document.getElementById("force-reload");
+    if (appShell) forceReload.style.display = "none";
     forceReload.addEventListener("click", e => {
       e.stopPropagation();
       freshReload();
