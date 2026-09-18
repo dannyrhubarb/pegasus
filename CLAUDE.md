@@ -736,7 +736,10 @@ fifth home button).
   downloadable/shareable text file — see "Client log & bug reports" under
   "Analytics") and the
   **⟳ Reload latest build** button (`#force-reload`, same `?fresh=<ts>`
-  bypass as the toast below).
+  bypass as the toast below — **hidden in the app shells** (`appShell`
+  non-null, 2026-09): a shell serves its bundled page from a local origin,
+  so there is no cached HTML to bypass and no newer build to fetch; the
+  shells update via the store, like the board's "update to watch" hint).
 - **scr-pause**: Resume / Exit to menu. **scr-gameover**: CRASHED + run
   distance + best, Fly again / Watch replay / "‹ Back" (`#btn-gomenu` —
   ends the run and opens the fly-mode level picker; home when there's no
