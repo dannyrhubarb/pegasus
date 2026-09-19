@@ -217,6 +217,24 @@
     /* Phones: a hair smaller so the two badges share one row from 360 px
        up (they stack below that). */
     @media (max-width: 480px) { .stores { --bh: 46px; gap: 14px 16px; } }
+    /* A badge whose store listing is not live yet: dimmed, not a link,
+       with a small amber "coming soon" tag on its corner. The badge art
+       itself is untouched (only the wrapper's opacity changes). */
+    .soon { position: relative; display: block; line-height: 0; cursor: default; }
+    .soon .badge-play { opacity: 0.45; filter: saturate(0.6); }
+    .soon .tag {
+      position: absolute;
+      top: -9px; right: -8px;
+      padding: 5px 7px;
+      border-radius: 5px;
+      background: var(--amber);
+      color: #14141e;
+      font: 700 9px/1 var(--mono);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      white-space: nowrap;
+      box-shadow: 0 0 10px rgba(255, 194, 75, 0.55);
+    }
 
     /* The browser route: deliberately quiet — a text link under the
        badges, not a button (owner call 2026-09: the store apps are the
@@ -419,7 +437,11 @@
 
     <div class="stores">
       <a id="ios" href="https://apps.apple.com/app/id6792584910" rel="noopener"><img src="./badges/app-store.svg" alt="Download on the App Store"></a>
-      <a id="android" class="badge-play" href="https://play.google.com/store/apps/details?id=se.danielfalk.pegasus" rel="noopener"><img src="./badges/google-play.png" alt="Get it on Google Play"></a>
+      <!-- Google Play: COMING SOON until the listing is live. To go live,
+           turn this back into a link — <a id="android" class="badge-play"
+           href="https://play.google.com/store/apps/details?id=se.danielfalk.pegasus"
+           rel="noopener"> around the img — and drop the .soon wrapper + tag. -->
+      <span id="android" class="soon" title="Coming soon to Google Play" aria-label="Google Play: coming soon"><span class="badge-play"><img src="./badges/google-play.png" alt="Get it on Google Play"></span><span class="tag">Coming soon</span></span>
     </div>
     <a class="browser" id="play" href="./play/">or play in your browser ›</a>
 
