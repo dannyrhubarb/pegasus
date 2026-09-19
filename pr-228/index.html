@@ -278,6 +278,16 @@
       .ship-hero { width: 140px; margin: 6px 0 14px; }
       .pitch { margin-bottom: 28px; }
     }
+    /* Ordinary phones in a browser: Safari's chrome leaves an iPhone 15
+       only ~660 px of viewport (the 852 px screen minus toolbars), so
+       the badges have to clear that, not the screen height. */
+    @media (max-width: 480px) and (max-height: 720px) {
+      main { padding-top: calc(var(--inset-top) + 28px); }
+      .subtitle { margin-bottom: 6px; }
+      .ship-hero { width: 96px; margin: 4px 0 10px; }
+      .pitch { font-size: 14px; line-height: 1.55; margin-bottom: 22px; }
+      .stores { margin-bottom: 22px; }
+    }
     /* Small phones (iPhone SE class, ~568 px tall): tighten so the Play
        button still lands in the first viewport. */
     @media (max-height: 640px) {
