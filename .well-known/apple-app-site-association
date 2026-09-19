@@ -4,8 +4,10 @@
       {
         "appIDs": ["C7UTH7A2AS.se.danielfalk.pegasus"],
         "components": [
-          { "/": "/", "comment": "The game at the site root opens in the app (query string forwarded)." },
-          { "/": "/index.html", "comment": "Same page, explicit filename." }
+          { "/": "/play/", "comment": "The game (under play/ since the landing page took the root) opens in the app; query string forwarded." },
+          { "/": "/play", "comment": "Same page without the trailing slash (Pages 301s it, but the OS matches the tapped URL)." },
+          { "/": "/play/index.html", "comment": "Same page, explicit filename." },
+          { "/": "/", "exclude": true, "comment": "The landing page stays in the browser: store links and the Play button belong there, not inside the app." }
         ]
       }
     ]
