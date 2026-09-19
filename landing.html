@@ -194,7 +194,7 @@
       justify-content: center;
       align-items: center;
       gap: 16px 20px;
-      margin: 0 0 30px;
+      margin: 0 0 16px;
     }
     .stores a {
       display: block;
@@ -236,6 +236,26 @@
       box-shadow: 0 0 10px rgba(255, 194, 75, 0.55);
     }
 
+    /* The price line — the one thing the store badges can't say:
+       neither Apple nor Google offers a "free" badge variant and both
+       forbid editing the artwork, so it is said in our own copy under
+       the badge row (allowed by both guidelines). Tight to the badges
+       (it describes them), with the browser link further down. */
+    .free {
+      margin: 0 0 26px;
+      max-width: 30em;
+      font-size: 13px;
+      line-height: 1.75;
+      letter-spacing: 0.08em;
+      color: var(--text);
+      text-wrap: balance;
+    }
+    .free b { color: var(--amber); font-weight: 700; }
+    /* Each sentence is atomic, so the line can only break BETWEEN them —
+       without this the balance lands mid-sentence ("No in-app / purchases.").
+       The longest sentence is ~20 glyphs, so one always fits even at 320 px. */
+    .free b, .free span { white-space: nowrap; }
+
     /* The browser route: deliberately quiet — a text link under the
        badges, not a button (owner call 2026-09: the store apps are the
        headline, the web build is the "no install" alternative). */
@@ -273,29 +293,33 @@
        spacing above would push the badges under the fold, so trim the
        vertical rhythm a little there. Phones are handled below. */
     @media (min-width: 700px) and (max-height: 860px) {
-      main { padding-top: calc(var(--inset-top) + 36px); }
+      main { padding-top: calc(var(--inset-top) + 24px); }
       .subtitle { margin-bottom: 6px; }
-      .ship-hero { width: 140px; margin: 6px 0 14px; }
-      .pitch { margin-bottom: 28px; }
+      .ship-hero { width: 118px; margin: 4px 0 10px; }
+      .pitch { margin-bottom: 22px; }
+      .free { margin-bottom: 22px; }
     }
     /* Ordinary phones in a browser: Safari's chrome leaves an iPhone 15
-       only ~660 px of viewport (the 852 px screen minus toolbars), so
-       the badges have to clear that, not the screen height. */
-    @media (max-width: 480px) and (max-height: 720px) {
+       only ~660 px of viewport (the 852 px screen minus toolbars; a
+       Pixel 7 in Chrome ~760), so the badges and the price line under
+       them have to clear that, not the screen height. */
+    @media (max-width: 480px) and (max-height: 780px) {
       main { padding-top: calc(var(--inset-top) + 28px); }
       .subtitle { margin-bottom: 6px; }
       .ship-hero { width: 96px; margin: 4px 0 10px; }
       .pitch { font-size: 14px; line-height: 1.55; margin-bottom: 22px; }
-      .stores { margin-bottom: 22px; }
+      .stores { margin-bottom: 12px; }
+      .free { margin-bottom: 18px; }
     }
     /* Small phones (iPhone SE class, ~568 px tall): tighten so the Play
        button still lands in the first viewport. */
     @media (max-height: 640px) {
-      main { padding-top: calc(var(--inset-top) + 22px); }
+      main { padding-top: calc(var(--inset-top) + 16px); }
       .subtitle { margin-bottom: 4px; }
-      .ship-hero { width: 84px; margin: 2px 0 8px; }
-      .pitch { font-size: 13px; line-height: 1.55; margin-bottom: 16px; }
-      .stores { --bh: 42px; gap: 10px 16px; margin-bottom: 16px; }
+      .ship-hero { width: 56px; margin: 0 0 6px; }
+      .pitch { font-size: 13px; line-height: 1.55; margin-bottom: 12px; }
+      .stores { --bh: 42px; gap: 10px 16px; margin-bottom: 8px; }
+      .free { font-size: 12px; line-height: 1.6; margin-bottom: 12px; }
       footer { margin-top: 40px; }
     }
     /* Short viewports (landscape phones): drop the hero so the Play
@@ -453,6 +477,8 @@
            rel="noopener"> around the img — and drop the .soon wrapper + tag. -->
       <span id="android" class="soon" title="Coming soon to Google Play" aria-label="Google Play: coming soon"><span class="badge-play"><img src="./badges/google-play.png" alt="Get it on Google Play"></span><span class="tag">Coming soon</span></span>
     </div>
+    <p class="free"><b>Free.</b> <span>No in-app purchases.</span>
+      <span>No ads.</span> <span>No account needed.</span> <b>Just fun.</b></p>
     <a class="browser" id="play" href="./play/">or play in your browser ›</a>
 
     <footer>
