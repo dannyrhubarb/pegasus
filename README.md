@@ -91,7 +91,7 @@ page, and `tools/build-wasm.sh` reproduces the wasm byte for byte from the
 commit. To check the live site:
 
 ```bash
-curl -fsSO https://pegasusmoonlander.com/pegasus.wasm
+curl -fsSO https://pegasusmoonlander.com/play/pegasus.wasm
 gh attestation verify pegasus.wasm --repo dannyrhubarb/pegasus
 ```
 
@@ -105,10 +105,11 @@ required. [`preview-deploy.yml`](.github/workflows/preview-deploy.yml) builds
 each PR push and publishes it at
 
 ```
-https://pegasusmoonlander.com/pr-<n>/
+https://pegasusmoonlander.com/pr-<n>/play/     (the game)
+https://pegasusmoonlander.com/pr-<n>/          (the landing page)
 ```
 
-posting a sticky comment with the link on the PR.
+posting a sticky comment with the links on the PR.
 [`preview-teardown.yml`](.github/workflows/preview-teardown.yml) removes the
 preview when the PR closes. Previews live in `pr-<n>/` directories on the
 `gh-pages` branch alongside the `main` build at the root, so the production

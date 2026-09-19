@@ -41,7 +41,7 @@ jobs:
       # Provenance (#214 step 7): a signed statement that THESE bytes were
       # built by this workflow from this commit, stored under the repo's
       # Attestations tab. Anyone can check the live site against it:
-      #   curl -fsSO https://pegasusmoonlander.com/pegasus.wasm
+      #   curl -fsSO https://pegasusmoonlander.com/play/pegasus.wasm
       #   gh attestation verify pegasus.wasm --repo dannyrhubarb/pegasus
       # Lookup is by digest, so a byte-identical local tools/build-wasm.sh
       # output verifies the same way — reproducibility and provenance vouch
@@ -50,7 +50,8 @@ jobs:
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
-            site/pegasus.wasm
+            site/play/pegasus.wasm
+            site/play/index.html
             site/index.html
 
       - name: Sync site root into gh-pages branch

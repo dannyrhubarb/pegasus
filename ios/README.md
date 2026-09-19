@@ -145,9 +145,9 @@ automatic beta-group assignment.
 
 `Pegasus.entitlements` declares `applinks:pegasusmoonlander.com`; the
 site serves `.well-known/apple-app-site-association` (Team ID stamped at
-deploy time from the `APPLE_TEAM_ID` secret). Only the site root /
-`index.html` opens in the app — previews and document pages stay in
-Safari. If the TestFlight archive ever fails with a profile that "doesn't
+deploy time from the `APPLE_TEAM_ID` secret). Only the game at `play/`
+(+ `play/index.html`) opens in the app — the landing page at the site
+root, previews and document pages stay in Safari. If the TestFlight archive ever fails with a profile that "doesn't
 support the Associated Domains capability", enable Associated Domains on
 the App ID once at developer.apple.com → Identifiers (automatic signing
 normally does this itself).

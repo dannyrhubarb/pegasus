@@ -58,8 +58,8 @@ if [ -n "${PEGASUS_BACKEND_CONFIG:-}" ]; then
   printf '%s' "$PEGASUS_BACKEND_CONFIG" | python3 -c 'import json,sys; c = json.load(sys.stdin); assert c["apiBaseUrl"].startswith("https://") and c["replayBaseUrl"].startswith("https://")'
   printf '%s\n' "$PEGASUS_BACKEND_CONFIG" > "$DEST/config.json"
   echo "config.json from PEGASUS_BACKEND_CONFIG — online high scores enabled"
-elif curl -fsS --max-time 10 "$PAGES_URL/config.json" -o "$DEST/config.json" ||
-     curl -fsSL --max-time 10 "$PAGES_URL_LEGACY/config.json" -o "$DEST/config.json"; then
+elif curl -fsS --max-time 10 "$PAGES_URL/play/config.json" -o "$DEST/config.json" ||
+     curl -fsSL --max-time 10 "$PAGES_URL_LEGACY/play/config.json" -o "$DEST/config.json"; then
   echo "config.json fetched from the live site (PEGASUS_BACKEND_CONFIG unset) — online high scores enabled"
 else
   rm -f "$DEST/config.json"
