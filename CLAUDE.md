@@ -241,7 +241,22 @@ transparent padding, which the CSS pulls in so both badges show at the
 same visible height; **the Google Play badge is in a COMING SOON
 state** — dimmed, not a link, an amber tag on its corner — until the
 Play listing is live: the markup comment next to it says how to flip
-it back into a link, and it is the only edit needed) — under them a
+it back into a link, and it is the only edit needed) — under them the
+**price line** "Free. No in-app purchases. No ads. No account needed.
+Just fun." (`.free`, 2026-09: neither store offers a "free" badge variant and both
+forbid editing the artwork, so it is said in our own copy right under
+the badge row, which both guidelines allow; in-app purchases are what
+players actually suspect a free game of, so the line names them, and the amber `<b>` bookends ("Free." … "Just fun.") turn
+three negatives into a positive close.
+**"Free now and forever" was tried and pulled back the same day** —
+owner call: a permanent public promise is not worth making for a line
+of marketing copy, so the page states today's price and nothing about
+the future. Each SENTENCE is `white-space: nowrap`, so they can only
+break BETWEEN sentences — `text-wrap: balance` alone put the break
+mid-sentence ("No in-app / purchases."); the longest sentence fits at
+320 px. It wraps to two lines on a phone (three at 320), which the
+short-viewport rules' hero trims pay for, and the fold checks require the price LINE
+above the fold, not just the badges) — then a
 deliberately QUIET text link
 "or play in your browser" (`play/`; owner call 2026-09: the apps are
 the headline, the web build is the no-install alternative, and there
