@@ -163,9 +163,10 @@ predicate in an in-toto statement, Sigstore-signed with the workflow
 run's OIDC identity, stored under the repo's **Attestations** tab; needs
 `id-token: write` + `attestations: write` on the workflow) runs in three
 places:
-- **`deploy.yml`** attests `site/pegasus.wasm` + `site/index.html` — the
-  served files. Verify the live site with `curl -fsSO
-  https://pegasusmoonlander.com/pegasus.wasm && gh attestation verify
+- **`deploy.yml`** attests `site/play/pegasus.wasm` + `site/play/index.html`
+  (the game) and `site/index.html` (the landing page) — the served files.
+  Verify the live site with `curl -fsSO
+  https://pegasusmoonlander.com/play/pegasus.wasm && gh attestation verify
   pegasus.wasm --repo dannyrhubarb/pegasus`. Lookup is BY DIGEST, so a
   byte-identical local `tools/build-wasm.sh` output verifies the same
   way: reproducibility and provenance vouch for each other.
@@ -203,9 +204,70 @@ CNAME file (Source = "GitHub Actions" ignores CNAME files); DNS is apex
 A/AAAA records to the GitHub Pages fleet + `www` CNAME at the registrar.
 `manifest.json`'s `start_url` must stay RELATIVE (`"./"`) — it was
 `/pegasus/` once, which would 404 every PWA install on the domain root.
+
+**Site layout (2026-09 — the landing page)**: the site ROOT is a
+marketing page and **the game lives at `/play/`**
+(`https://pegasusmoonlander.com/play/`). `landing.html` in the repo
+becomes `site/index.html`; `build-site.sh` copies the game (`index.html`
++ everything it fetches: wasm, levels, fonts, editor, licenses,
+`version.json`, `whats-new.json`, `config.json`) into `site/play/`. The
+game page never learned it moved: every URL in `index.html`,
+`editor.html` and `manifest.json` is relative (the PWA manifest's scope
+is therefore `/play/`), the shells still bundle it at their own root,
+and previews serve it at `pr-<n>/play/`. What stays at the root is
+exactly what something OUTSIDE the page reaches by ABSOLUTE URL and can
+therefore never move: `app-policy.json` (the URL is baked into every
+installed app — it is ALSO copied into `play/` because the web page
+fetches it relative to itself; same bytes), `.well-known/` (both OSes
+read it at the root) and `privacy.html` (the store listings'
+privacy-policy URL; also copied next to the game so the three bundle
+lists stay one file set). **Why a sub-path and not a subdomain** (owner
+decision 2026-09): same origin keeps every player's localStorage —
+settings, callsign, consent, the board cache and above all the score
+RECEIPTS (`pegasus_receipts`, the future account-adoption proof; the
+github.io move already orphaned storage once) — and GitHub Pages is one
+site per repo, so a `play.` subdomain would have meant a second repo,
+moving the apex off this one and splitting the deploy pipeline, the
+previews and the reproducibility proof. The **landing page**
+(`landing.html`) is self-contained like `index.html` (no CDNs, no shared
+scripts; the menu's palette, the vendored font from `play/fonts/` and
+the same ship-hero SVG markup as scr-home, so root → play reads as one
+product): PEGASUS title + hero, a one-paragraph pitch, then the
+**store badges FIRST** — the OFFICIAL App Store (Apple ID 6792584910)
+and Google Play (`se.danielfalk.pegasus`) badge artwork in `badges/`
+(trademark art used as-is per Apple's/Google's badge guidelines: scaled
+only, never recoloured; Google's PNG carries 41 px of built-in
+transparent padding, which the CSS pulls in so both badges show at the
+same visible height; **the Google Play badge is in a COMING SOON
+state** — dimmed, not a link, an amber tag on its corner — until the
+Play listing is live: the markup comment next to it says how to flip
+it back into a link, and it is the only edit needed) — under them a
+deliberately QUIET text link
+"or play in your browser" (`play/`; owner call 2026-09: the apps are
+the headline, the web build is the no-install alternative, and there
+is no feature list), and a footer (privacy policy, licenses, GitHub) —
+plus Open Graph tags (absolute `og:image`, scrapers don't resolve
+relative paths). **No Smart App Banner meta on the landing page**
+(owner call 2026-09: the badge already advertises the app; Safari's
+banner on top of it would say it twice) — the game page at `play/`
+keeps its own. One fail-safe JS touch, the page is complete without
+it: the query string is FORWARDED onto the browser link (utm
+attribution reaches the game page, whose analytics reads `utm_*` from
+ITS URL; the #148 `?join=` invites will too). No returning-player
+detection (a "Continue playing" variant was tried and dropped, owner
+call 2026-09: the link is the quiet secondary route, so the wording
+change bought nothing). Static and backend-free by design;
+`landing.html` and `badges/` are WEB_ONLY in `check-bundle-sync.py` (a
+shell IS the game). Old bookmarks and PWA
+installs of the root land on the landing page — one extra tap, once.
+Deep links follow the game: App Links / Universal Links are scoped to
+`/play/` (see "Native-app install prompts"), and the preview sticky
+comment links the game first.
+
 The published build lives on the **`gh-pages` state branch**: the `main`
 build at the root, one **per-PR preview** in `pr-<n>/` (served at
-`https://pegasusmoonlander.com/pr-<n>/` — works because every asset URL
+`https://pegasusmoonlander.com/pr-<n>/`, the game at `pr-<n>/play/` —
+works because every asset URL
 in `index.html`/`manifest.json` is relative; the preview/test-APK sticky
 comments ask the Pages API for `html_url`, so their links follow the
 custom domain automatically). Five workflows, sharing two
@@ -218,7 +280,8 @@ push-retry loop for concurrent deploys):
   root replace excludes both).
 - `preview-deploy.yml` (**Preview deploy**, PR opened/synchronize/reopened):
   build (overlay revision = `<head-sha>-pr-<n>`) → sync `pr-<n>/` → sticky PR
-  comment (`<!-- preview-env -->` marker) with the preview URL. Skipped for
+  comment (`<!-- preview-env -->` marker) with the preview URLs (the game
+  at `pr-<n>/play/` first, the landing page at `pr-<n>/`). Skipped for
   fork PRs (read-only token).
 - `preview-teardown.yml` (**Preview teardown**, PR closed): delete `pr-<n>/`,
   comment.
@@ -281,7 +344,8 @@ push-retry loop for concurrent deploys):
 - `fonts/` — the **vendored menu webfont**: `jetbrains-mono.woff2` (latin variable, wght 400–800) + its `OFL.txt`, loaded via `@font-face` by `index.html`/`editor.html` so every platform renders the same face (see the menu-font note under "Game menu"); in all three bundle copy lists
 - `editor.html` — the **standalone level editor** (issue #89 v1, 2026-07): draws hand-drawn `.level` worlds — the same `poly`/`pad`/`start` representation The Hollows uses — on a pan/zoom canvas. Self-contained like `index.html` (no CDNs), copied by `build-site`. **Deliberately UNLINKED from the game UI** (owner decision pre-merge): it lives at its own path with no menu button and no picker row; the game only meets it through the `?custom=1` test-fly handoff. **While it stays unlinked, editor commits carry NO `Whats-new:` trailers** (the changelog must not advertise an unannounced feature — the PR #110 branch had its trailers stripped before merge; give the editor one proper entry when it's linked up for real). See "Level editor & custom drafts" under "Levels"
 - `tools/gen-third-party-licenses.py` + `third-party-licenses.html` — the generated third-party attribution page served with the site and linked from the About screen; regenerate when `Cargo.lock` changes (see "License")
-- `privacy.html` — standalone privacy policy served with the site (and bundled into both apps), written for the Play Store listing's required privacy-policy URL; same substance as the About screen's `#privacy-note` — keep the two in agreement when the analytics story changes
+- `privacy.html` — standalone privacy policy served with the site at the ROOT (`https://pegasusmoonlander.com/privacy.html` — the store listings' privacy-policy URL, so it never moves; also copied next to the game in `play/` and bundled into both apps); same substance as the About screen's `#privacy-note` — keep the two in agreement when the analytics story changes
+- `landing.html` + `badges/` — the **landing page** served at the site root as `index.html` (the official App Store / Google Play badges + a quiet "play in your browser" link → `play/`, where the game lives since 2026-09 — see "Site layout" under "Deploy pipeline & PR previews"). Self-contained, static, web-only
 - `app-policy.json` — the **checked-in update/config policy** every client fetches at launch (`{}` = no verdicts): **the remote lever over ALREADY-INSTALLED apps and stale web tabs** — commit a `config` override to repoint old installs at a moved backend with no store release, a `minBuild`/`minVersion` wall for a genuinely breaking change, or a `recommendBuild`/`recommendVersion` nudge (same screen with a Not-now button) for an update that is strongly advised but not required. **Reach for this whenever a backend move or compatibility break is being planned** (it exists because the #171 migration had no such lever and drained for weeks — pegasus-backend#38); see "App update policy" under "Game menu"
 - `tools/build-wasm.sh` + `tools/build-site.sh` + `rust-toolchain.toml` — the **reproducible build recipe** (see "Reproducible builds" under "Build & deploy"): pinned rustc, pinned Binaryen `wasm-opt` (sha256-verified download), path remapping; `build-site.sh` is what the deploy, the previews and the CI twice-build check all run; `icon-512/192/180.png` are its committed icon renders
 - `tools/version.sh` — **the one version source** (tag-derived, see "Versioning" under "Build & deploy"): `1.3.0+14` full form / `--marketing` (the tag), used by `build-site`, both `sync-web.sh` and the store release workflows
@@ -2926,8 +2990,9 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   and the apps ship incomplete. Intentional web-only files live in the
   script's `WEB_ONLY` set, each with a reason: the committed `icon-*.png`
   renders (nothing in a WKWebView/WebView reads `apple-touch-icon` or the
-  web manifest) and `editor.html` (deliberately unlinked, so unreachable
-  from an app shell). The website list it parses is `tools/build-site.sh`
+  web manifest), `editor.html` (deliberately unlinked, so unreachable
+  from an app shell) and `landing.html` + `badges/` (the site root's
+  marketing page and its store-badge art — a shell IS the game). The website list it parses is `tools/build-site.sh`
   (the action used to hold it inline). Release signing reads
   `PEGASUS_KEYSTORE_*` env vars in `app/build.gradle.kts`; nothing
   signing-related lives in the repo. The release also **publishes the
@@ -2996,19 +3061,27 @@ mechanisms — no custom banner, no JS, nothing to dismiss or persist:
   `prefer_related_applications` to `false` if the PWA prompt is wanted
   back in the meantime. The prompt never appears inside the WebView shell.
 - **`.well-known/` — App Links + Universal Links (2026-09)**: NOT part of
-  the banners; it's what makes `https://pegasusmoonlander.com/` open in the
+  the banners; it's what makes `https://pegasusmoonlander.com/play/` (the
+  game) open in the
   INSTALLED app (and, on Android, what `navigator.getInstalledRelatedApps()`
-  would verify). Scope on both platforms is the site root + `/index.html`
-  ONLY — previews (`pr-<n>/`), `editor.html`, the APK download and the
+  would verify). Scope on both platforms is **`/play/` + `/play` +
+  `/play/index.html` ONLY** (since the landing page took the root,
+  2026-09 — before that it was `/` + `/index.html`) — the landing page
+  at the root (store links and the Play button belong in the browser,
+  not inside the app; the AASA carries an explicit `exclude` for `/`),
+  previews (`pr-<n>/`), `editor.html`, the APK download and the
   document pages must keep opening in the browser (the app bundles its
   own build, so a preview link opening in it would show the wrong
-  build). Same-origin navigation (the editor's `?custom=1` test-fly
+  build). The AASA is server-side and flips with the deploy (via Apple's
+  CDN); the Android path filter lives in the APK, so **installed Android
+  builds from before the move keep claiming `/` — the landing page —
+  until the next store release** carries the new manifest. Same-origin navigation (the editor's `?custom=1` test-fly
   handoff) stays in the browser on both OSes by their own rules. A link's
   QUERY STRING is forwarded into the bundled `index.html` on a cold start
   (utm attribution keeps working for app opens; `?custom=1` with no
   stored draft falls through to the normal boot), while a link arriving
   in a RUNNING app is ignored — reloading would kill a run in progress.
-  **#148 hook**: the multiplayer PR's invite links are `/?join=<code>`
+  **#148 hook**: the multiplayer PR's invite links are `/play/?join=<code>`
   (auto-join on landing) — cold starts already carry them, but a WARM
   invite (app open, friend's link tapped) is the one case the no-op gets
   wrong; when #148 lands, both shells must hand the code to the page via
@@ -3194,7 +3267,7 @@ commit the refreshed page.
   request for the PR, never approval to merge it; "proceed" in an earlier
   context does not carry over. (Born 2026-09-09, when several PRs were
   merged on assumed permission.)
-- Development branch: `claude/back-button-visibility-3nbsmg` (current); previous: `claude/update-wall-skip-button-juh884`
+- Development branch: `claude/pegasus-moonlander-restructure-uyennf` (current); previous: `claude/back-button-visibility-3nbsmg`
 - Merges to `main` via rebase PRs using the GitHub MCP tools (`mcp__github__create_pull_request`, `mcp__github__merge_pull_request`).
 - **Curate the branch before merging.** Rebase merges land every branch
   commit on `main` verbatim, so branch noise becomes permanent history.

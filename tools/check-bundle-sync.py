@@ -27,6 +27,14 @@ ROOT = Path(__file__).resolve().parent.parent
 # needs a reason — this set is the whole point of the check, so growing it
 # without one defeats it.
 WEB_ONLY = {
+    # The landing page (2026-09): the site ROOT is a marketing page with
+    # the store links and a Play button, and the game lives under play/
+    # (see tools/build-site.sh). An app shell IS the game — it bundles
+    # index.html at its own root and has no use for a page that links to
+    # the store it was installed from.
+    "landing.html",
+    # The landing page's official App Store / Google Play badge artwork.
+    "badges",
     # Committed renders of icon.svg (re-rendered by hand when the SVG
     # changes — see tools/build-site.sh), only meaningful to a browser:
     # the apps carry real native launcher icons, and neither WKWebView nor

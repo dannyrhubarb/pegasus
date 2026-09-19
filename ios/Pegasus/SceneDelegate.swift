@@ -12,11 +12,12 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         let window = UIWindow(windowScene: windowScene)
         window.backgroundColor = .black
         let game = GameViewController()
-        // Cold start from a Universal Link (https://pegasusmoonlander.com/?…):
+        // Cold start from a Universal Link (https://pegasusmoonlander.com/play/?…):
         // the bundled game is what opens either way, but the query string is
         // forwarded so utm-tagged links attribute in analytics and future
-        // link parameters reach the page. Only the site root / index.html is
-        // universal-linked (see .well-known/apple-app-site-association).
+        // link parameters reach the page. Only play/ (+ play/index.html) is
+        // universal-linked (see .well-known/apple-app-site-association); the
+        // landing page at the root stays in Safari.
         game.launchQuery = Self.universalLinkQuery(connectionOptions.userActivities)
         window.rootViewController = game
         self.window = window
@@ -28,7 +29,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     /// progress, and there is nothing to deep-link to yet. Foregrounding the
     /// app is the whole effect.
     ///
-    /// TODO(#148): multiplayer invite links are `https://pegasusmoonlander.com/?join=<code>`
+    /// TODO(#148): multiplayer invite links are `https://pegasusmoonlander.com/play/?join=<code>`
     /// (auto-join on landing). A cold start already forwards that query;
     /// once #148 lands, a WARM invite must hand the code to the page
     /// instead of being dropped — evaluateJavaScript into the page's

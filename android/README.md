@@ -127,7 +127,7 @@ rebuild build `N` of a tagged commit and compare it with the workflow's
 
 ```bash
 git checkout v1.0.0            # the tag (or the exact commit the run built)
-PEGASUS_BACKEND_CONFIG="$(curl -fsS https://pegasusmoonlander.com/config.json)" \
+PEGASUS_BACKEND_CONFIG="$(curl -fsS https://pegasusmoonlander.com/play/config.json)" \
   ./android/sync-web.sh        # the config.json the run bundled (same value as the repo variable)
 PEGASUS_VERSION_CODE=N PEGASUS_VERSION_NAME=1.0.0 gradle -p android bundleRelease assembleRelease
 ```
@@ -189,7 +189,8 @@ the artifact that was uploaded.
 ## App Links
 
 `AndroidManifest.xml` carries an `autoVerify` intent filter for
-`https://pegasusmoonlander.com/` (root + `index.html` only); the site
+`https://pegasusmoonlander.com/play/` (the game — `play/` + `play/index.html`
+only; the site root is the landing page and stays in the browser); the site
 serves `.well-known/assetlinks.json` with the Play app-signing
 certificate's SHA-256, so only the Play-signed release build verifies —
 the `.preview` test APK and locally signed debug builds keep opening links

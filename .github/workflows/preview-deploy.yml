@@ -78,10 +78,12 @@ jobs:
               const { data: pages } = await github.rest.repos.getPages(context.repo);
               if (pages.html_url) base = pages.html_url;
             } catch (e) { /* Pages not queryable with this token — use fallback */ }
+            // The game lives under play/ (the root is the landing page) —
+            // link the game first, that is what a tester opens on a phone.
             const url = `${base.replace(/\/?$/, '/')}${scope}/`;
             const marker = '<!-- preview-env -->';
             const body = `${marker}\n### 🚀 Preview deployed\n` +
-              `Scope \`${scope}\` (\`${process.env.REV}\`) → ${url}\n\n` +
+              `Scope \`${scope}\` (\`${process.env.REV}\`) → game: ${url}play/ · landing page: ${url}\n\n` +
               `_Pages takes a minute or two to publish after this comment appears._`;
             const { data: comments } = await github.rest.issues.listComments({
               ...context.repo, issue_number: context.issue.number,
