@@ -470,21 +470,26 @@
     </p>
 
     <div class="stores">
-      <a id="ios" href="https://apps.apple.com/app/id6792584910" rel="noopener"><img src="./badges/app-store.svg" alt="Download on the App Store"></a>
+      <a id="ios" data-an="ios" href="https://apps.apple.com/app/id6792584910" rel="noopener"><img src="./badges/app-store.svg" alt="Download on the App Store"></a>
       <!-- Google Play: COMING SOON until the listing is live. To go live,
-           turn this back into a link — <a id="android" class="badge-play"
+           turn this back into a link — <a id="android" data-an="android"
+           class="badge-play"
            href="https://play.google.com/store/apps/details?id=se.danielfalk.pegasus"
-           rel="noopener"> around the img — and drop the .soon wrapper + tag. -->
-      <span id="android" class="soon" title="Coming soon to Google Play" aria-label="Google Play: coming soon"><span class="badge-play"><img src="./badges/google-play.png" alt="Get it on Google Play"></span><span class="tag">Coming soon</span></span>
+           rel="noopener"> around the img — and drop the .soon wrapper + tag.
+           KEEP the data-an hook across that edit: while the badge is dead
+           its taps are the Android-demand signal (the analytics counts
+           them exactly like the live link's), and after it they are the
+           real click-through. -->
+      <span id="android" data-an="android" class="soon" title="Coming soon to Google Play" aria-label="Google Play: coming soon"><span class="badge-play"><img src="./badges/google-play.png" alt="Get it on Google Play"></span><span class="tag">Coming soon</span></span>
     </div>
     <p class="free"><b>Free.</b> <span>No in-app purchases.</span>
       <span>No ads.</span> <span>No account needed.</span> <b>Just fun.</b></p>
-    <a class="browser" id="play" href="./play/">or play in your browser ›</a>
+    <a class="browser" id="play" data-an="play" href="./play/">or play in your browser ›</a>
 
     <footer>
-      <a href="./privacy.html">Privacy policy</a><span class="sep">·</span>
-      <a href="./play/third-party-licenses.html">Licenses</a><span class="sep">·</span>
-      <a href="https://github.com/dannyrhubarb/pegasus" rel="noopener">Source on GitHub</a>
+      <a data-an="privacy" href="./privacy.html">Privacy policy</a><span class="sep">·</span>
+      <a data-an="licenses" href="./play/third-party-licenses.html">Licenses</a><span class="sep">·</span>
+      <a data-an="github" href="https://github.com/dannyrhubarb/pegasus" rel="noopener">Source on GitHub</a>
     </footer>
   </main>
   <div class="crt" aria-hidden="true"></div>
@@ -501,6 +506,275 @@
         document.getElementById("play").href = "./play/" + location.search;
       }
     } catch (e) { /* never break the page */ }
+  </script>
+
+  <script>
+    // --- Landing-page analytics (self-contained; must NEVER break the page)
+    // Its OWN script tag, like the game's boot guard: script tags parse
+    // independently, so an error in here cannot kill the query-forwarding
+    // snippet above (or the other way round), and every entry point is
+    // try/caught on top of that. Nothing is awaited, nothing gates a link:
+    // remove the backend and the page behaves exactly as it did before.
+    //
+    // Two events, both allowlisted server-side (pegasus-backend events.rs):
+    //   landing_view  — one per counted visit, with the same coarse device
+    //                   enums and acquisition props session_start carries
+    //                   (so the two surfaces compare directly), or, for a
+    //                   declared bot, ONLY a `bot` kind and nothing else.
+    //   landing_click — one per outbound tap, target from the element's
+    //                   data-an (a closed enum: ios | android | play |
+    //                   privacy | licenses | github).
+    //
+    // IT COUNTS VISITS AND NOTHING ELSE. The page sets no cookie, writes
+    // nothing to localStorage or sessionStorage, and READS nothing from
+    // them either — there is no visitor id, no device id and no player id
+    // on this page, not even the game's consented one (owner decision
+    // 2026-09; the game's own analytics keeps its consented returning-
+    // player id, this surface has none). What is sent is a bare count plus
+    // content-free enums. That is also what keeps this page clear of a
+    // consent banner: the EU rule that makes one necessary is about
+    // storing or reading things on your device, and this page does
+    // neither — so there is nothing to ask permission for, only something
+    // to disclose (privacy.html).
+    //
+    // A VISIT is therefore one page load that a human actually looked at,
+    // de-duplicated WITHOUT storage: the Navigation Timing API says
+    // whether a load is a fresh navigation, a reload or a back/forward
+    // restore, so a reload and the back-swipe out of play/ are skipped —
+    // exactly what a sessionStorage latch would have done, with nothing
+    // written and nothing read. The same person tomorrow, or in a second
+    // tab, still counts twice; the dashboard says "visits", not "people",
+    // and that is the honest ceiling of a page that identifies no one.
+    //
+    // Transport contract, same as the game's pegAnalytics: a STRING body
+    // → text/plain → a CORS simple request, no preflight. Never "improve"
+    // it to a Blob typed application/json — that forces a preflight
+    // sendBeacon handles inconsistently, and a click's beacon is fired
+    // while the page is already navigating away.
+    (function () {
+      var REV = "e67a13b";        // stamped by tools/build-site.sh
+      var dev = REV.slice(0, 2) === "__";  // un-stamped = local checkout
+      var env = dev ? "dev"
+        : (/\/pr-\d+\//.test(location.pathname) ? "preview" : "prod");
+      var api = null, queue = [], seq = 0, sid;
+
+      function newId() {
+        try {
+          if (crypto && crypto.randomUUID) return crypto.randomUUID();
+        } catch (e) { /* fall through */ }
+        return Date.now() + "-" + Math.random().toString(36).slice(2, 10);
+      }
+
+      function enqueue(name, props) {
+        try {
+          if (queue.length < 20) {
+            queue.push({ seq: seq++, t: Date.now(), name: name, props: props || {} });
+          }
+        } catch (e) {}
+      }
+
+      function flush(beacon) {
+        try {
+          if (!api || !queue.length) return;
+          // sessionId is a random number held in memory for this page load
+          // only — never stored, never reused, and deliberately the ONLY
+          // identifier in the envelope.
+          var body = JSON.stringify({
+            sessionId: sid,
+            build: dev ? "dev" : REV,
+            env: env,
+            events: queue
+          });
+          if (beacon && navigator.sendBeacon) {
+            // A refused beacon keeps the queue for the next attempt.
+            if (!navigator.sendBeacon(api + "/v1/events", body)) return;
+          } else {
+            fetch(api + "/v1/events", { method: "POST", body: body, keepalive: true })
+              .catch(function () {});
+          }
+          queue = [];
+        } catch (e) {}
+      }
+
+      // Coarse device enums parsed HERE, client-side — only these bucket
+      // names are ever sent and the raw user-agent never leaves the device
+      // (the backend allowlists exactly these values). Trimmed copy of
+      // index.html's deviceInfo(); keep the two in agreement. iPadOS 13+
+      // reports a macOS UA in desktop-class mode (unmasked via the Mac
+      // platform + real touch points); "webview" is an in-app browser, and
+      // a home-screen launch of the ROOT — an old pre-/play/ PWA install —
+      // is Safari's shell, not a webview, so it is checked first.
+      function device() {
+        var d = {};
+        try {
+          var ua = navigator.userAgent || "";
+          var iPad = /iPad/.test(ua) ||
+            (navigator.platform === "MacIntel" && (navigator.maxTouchPoints || 0) > 1);
+          var ios = /iPhone|iPod/.test(ua) || iPad;
+          d.os = ios ? "ios"
+            : /Android/.test(ua) ? "android"
+            : /Mac/.test(ua) ? "mac"
+            : /Windows/.test(ua) ? "windows"
+            : /Linux|CrOS/.test(ua) ? "linux"
+            : "other";
+          d.browser = /Edg|EdgiOS|EdgA/.test(ua) ? "edge"
+            : /SamsungBrowser/.test(ua) ? "samsung"
+            : ios && navigator.standalone === true ? "safari"
+            : /; wv\)/.test(ua) || (ios && !/Safari\//.test(ua)) ? "webview"
+            : /Firefox|FxiOS/.test(ua) ? "firefox"
+            : /Chrome|CriOS/.test(ua) ? "chrome"
+            : /Safari\//.test(ua) ? "safari"
+            : "other";
+          d.display = (window.matchMedia &&
+              matchMedia("(display-mode: standalone)").matches) ||
+            navigator.standalone === true ? "standalone" : "browser";
+          d.formFactor = ios ? (iPad ? "tablet" : "phone")
+            : /Android/.test(ua) ? (/Mobile/.test(ua) ? "phone" : "tablet")
+            : "desktop";
+          var vp = Math.min(innerWidth, innerHeight);
+          d.viewport = vp < 600 ? "small" : vp < 900 ? "medium" : "large";
+        } catch (e) {}
+        return d;
+      }
+
+      // Where the visitor came from — the marketing page's whole point.
+      // The referrer is ORIGIN-only by construction (modern referrer policy
+      // truncates cross-site, Safari ITP harder still) and same-origin
+      // referrers are dropped as non-signal; links opened from native apps
+      // and QR codes carry no referrer at all, so utm_* tags on links we
+      // hand out ourselves are the reliable channel.
+      function acquisition(into) {
+        try {
+          if (document.referrer) {
+            var o = new URL(document.referrer).origin;
+            if (o && o !== "null" && o !== location.origin) {
+              into.referrer = o.slice(0, 100);
+            }
+          }
+        } catch (e) {}
+        try {
+          var q = new URLSearchParams(location.search);
+          [["utm_source", "utmSource"], ["utm_medium", "utmMedium"],
+           ["utm_campaign", "utmCampaign"]].forEach(function (pair) {
+            var v = q.get(pair[0]);
+            if (v) into[pair[1]] = v.slice(0, 50);
+          });
+        } catch (e) {}
+        return into;
+      }
+
+      // Bots that RUN JAVASCRIPT and SAY SO: search crawlers, link-preview
+      // scrapers (a share into Slack or Discord fetches the page), AI
+      // crawlers, page-speed tools and headless automation. Classified
+      // from UA TOKENS into one coarse kind — the raw string still never
+      // leaves the device — so they can be counted APART from human
+      // visits instead of quietly inflating them.
+      //
+      // Two honest limits, both worth remembering before reading the
+      // number: most crawlers never execute a line of JS, so they never
+      // reach this code at all and are invisible here (GitHub Pages gives
+      // us no server logs to see them in); and a bot that wants to look
+      // human simply omits the token. This is a FLOOR on declared,
+      // JS-executing bots, not a census of crawler traffic.
+      function botKind() {
+        try {
+          var ua = navigator.userAgent || "";
+          if (/googlebot|bingbot|duckduckbot|yandex|baiduspider|applebot|petalbot|sogou/i.test(ua)) return "search";
+          if (/facebookexternalhit|twitterbot|slackbot|discordbot|telegrambot|whatsapp|linkedinbot|skypeuripreview|embedly|redditbot|pinterest|mastodon/i.test(ua)) return "preview";
+          if (/gptbot|oai-searchbot|chatgpt|claudebot|anthropic-ai|claude-web|ccbot|perplexitybot|google-extended|bytespider|amazonbot|meta-externalagent/i.test(ua)) return "ai";
+          if (/lighthouse|pagespeed|gtmetrix|pingdom|uptimerobot|statuscake|w3c_validator|ahrefsbot|semrushbot|mj12bot|dotbot|screaming frog/i.test(ua)) return "tool";
+          if (navigator.webdriver === true ||
+              /headlesschrome|phantomjs|puppeteer|playwright|selenium|cypress/i.test(ua)) return "headless";
+          if (/\bbot\b|crawler|spider|crawling|scraper/i.test(ua)) return "other";
+        } catch (e) {}
+        return null;
+      }
+
+      try {
+        // The one developer override, read from the URL rather than from
+        // localStorage ON PURPOSE: it keeps the "this page touches no
+        // device storage at all" property literally true, which is the
+        // whole basis of the no-banner position above. It forces the
+        // human path so an automated test suite can exercise it.
+        var debug = false;
+        try {
+          debug = new URLSearchParams(location.search).get("pegasus_analytics_debug") === "1";
+        } catch (e) {}
+        if (dev && !debug) return; // local checkout: no backend, stay silent
+        sid = newId();
+
+        // config.json is written next to the GAME (play/) — one copy, one
+        // deploy input. Same origin, so this relative fetch reaches it from
+        // the site root and from a pr-<n>/ preview alike. No file (fork,
+        // local checkout, backend variable unset) = permanent silence. A
+        // click landing in the sub-second before this resolves is lost
+        // with the navigation; that is the accepted cost of not blocking
+        // anything on a network request.
+        fetch("./play/config.json")
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (c) {
+            if (!c || typeof c.apiBaseUrl !== "string" || !c.apiBaseUrl) return;
+            api = c.apiBaseUrl.replace(/\/+$/, "");
+            flush(false);
+          })
+          .catch(function () {});
+
+        var bot = debug ? null : botKind();
+        if (bot) {
+          // A bot gets ONE flagged view carrying nothing but its kind: no
+          // device enums, no acquisition, no clicks. Sent immediately —
+          // not gated on visibility or navigation type the way a human
+          // visit is, since a crawler's renderer satisfies neither.
+          enqueue("landing_view", { bot: bot });
+          flush(false);
+          return;
+        }
+
+        // Skip a reload or a back/forward restore (see the note above):
+        // the same de-duplication a sessionStorage latch gave, without
+        // touching storage. Anything unknown counts as a fresh navigation
+        // — this can only ever drop a visit, never invent one.
+        var navType = "navigate";
+        try {
+          var nav = performance.getEntriesByType("navigation")[0];
+          if (nav && nav.type) navType = nav.type;
+        } catch (e) {}
+        if (navType !== "navigate") return; // …and its taps go with it, so
+                                            // every counted tap belongs to
+                                            // a counted visit.
+
+        // Count the view once the page is actually LOOKED AT, which also
+        // drops prerenders and background tabs that are never opened (a
+        // prerendered page reports hidden until it is activated).
+        var counted = false;
+        var countView = function () {
+          if (counted || document.visibilityState !== "visible") return;
+          counted = true;
+          enqueue("landing_view", acquisition(device()));
+          flush(false);
+        };
+        countView();
+        if (!counted) document.addEventListener("visibilitychange", countView);
+
+        // One delegated listener, capture phase, for every [data-an]
+        // element — the store badges (including the dead "coming soon"
+        // one), the browser link and the footer. It only ever reads an
+        // attribute: no preventDefault, no navigation change, so a tap
+        // behaves identically with analytics off, broken or blocked.
+        document.addEventListener("click", function (ev) {
+          try {
+            var el = ev.target && ev.target.closest && ev.target.closest("[data-an]");
+            if (!el) return;
+            enqueue("landing_click", { target: el.getAttribute("data-an") });
+            flush(true); // the click is navigating away — beacon, not fetch
+          } catch (e) {}
+        }, true);
+        addEventListener("pagehide", function () { flush(true); });
+        document.addEventListener("visibilitychange", function () {
+          if (document.visibilityState === "hidden") flush(true);
+        });
+      } catch (e) { /* never break the page */ }
+    })();
   </script>
 </body>
 </html>
