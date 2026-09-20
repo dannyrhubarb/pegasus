@@ -1,0 +1,13 @@
+# Level — The Expanse Dash: the 1,000 m time trial through The Expanse's
+# boulder tunnel (same rules as The Flux Dash: land on the gold FINISH pad
+# at ±1000 m, lowest time wins, crash or an empty tank = DNF). Fixed
+# seed 0 = the same rock every attempt — learn the line, shave the tenths,
+# and race the record ghost to the finish.
+name = The Expanse Dash
+description = Race 1,000 m through the boulders. Fastest time wins
+scoring = time
+shafts = off
+obstacles = on
+pad_spacing = 130
+seed = 0
+goal_distance = 1000
