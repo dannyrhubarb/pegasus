@@ -82,8 +82,11 @@ tools/build-wasm.sh site/play/pegasus.wasm
 # "Versioning"). Both are pure functions of the checked-out commit — the
 # wall-clock build time that once rode along here was the one input that
 # could never reproduce (#214), and the About row that showed it is gone.
+# The landing page carries the REVISION only: its analytics tags every
+# event with it (the `build` field), and an un-stamped `__GIT_REVISION__`
+# is how a local checkout recognises itself and stays silent.
 BUILD_VERSION=$(tools/version.sh)
-perl -pi -e "s/__GIT_REVISION__/${GIT_REV}/g; s/__BUILD_VERSION__/${BUILD_VERSION}/g" site/play/index.html
+perl -pi -e "s/__GIT_REVISION__/${GIT_REV}/g; s/__BUILD_VERSION__/${BUILD_VERSION}/g" site/play/index.html site/index.html
 # Version marker fetched with cache bypassed by index.html, to detect a
 # stale cached page and offer the "new build" reload toast.
 printf '{"revision":"%s","version":"%s"}\n' "${GIT_REV}" "${BUILD_VERSION}" > site/play/version.json
