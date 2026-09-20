@@ -1514,7 +1514,16 @@ PATH ORDER (the siphon's depth is not monotonic), PIN THE SHAPES (winding
 ≥ 3 sideways reversals; siphon exactly 2 VERTICAL reversals plus a real
 climb; deep well wanders < 4 m — a shaft flattened to a plain vertical
 hole passes every point-in-rock check otherwise) and land the ship on all
-three bases.).
+three bases. **Lip rule (the PR #213 review nit)**: a well's wall must
+meet the cavern floor AT y = 0 — the generator's mitre left a 29 cm rock
+NEEDLE standing above the floor at well 1's east lip (and an 8 cm one at
+well 3's), and the renderer extrudes every exposed edge's lit band "into
+the rock" along its normal, so the needle's vertical edge painted a band
+floating across the well mouth in open air — the "little wall quirk" of
+the review. Clipped by intersecting the wall's last edge with y = 0; a
+scratch band-in-air checker (mirror `bp()` + `point_in_rock`) finds this
+class of defect, and its residue at ordinary convex corners is the same
+as The Hollows' — the renderer's norm, not a level bug).
 **The Caves** (the original shafted world) was retired 2026-07 with The
 Rift — its world survives as the compiled-in `Level::demo()` (`pads`
 scoring), which remains the no-manifest fallback and the fixture for the
