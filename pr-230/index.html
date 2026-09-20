@@ -517,23 +517,34 @@
     // remove the backend and the page behaves exactly as it did before.
     //
     // Two events, both allowlisted server-side (pegasus-backend events.rs):
-    //   landing_view  — once per browser TAB SESSION, with the same coarse
-    //                   device enums and acquisition props session_start
-    //                   carries (so the two surfaces compare directly).
+    //   landing_view  — one per counted visit, with the same coarse device
+    //                   enums and acquisition props session_start carries
+    //                   (so the two surfaces compare directly), or, for a
+    //                   declared bot, ONLY a `bot` kind and nothing else.
     //   landing_click — one per outbound tap, target from the element's
     //                   data-an (a closed enum: ios | android | play |
     //                   privacy | licenses | github).
     //
-    // "Unique" visitors, honestly: this page stores NO visitor id. A
-    // persistent identifier is exactly what the game asks consent for, and
-    // there is no consent UI here — so a VISIT is one browser tab session.
-    // The view is latched in sessionStorage, which survives a reload and
-    // the back-swipe out of play/ but dies with the tab; the latch is
-    // device-local state and is never sent anywhere. Two tabs, two days or
-    // two devices still count twice — the dashboard says "visits", not
-    // "people". The one real de-duplication available is the game's
-    // CONSENTED returning-player id: same origin, so it rides this
-    // envelope too, under exactly the same rule as in-game.
+    // IT COUNTS VISITS AND NOTHING ELSE. The page sets no cookie, writes
+    // nothing to localStorage or sessionStorage, and READS nothing from
+    // them either — there is no visitor id, no device id and no player id
+    // on this page, not even the game's consented one (owner decision
+    // 2026-09; the game's own analytics keeps its consented returning-
+    // player id, this surface has none). What is sent is a bare count plus
+    // content-free enums. That is also what keeps this page clear of a
+    // consent banner: the EU rule that makes one necessary is about
+    // storing or reading things on your device, and this page does
+    // neither — so there is nothing to ask permission for, only something
+    // to disclose (privacy.html).
+    //
+    // A VISIT is therefore one page load that a human actually looked at,
+    // de-duplicated WITHOUT storage: the Navigation Timing API says
+    // whether a load is a fresh navigation, a reload or a back/forward
+    // restore, so a reload and the back-swipe out of play/ are skipped —
+    // exactly what a sessionStorage latch would have done, with nothing
+    // written and nothing read. The same person tomorrow, or in a second
+    // tab, still counts twice; the dashboard says "visits", not "people",
+    // and that is the honest ceiling of a page that identifies no one.
     //
     // Transport contract, same as the game's pegAnalytics: a STRING body
     // → text/plain → a CORS simple request, no preflight. Never "improve"
@@ -541,15 +552,11 @@
     // sendBeacon handles inconsistently, and a click's beacon is fired
     // while the page is already navigating away.
     (function () {
-      var REV = "2083118-pr-230";        // stamped by tools/build-site.sh
+      var REV = "496baf5-pr-230";        // stamped by tools/build-site.sh
       var dev = REV.slice(0, 2) === "__";  // un-stamped = local checkout
       var env = dev ? "dev"
         : (/\/pr-\d+\//.test(location.pathname) ? "preview" : "prod");
       var api = null, queue = [], seq = 0, sid;
-
-      function ls(key) {
-        try { return localStorage.getItem(key); } catch (e) { return null; }
-      }
 
       function newId() {
         try {
@@ -569,19 +576,15 @@
       function flush(beacon) {
         try {
           if (!api || !queue.length) return;
-          var payload = {
+          // sessionId is a random number held in memory for this page load
+          // only — never stored, never reused, and deliberately the ONLY
+          // identifier in the envelope.
+          var body = JSON.stringify({
             sessionId: sid,
             build: dev ? "dev" : REV,
             env: env,
             events: queue
-          };
-          // The returning-player id, only while the game's consent stands
-          // (same origin, same keys, same rule — see the note above).
-          if (ls("pegasus_analytics_consent") === "1") {
-            var did = ls("pegasus_device_id");
-            if (did) payload.deviceId = did;
-          }
-          var body = JSON.stringify(payload);
+          });
           if (beacon && navigator.sendBeacon) {
             // A refused beacon keeps the queue for the next attempt.
             if (!navigator.sendBeacon(api + "/v1/events", body)) return;
@@ -660,24 +663,98 @@
         return into;
       }
 
+      // Bots that RUN JAVASCRIPT and SAY SO: search crawlers, link-preview
+      // scrapers (a share into Slack or Discord fetches the page), AI
+      // crawlers, page-speed tools and headless automation. Classified
+      // from UA TOKENS into one coarse kind — the raw string still never
+      // leaves the device — so they can be counted APART from human
+      // visits instead of quietly inflating them.
+      //
+      // Two honest limits, both worth remembering before reading the
+      // number: most crawlers never execute a line of JS, so they never
+      // reach this code at all and are invisible here (GitHub Pages gives
+      // us no server logs to see them in); and a bot that wants to look
+      // human simply omits the token. This is a FLOOR on declared,
+      // JS-executing bots, not a census of crawler traffic.
+      function botKind() {
+        try {
+          var ua = navigator.userAgent || "";
+          if (/googlebot|bingbot|duckduckbot|yandex|baiduspider|applebot|petalbot|sogou/i.test(ua)) return "search";
+          if (/facebookexternalhit|twitterbot|slackbot|discordbot|telegrambot|whatsapp|linkedinbot|skypeuripreview|embedly|redditbot|pinterest|mastodon/i.test(ua)) return "preview";
+          if (/gptbot|oai-searchbot|chatgpt|claudebot|anthropic-ai|claude-web|ccbot|perplexitybot|google-extended|bytespider|amazonbot|meta-externalagent/i.test(ua)) return "ai";
+          if (/lighthouse|pagespeed|gtmetrix|pingdom|uptimerobot|statuscake|w3c_validator|ahrefsbot|semrushbot|mj12bot|dotbot|screaming frog/i.test(ua)) return "tool";
+          if (navigator.webdriver === true ||
+              /headlesschrome|phantomjs|puppeteer|playwright|selenium|cypress/i.test(ua)) return "headless";
+          if (/\bbot\b|crawler|spider|crawling|scraper/i.test(ua)) return "other";
+        } catch (e) {}
+        return null;
+      }
+
       try {
-        // Automated browsers are dropped (a headless fleet once inflated
-        // the game's numbers): navigator.webdriver is the W3C flag
-        // Playwright/Puppeteer/Selenium set, the UA token catches naive
-        // headless Chrome. pegasus_analytics_debug is the override that
-        // keeps the e2e suite — itself automated — able to exercise this,
-        // and the same key opts a local checkout in.
-        var debug = ls("pegasus_analytics_debug") === "1";
-        if (!debug && (dev || navigator.webdriver === true ||
-                       /HeadlessChrome/.test(navigator.userAgent || ""))) return;
+        // The one developer override, read from the URL rather than from
+        // localStorage ON PURPOSE: it keeps the "this page touches no
+        // device storage at all" property literally true, which is the
+        // whole basis of the no-banner position above. It forces the
+        // human path so an automated test suite can exercise it.
+        var debug = false;
+        try {
+          debug = new URLSearchParams(location.search).get("pegasus_analytics_debug") === "1";
+        } catch (e) {}
+        if (dev && !debug) return; // local checkout: no backend, stay silent
         sid = newId();
 
-        var fresh = true;
+        // config.json is written next to the GAME (play/) — one copy, one
+        // deploy input. Same origin, so this relative fetch reaches it from
+        // the site root and from a pr-<n>/ preview alike. No file (fork,
+        // local checkout, backend variable unset) = permanent silence. A
+        // click landing in the sub-second before this resolves is lost
+        // with the navigation; that is the accepted cost of not blocking
+        // anything on a network request.
+        fetch("./play/config.json")
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (c) {
+            if (!c || typeof c.apiBaseUrl !== "string" || !c.apiBaseUrl) return;
+            api = c.apiBaseUrl.replace(/\/+$/, "");
+            flush(false);
+          })
+          .catch(function () {});
+
+        var bot = debug ? null : botKind();
+        if (bot) {
+          // A bot gets ONE flagged view carrying nothing but its kind: no
+          // device enums, no acquisition, no clicks. Sent immediately —
+          // not gated on visibility or navigation type the way a human
+          // visit is, since a crawler's renderer satisfies neither.
+          enqueue("landing_view", { bot: bot });
+          flush(false);
+          return;
+        }
+
+        // Skip a reload or a back/forward restore (see the note above):
+        // the same de-duplication a sessionStorage latch gave, without
+        // touching storage. Anything unknown counts as a fresh navigation
+        // — this can only ever drop a visit, never invent one.
+        var navType = "navigate";
         try {
-          fresh = sessionStorage.getItem("pegasus_landing_view") !== "1";
-          sessionStorage.setItem("pegasus_landing_view", "1");
-        } catch (e) { /* private mode / storage blocked: count the load */ }
-        if (fresh) enqueue("landing_view", acquisition(device()));
+          var nav = performance.getEntriesByType("navigation")[0];
+          if (nav && nav.type) navType = nav.type;
+        } catch (e) {}
+        if (navType !== "navigate") return; // …and its taps go with it, so
+                                            // every counted tap belongs to
+                                            // a counted visit.
+
+        // Count the view once the page is actually LOOKED AT, which also
+        // drops prerenders and background tabs that are never opened (a
+        // prerendered page reports hidden until it is activated).
+        var counted = false;
+        var countView = function () {
+          if (counted || document.visibilityState !== "visible") return;
+          counted = true;
+          enqueue("landing_view", acquisition(device()));
+          flush(false);
+        };
+        countView();
+        if (!counted) document.addEventListener("visibilitychange", countView);
 
         // One delegated listener, capture phase, for every [data-an]
         // element — the store badges (including the dead "coming soon"
@@ -696,22 +773,6 @@
         document.addEventListener("visibilitychange", function () {
           if (document.visibilityState === "hidden") flush(true);
         });
-
-        // config.json is written next to the GAME (play/) — one copy, one
-        // deploy input. Same origin, so this relative fetch reaches it from
-        // the site root and from a pr-<n>/ preview alike. No file (fork,
-        // local checkout, backend variable unset) = permanent silence. A
-        // click landing in the sub-second before this resolves is lost
-        // with the navigation; that is the accepted cost of not blocking
-        // anything on a network request.
-        fetch("./play/config.json")
-          .then(function (r) { return r.ok ? r.json() : null; })
-          .then(function (c) {
-            if (!c || typeof c.apiBaseUrl !== "string" || !c.apiBaseUrl) return;
-            api = c.apiBaseUrl.replace(/\/+$/, "");
-            flush(false);
-          })
-          .catch(function () {});
       } catch (e) { /* never break the page */ }
     })();
   </script>
