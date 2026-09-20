@@ -359,6 +359,7 @@ push-retry loop for concurrent deploys):
 - `src/audio.rs` — in-memory WAV synthesis (`wav_from_samples`, `thruster_wav`, `boom_wav`)
 - `levels/` — **runtime level data**: `*.level` files (`key = value`) + `manifest.json` (menu order), fetched by `index.html` and pushed into the wasm — new levels deploy with no recompile (see "Levels")
 - `fonts/` — the **vendored menu webfont**: `jetbrains-mono.woff2` (latin variable, wght 400–800) + its `OFL.txt`, loaded via `@font-face` by `index.html`/`editor.html` so every platform renders the same face (see the menu-font note under "Game menu"); in all three bundle copy lists
+- `android/…/NearbyBridge.kt` + `ios/Pegasus/NearbyBridge.swift` — the **Bluetooth LE nearby-room bridges** (2026-09, discovery ONLY — see "Nearby discovery" under "Multiplayer"): the host shell advertises its room code, the guest shell scans and lists the rooms it hears, and a tap is the ordinary WebRTC join; `index.html`'s `pegNearby` module is the one page-side implementation over both. No wasm/sim/backend involvement, and the website (no bridge) never shows the feature
 - `editor.html` — the **standalone level editor** (issue #89 v1, 2026-07): draws hand-drawn `.level` worlds — the same `poly`/`pad`/`start` representation The Hollows uses — on a pan/zoom canvas. Self-contained like `index.html` (no CDNs), copied by `build-site`. **Deliberately UNLINKED from the game UI** (owner decision pre-merge): it lives at its own path with no menu button and no picker row; the game only meets it through the `?custom=1` test-fly handoff. **While it stays unlinked, editor commits carry NO `Whats-new:` trailers** (the changelog must not advertise an unannounced feature — the PR #110 branch had its trailers stripped before merge; give the editor one proper entry when it's linked up for real). See "Level editor & custom drafts" under "Levels"
 - `tools/gen-third-party-licenses.py` + `third-party-licenses.html` — the generated third-party attribution page served with the site and linked from the About screen; regenerate when `Cargo.lock` changes (see "License")
 - `privacy.html` — standalone privacy policy served with the site at the ROOT (`https://pegasusmoonlander.com/privacy.html` — the store listings' privacy-policy URL, so it never moves; also copied next to the game in `play/` and bundled into both apps); same substance as the About screen's `#privacy-note` — keep the two in agreement when the analytics story changes — plus the "The website's front page" section, which covers the landing page's visit/tap counting (that one has no in-game twin)
@@ -2873,6 +2874,48 @@ backend-verification flow.
   other side is stuck too, and always the VPN/Private-Relay warning. A
   post-open failure keeps the existing degrade-to-solo banner instead
   (never a dialog over a live flight).
+- **Nearby discovery (Bluetooth LE, app shells only, 2026-09)**: the
+  room code's one cost is reading it out, so the shells put it on the
+  air — `docs/multiplayer-p2p.md` "Nearby discovery" is the brief. The
+  host's `room_created` → `pegNearby.advertise(code, callsign)`; the Join
+  screen (`scr-mp-join`) scans while it is up and the module is idle (a
+  `screenWatchers` entry — the hook `showScreen`/`closeMenu` call with the
+  screen id or null) and lists what it hears in `#mp-nearby-list` (one
+  `.row` per code, updated IN PLACE per the picker's DOM-stability rule,
+  dropped after 6 s unheard); a tap = `joinRoom(code)`, the same function
+  the Join button and the `?join=` invite link use. **Bluetooth carries
+  DISCOVERY ONLY** — no GATT, no connection, no game bytes; signaling and
+  the DataChannel are untouched, hence no wasm/sim/backend change. The
+  `pegNearby` module (ahead of `pegMP`) is the single page-side
+  implementation over both shells: Android `PegasusNearby.cmd(json)`
+  (`NearbyBridge.kt`), iOS the `pegasusNearby` message handler +
+  `__pegNearbyIos` document-start flag (`NearbyBridge.swift`); commands
+  `advertise{text}`/`scan`/`stop`, events `state{state, reason?}` /
+  `adv{id, text, rssi}` / `error{msg}`, reason codes `denied`/`off`/
+  `unsupported`/`failed`/`stopped` turned into player wording by
+  `nearbyProblem`. **Advertisement layout**: service UUID
+  `7E6A5148-0000-4B1E-8F3A-000000000001` in the primary packet, payload
+  `<5-char code><callsign>` in the scan response — service data on
+  Android, the LOCAL NAME on iOS (CoreBluetooth advertises nothing else);
+  scanners accept either. The 13-byte Android budget (31 − the 18-byte
+  128-bit service-data header) is why `pegNearby` clips the callsign to
+  8 UTF-8 bytes on a character boundary for BOTH platforms. **The
+  website has no bridge and never shows any of it** (Web Bluetooth can't
+  advertise or scan for advertisements and neither WebView exposes it);
+  `#mp-nearby` / `#mp-host-nearby` stay hidden and the join hint keeps
+  its plain wording. Permissions are asked LAZILY on the first
+  advertise/scan (never at launch): Android declares only the 12+
+  runtime permissions (`BLUETOOTH_ADVERTISE`, `BLUETOOTH_SCAN`
+  `neverForLocation`) and **NO location permission**, so scanning is
+  `unsupported` on Android 11-, hosting still works; iOS carries
+  `NSBluetoothAlwaysUsageDescription`, and a BACKGROUNDED iOS host is
+  invisible to Android scanners (iOS drops the local name and moves the
+  UUID to the overflow area). The iOS scanner reads only the LIVE
+  advertisement, never `peripheral.name` — CoreBluetooth caches that
+  per radio, and a stale one would list a room from an earlier session.
+  **Not yet verified on phones** (written without SDK/Xcode; the
+  android-build / ios-build PR jobs compile it, the page half is covered
+  headless with a fake bridge + a stubbed signaling socket).
 - **Run end**: the module watches the analytics run channel
   (`run_end_seq` + cause/dist/ticks mirrors — no new channel) for its own
   end, sends `run_end {cause, score}` (time levels: completion seconds,
@@ -3047,9 +3090,13 @@ re-acquired on the `visibilitychange` back while still wanted).
   too). A document-start `WKUserScript` injects
   `window.__pegAppBuild` ("1.0 (42)" — CFBundleShortVersionString +
   CFBundleVersion, the latter stamped with the CI run number) for the
-  About screen's Version row. WebRoot ships as an Xcode **folder
-  reference**, so re-running the sync + rebuilding needs no project
-  edits.
+  About screen's Version row; a second one sets the `__pegNearbyIos`
+  flag for the Bluetooth nearby-room bridge (`NearbyBridge.swift`, the
+  `pegasusNearby` handler — see "Nearby discovery" under "Multiplayer";
+  new Swift files need a pbxproj entry with a UNIQUE object id, a
+  duplicated id silently drops the file from the build). WebRoot ships
+  as an Xcode **folder reference**, so re-running the sync + rebuilding
+  needs no project edits.
 - **Safe-area inset injection (launch-jank fix, 2026-07)**:
   `env(safe-area-inset-*)` reads **0 at a WKWebView's first paint** —
   WebKit propagates the insets asynchronously a couple of frames later —
@@ -3173,7 +3220,9 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   edge-to-edge call must come after. The `PegasusApp` JS interface is the
   Android half of the keep-awake bridge (see "iOS app") and also answers
   `appBuild()` (versionName + versionCode) for the About screen's Version
-  row. **targetSdk/compileSdk = 36** (2026-08, Play requires
+  row; `PegasusNearby` (`NearbyBridge.kt`) is the Bluetooth nearby-room
+  bridge (see "Nearby discovery" under "Multiplayer" — the manifest's
+  Bluetooth permissions are its, all 12+ runtime ones, no location). **targetSdk/compileSdk = 36** (2026-08, Play requires
   targeting within 1 year of the latest Android release or updates are
   blocked — expect this bump roughly yearly). **AGP 9.x** (2026-08, same
   push): Kotlin is BUILT INTO AGP 9 — `org.jetbrains.kotlin.android` must

@@ -1034,6 +1034,20 @@
       text-shadow: 0 0 10px rgba(255, 194, 75, 0.8), 0 0 30px rgba(255, 194, 75, 0.4);
     }
     #mp-code-input { letter-spacing: 0.3em; }
+    /* Nearby rooms (app shells only — the shells' Bluetooth bridge): the
+       join screen's list of rooms heard over BLE, above the code box. Hidden
+       until the bridge exists; the list itself collapses while empty so the
+       "looking…" line sits right above the input. Rows reuse the picker's
+       .rowlist idiom. */
+    #mp-nearby { display: none; flex-direction: column; align-items: center; gap: 12px; width: 100%; }
+    #mp-nearby.on { display: flex; }
+    #mp-nearby-list:empty { display: none; }
+    #mp-nearby-list .row { border-color: rgba(255, 84, 214, 0.45); }
+    #mp-nearby-list .row .chev { color: var(--magenta); }
+    /* The host's "nearby players can see this room" line: magenta like the
+       multiplayer accents, dimmed to the .hint size. */
+    .mp-nearby-note { font-size: 13px; letter-spacing: 0.08em; color: var(--magenta); opacity: 0.85; }
+    .mp-nearby-note.warn { color: var(--amber); }
     /* 3-2-1 countdown: floats over the live (frozen) game — purely visual,
        pointer-events off; the game is held by set_ui_pause through it. */
     #mp-countdown {
@@ -1704,6 +1718,11 @@
            copies the ?join= link to the clipboard. Hidden until the room
            code exists. -->
       <div class="mbtn" id="btn-mp-share" style="display:none">Share invite link</div>
+      <!-- Nearby discovery (app shells only): while the room is open the
+           shell advertises its code over Bluetooth LE, so a friend's phone
+           lists it on their Join screen — no code to read out. Filled by
+           pegMP from pegNearby's state; hidden on the website (no bridge). -->
+      <div class="mp-nearby-note" id="mp-host-nearby" style="display:none"></div>
       <div class="hint" id="mp-host-status">Contacting mission control&hellip;</div>
       <div class="mbtn primary" id="btn-mp-pick" style="display:none">Choose level</div>
       <div class="mbtn back" id="btn-mp-host-back">&#8249; Cancel</div>
@@ -1711,7 +1730,14 @@
 
     <div class="screen" id="scr-mp-join">
       <div class="h2">JOIN GAME</div>
-      <div class="hint">Type the host's room code</div>
+      <!-- Nearby rooms (app shells only): rooms heard over Bluetooth LE
+           while this screen is up; a tap joins that room straight away —
+           the same join as typing its code. Hidden on the website. -->
+      <div id="mp-nearby">
+        <div class="hint" id="mp-nearby-status">Looking for games nearby&hellip;</div>
+        <ul class="rowlist" id="mp-nearby-list"></ul>
+      </div>
+      <div class="hint" id="mp-join-hint">Type the host's room code</div>
       <input class="name-input" id="mp-code-input" maxlength="5" autocomplete="off"
              autocapitalize="characters" spellcheck="false" enterkeyhint="go"
              placeholder="CODE">
@@ -2168,6 +2194,14 @@
     let walled = false;
     let wallPolicy = null;
     let nagPolicy = null;
+    // Screen-change watchers (modules that start/stop something per screen
+    // — the multiplayer module's nearby scan, see pegMP). Called with the
+    // screen id, or null when the menu closes; each call is try/caught so a
+    // watcher can never break navigation.
+    const screenWatchers = [];
+    function notifyScreen(id) {
+      for (const f of screenWatchers) { try { f(id); } catch (_) {} }
+    }
     function showScreen(id) {
       if (!walled && wallPolicy && id !== "scr-update") armWall(wallPolicy);
       if (walled && id !== "scr-update") id = "scr-update";
@@ -2188,6 +2222,7 @@
       if (id === "scr-scores") renderScores();
       syncWakeLock();
       pegAnalytics.screen(id); // funnel signal (consecutive-deduped inside)
+      notifyScreen(id);
       syncHistory();
     }
     function closeMenu() {
@@ -2199,6 +2234,7 @@
       hudBtns.classList.add("on");
       setPause(0);
       syncWakeLock();
+      notifyScreen(null);
       syncHistory();
     }
 
@@ -5170,6 +5206,111 @@
       pegAnalytics.setConsent(retidToggle.checked ? "accepted" : "revoked");
     });
 
+    // --- Nearby room discovery over Bluetooth LE (app shells only) --------
+    // Bluetooth carries DISCOVERY ONLY: a host's shell advertises the room
+    // code (+ a short callsign) in a BLE advertisement, a guest's shell
+    // scans and lists what it hears, and a tap on a row is the ordinary
+    // room-code join — signaling + the WebRTC DataChannel carry the game
+    // exactly as for a typed code. No GATT, no connection, no bytes over
+    // Bluetooth, so nothing here touches the wasm, the sim or the backend.
+    // The plain website has no bridge (Web Bluetooth can't scan for
+    // advertisements or advertise at all, and neither WebView exposes it),
+    // so `available()` is false there and none of this runs. Bridges:
+    // Android `window.PegasusNearby.cmd(json)` (NearbyBridge.kt), iOS the
+    // `pegasusNearby` WKScriptMessageHandler + the `__pegNearbyIos`
+    // document-start flag (NearbyBridge.swift). Events come back through
+    // `pegNearby._on({ev, …})`. Same never-break-the-game rules as
+    // analytics: every entry point try/caught, everything degrades to off.
+    const pegNearby = (() => {
+      const CODE_RE = /^[A-Z0-9]{5}$/; // the join screen's own validation
+      // The advertisement payload is `<code><callsign>`. An Android host has
+      // 13 bytes of service data (31-byte scan response − the 18-byte
+      // 128-bit service-data header): the 5-char code + 8 bytes of name.
+      // The cap is applied HERE, for both platforms, so a room reads the
+      // same from an iPhone host (which could fit more in its local name).
+      const NAME_MAX_BYTES = 8;
+      const STALE_MS = 6000;   // a room unheard for this long leaves the list
+      const listeners = { state: [], rooms: [] };
+      let bridge = null;
+      let st = { state: "idle", reason: "" };
+      const rooms = new Map(); // code → { code, name, rssi, seen }
+      let sweepTimer = null;
+      function emit(k, v) { (listeners[k] || []).forEach(f => { try { f(v); } catch (_) {} }); }
+      function log(m) { try { if (window.pegLog) pegLog.add("nearby", m); } catch (_) {} }
+      try {
+        if (window.PegasusNearby && typeof PegasusNearby.cmd === "function") {
+          bridge = j => PegasusNearby.cmd(j);
+        } else if (window.__pegNearbyIos && window.webkit && webkit.messageHandlers &&
+                   webkit.messageHandlers.pegasusNearby) {
+          bridge = j => webkit.messageHandlers.pegasusNearby.postMessage(j);
+        }
+      } catch (_) { bridge = null; }
+      function call(cmd, args) {
+        if (!bridge) return false;
+        try { bridge(JSON.stringify(Object.assign({ cmd: cmd }, args || {}))); return true; }
+        catch (e) { log("bridge " + cmd + " failed: " + e); return false; }
+      }
+      // Cut a callsign to NAME_MAX_BYTES of UTF-8 on a character boundary
+      // (a byte-level cut could leave half a multibyte glyph).
+      function clipName(name) {
+        let out = "", bytes = 0;
+        for (const ch of String(name || "").trim()) {
+          const n = new TextEncoder().encode(ch).length;
+          if (bytes + n > NAME_MAX_BYTES) break;
+          out += ch; bytes += n;
+        }
+        return out;
+      }
+      function setState(next) { st = Object.assign({}, st, next); emit("state", st); }
+      function sweep() {
+        const cutoff = Date.now() - STALE_MS;
+        let dropped = false;
+        for (const [code, r] of rooms) if (r.seen < cutoff) { rooms.delete(code); dropped = true; }
+        if (dropped) emit("rooms", list());
+      }
+      function list() { return Array.from(rooms.values()); }
+      function _on(evt) {
+        try {
+          if (typeof evt === "string") evt = JSON.parse(evt);
+          switch (evt.ev) {
+            case "state":
+              if (evt.state !== "scanning") { clearInterval(sweepTimer); sweepTimer = null; rooms.clear(); emit("rooms", []); }
+              else if (!sweepTimer) sweepTimer = setInterval(sweep, 1000);
+              setState({ state: evt.state, reason: evt.reason || "" });
+              log("state " + evt.state + (evt.reason ? " (" + evt.reason + ")" : ""));
+              break;
+            case "adv": {
+              // `<code><callsign>`: the code is the identity — one row per
+              // room however many advertisements (or hosts' radios) carry it.
+              const text = String(evt.text || "");
+              const code = text.slice(0, 5).toUpperCase();
+              if (!CODE_RE.test(code)) break;
+              const cur = rooms.get(code);
+              const name = text.slice(5).trim();
+              const changed = !cur || cur.name !== name;
+              rooms.set(code, { code, name, rssi: evt.rssi | 0, seen: Date.now() });
+              if (changed) emit("rooms", list());
+              break;
+            }
+            case "error": log("error: " + evt.msg); break;
+          }
+        } catch (e) { log("event failed: " + e); }
+      }
+      return {
+        available: () => !!bridge,
+        state: () => st,
+        rooms: list,
+        // Host: advertise the room code + callsign until stop().
+        advertise: (code, name) => call("advertise", { text: String(code).toUpperCase() + clipName(name) }),
+        // Guest: listen for rooms until stop(); rows arrive via on("rooms").
+        scan: () => call("scan"),
+        stop: () => call("stop"),
+        on: (k, f) => { (listeners[k] || (listeners[k] = [])).push(f); },
+        _on: _on,
+      };
+    })();
+    window.pegNearby = pegNearby;
+
     // --- Multiplayer (P2P shadow race; must NEVER break the game) --------
     // Two players fly the SAME level (same world, same concrete seed) side
     // by side, each in their own physics world — no ship–ship collision.
@@ -5191,6 +5332,11 @@
       const codeInput = document.getElementById("mp-code-input");
       const pickBtn = document.getElementById("btn-mp-pick");
       const shareBtn = document.getElementById("btn-mp-share");
+      const hostNearby = document.getElementById("mp-host-nearby");
+      const nearbyEl = document.getElementById("mp-nearby");
+      const nearbyStatus = document.getElementById("mp-nearby-status");
+      const nearbyList = document.getElementById("mp-nearby-list");
+      const joinHint = document.getElementById("mp-join-hint");
       const countEl = document.getElementById("mp-countdown");
       const countNum = document.getElementById("mp-count-num");
       const bannerEl = document.getElementById("mp-banner");
@@ -5296,6 +5442,7 @@
         pendingCands = [];
         call("set_mp_active", 0);
         state = "idle";
+        try { pegNearby.stop(); } catch (_) {} // no room to advertise / no join to find
         role = null;
         lastEndSeq = null;
         peerName = "";
@@ -5481,6 +5628,9 @@
             hostStatus.textContent = "Waiting for a challenger…";
             shareBtn.textContent = "Share invite link";
             shareBtn.style.display = "";
+            // Nearby discovery (shells): put the code on the air, so a
+            // friend's Join screen lists this room with no code to type.
+            if (pegNearby.available()) pegNearby.advertise(msg.code, playerName() || "PILOT");
             break;
           case "room_joined":
             iceServers = msg.iceServers;
@@ -5489,6 +5639,7 @@
             break;
           case "peer_joined": // host side: the guest arrived — offer now
             hostStatus.textContent = "Challenger found — connecting…";
+            pegNearby.stop(); // the room is full — off the air
             makePeer();
             dcInit(pc.createDataChannel("pegasus", { ordered: true }));
             break;
@@ -5504,6 +5655,8 @@
                 ? "That room is already full"
                 : msg.error === "room_not_found" ? "No such room — check the code"
                 : "Mission control error — try again";
+              teardownNet();  // the attempt is over: back to idle on the join screen —
+                              // the radio's own stop event then resumes the nearby scan
             } else if (state === "hosting") {
               hostStatus.textContent = "Mission control error — try again";
             }
@@ -5726,6 +5879,114 @@
         } catch (_) {}
       }, 200);
 
+      // --- Nearby rooms (Bluetooth discovery, app shells only) -----------
+      // The join screen scans while it is up and the module is idle; a tap
+      // on a heard room joins it exactly like a typed code. The host screen
+      // advertises from room_created until the guest arrives (peer_joined)
+      // or the room is torn down. Both are pure conveniences over the
+      // WebRTC flow — with no bridge (the website) nothing here shows.
+      function syncNearby() {
+        try {
+          if (!pegNearby.available()) return;
+          const want = overlay === "scr-mp-join" && state === "idle";
+          const cur = pegNearby.state().state;
+          if (want && cur !== "scanning") pegNearby.scan();
+          else if (!want && cur === "scanning") pegNearby.stop();
+        } catch (_) {}
+      }
+      // One row per room, keyed on the code and updated IN PLACE (the
+      // picker's DOM-stability rule: rebuilding rows under an in-flight
+      // tap retargets the tap). Order = first heard first.
+      const nearbyRows = new Map();
+      function renderNearby(list) {
+        try {
+          const seen = new Set();
+          for (const r of list) {
+            seen.add(r.code);
+            let li = nearbyRows.get(r.code);
+            if (!li) {
+              li = document.createElement("li");
+              li.className = "row";
+              li.dataset.code = r.code;
+              const col = document.createElement("div"); col.className = "lcol";
+              const n = document.createElement("div"); n.className = "lname";
+              const d = document.createElement("div"); d.className = "ldesc";
+              col.appendChild(n); col.appendChild(d);
+              const chev = document.createElement("span"); chev.className = "chev"; chev.textContent = "›";
+              li.appendChild(col); li.appendChild(chev);
+              li.addEventListener("click", () => joinRoom(r.code));
+              nearbyRows.set(r.code, li);
+              nearbyList.appendChild(li);
+            }
+            li.querySelector(".lname").textContent = r.name ? r.name + "'s game" : "A pilot's game";
+            li.querySelector(".ldesc").textContent = "Room " + r.code + " · nearby";
+          }
+          for (const [code, li] of nearbyRows) {
+            if (!seen.has(code)) { li.remove(); nearbyRows.delete(code); }
+          }
+          const s = pegNearby.state();
+          if (s.state === "scanning") {
+            nearbyStatus.textContent = list.length ? "Games nearby — tap one to join" : "Looking for games nearby…";
+          }
+        } catch (_) {}
+      }
+      // Why the radio isn't available, in player words (the bridge's reason
+      // codes are shared by both shells).
+      function nearbyProblem(reason) {
+        return reason === "off" ? "Bluetooth is off — turn it on to find games nearby"
+          : reason === "denied" ? "Bluetooth permission denied — nearby games can't be found"
+          : reason === "unsupported" ? "This device can't find nearby games over Bluetooth"
+          : reason === "failed" ? "Bluetooth isn't cooperating — type the code instead"
+          : "";
+      }
+      if (pegNearby.available()) {
+        nearbyEl.classList.add("on");
+        joinHint.textContent = "…or type the host's room code";
+        pegNearby.on("rooms", renderNearby);
+        pegNearby.on("state", s => {
+          try {
+            // Host screen: on the air, or why not.
+            if (state === "hosting") {
+              const problem = nearbyProblem(s.reason);
+              hostNearby.classList.toggle("warn", !!problem);
+              hostNearby.textContent = s.state === "advertising"
+                ? "Visible to nearby players over Bluetooth — they can join with one tap"
+                : problem ? problem + " — share the code instead" : "";
+              hostNearby.style.display = hostNearby.textContent ? "" : "none";
+            }
+            // Join screen: scanning, or why not.
+            if (s.state === "scanning") renderNearby(pegNearby.rooms());
+            else if (overlay === "scr-mp-join") {
+              // Idle on the join screen: a problem to show, the resting
+              // line while a join attempt runs, else the scan is about to
+              // resume (syncNearby) and its own state event relabels this.
+              const problem = nearbyProblem(s.reason);
+              nearbyStatus.textContent = problem || (state === "idle" ? "Looking for games nearby…" : "Joining…");
+            }
+            // The bridge reports its stops asynchronously: a join attempt
+            // that failed (expired room) went idle here first and its
+            // radio only now — re-check whether the scan should be back.
+            if (s.state === "idle" && !s.reason.match(/^(denied|off|unsupported|failed)$/)) syncNearby();
+          } catch (_) {}
+        });
+        screenWatchers.push(syncNearby);
+      }
+
+      // Join a room by code — the typed-code button, an invite link and a
+      // nearby row all land here.
+      function joinRoom(code) {
+        try {
+          code = String(code || "").trim().toUpperCase();
+          if (code.length !== 5) { codeInput.focus(); return; }
+          codeInput.value = code;
+          teardownNet();
+          role = "guest";
+          state = "joining";
+          joinStatus.textContent = "Contacting mission control…";
+          connectWs(() => wsSend({ action: "join_room", code }));
+        } catch (_) { joinStatus.textContent = "Couldn't reach mission control"; }
+      }
+
       // --- UI wiring -----------------------------------------------------
       document.getElementById("btn-mp").addEventListener("click", () => {
         // Re-entering the multiplayer menu while a session is live returns
@@ -5743,6 +6004,7 @@
           hostStatus.textContent = "Contacting mission control…";
           pickBtn.style.display = "none";
           shareBtn.style.display = "none";
+          hostNearby.style.display = "none";
           showScreen("scr-mp-host");
           connectWs(() => wsSend({ action: "create_room" }));
         } catch (_) { hostStatus.textContent = "Couldn't reach mission control"; }
@@ -5773,17 +6035,7 @@
         showScreen("scr-mp-join");
         codeInput.focus();
       });
-      document.getElementById("btn-mp-join").addEventListener("click", () => {
-        try {
-          const code = codeInput.value.trim().toUpperCase();
-          if (code.length !== 5) { codeInput.focus(); return; }
-          teardownNet();
-          role = "guest";
-          state = "joining";
-          joinStatus.textContent = "Contacting mission control…";
-          connectWs(() => wsSend({ action: "join_room", code }));
-        } catch (_) { joinStatus.textContent = "Couldn't reach mission control"; }
-      });
+      document.getElementById("btn-mp-join").addEventListener("click", () => joinRoom(codeInput.value));
       codeInput.addEventListener("keydown", e => {
         e.stopPropagation(); // typing must never reach the game's key handlers
         if (e.key === "Enter") document.getElementById("btn-mp-join").click();

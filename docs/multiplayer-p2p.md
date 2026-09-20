@@ -74,9 +74,12 @@ consequence in the PR description.
 1. Host opens Multiplayer → Host game. Backend creates a room, returns a
    short code (4–5 chars from an unambiguous alphabet — no 0/O/1/I) +
    TURN-inclusive `iceServers`. Host picks the level (normal picker).
-2. Guest opens Multiplayer → Join game, types the code. Backend pairs the
-   connections, relays SDP offer/answer + ICE candidates both ways
-   (opaque `signal` messages — the server never parses them).
+2. Guest opens Multiplayer → Join game, types the code — or, in the app
+   shells, taps the host's room in the **Nearby games** list (see "Nearby
+   discovery" below: the code arrives over Bluetooth, the join is the
+   same). Backend pairs the connections, relays SDP offer/answer + ICE
+   candidates both ways (opaque `signal` messages — the server never
+   parses them).
 3. DataChannel opens (ordered/reliable is fine at this bitrate). Peers
    exchange `hello` (callsign, build id/revision — warn on mismatch, the
    determinism guarantee is per-binary and cross-build races rely on the
@@ -269,6 +272,79 @@ IaC toolchain whose state file would hold the secret.)
   STUN/TURN path) vs desktop; check `chrome://webrtc-internals` shows
   which candidate pair won; kill Wi-Fi mid-race to exercise the
   ICE-restart path.
+
+## Nearby discovery (Bluetooth LE, app shells only — 2026-09)
+
+The one thing a room code costs is READING IT OUT. When both players are
+in the same room, their phones can do that for them: the host's shell
+puts the room code on the air as a **Bluetooth LE advertisement**, the
+guest's shell lists every room it hears on the Join screen, and a tap
+joins it — the same `join_room` + WebRTC path as a typed code or an
+invite link. **Bluetooth carries discovery ONLY.** No GATT service, no
+Bluetooth connection, no game bytes over the radio: signaling and the
+DataChannel do exactly what they do today, which is why this touches
+nothing in the wasm, the sim, the recording format or the backend.
+
+Why this shape (and not a Bluetooth game link): a full BLE GATT data link
+was spiked first (branch `claude/bluetooth-multiplayer-feasibility-150lru`,
+`docs/multiplayer-ble.md` there). It works in principle, but it means a
+second transport under the whole match — chunking, MTU negotiation, one
+in-flight PDU, a ~20-byte payload floor, iOS/Android GATT quirks — for
+the case "no internet at all", while both phones almost always DO have
+internet; and the code-reading friction is what people actually hit.
+Discovery-only keeps the shells tiny and the match on one transport.
+
+- **Web: never.** Web Bluetooth cannot advertise, cannot scan for
+  advertisements (only pair with one chosen device through a chooser),
+  ships only in Chromium, and neither WKWebView nor Android WebView
+  exposes it. The website shows no nearby list and no host note; the
+  typed code and the invite link remain the web's paths.
+- **Bridge contract** (`window.pegNearby` in index.html, same shape on
+  both shells): commands `advertise{text}` · `scan` · `stop` (one JSON
+  string each — Android `PegasusNearby.cmd(json)`, iOS the
+  `pegasusNearby` WKScriptMessageHandler + the `__pegNearbyIos`
+  document-start flag), events back via `pegNearby._on({ev, …})`:
+  `state{state: idle|advertising|scanning, reason?}`, `adv{id, text,
+  rssi}`, `error{msg}`. Reason codes on a forced idle: `denied` · `off` ·
+  `unsupported` · `failed` · `stopped` — the page turns them into player
+  wording. Native is deliberately dumb: it does not know what a room
+  code is.
+- **Advertisement layout** (both shells + the page agree): service UUID
+  `7E6A5148-0000-4B1E-8F3A-000000000001` in the primary packet, so a
+  scanner can filter on it; the payload `<5-char code><callsign>` in the
+  scan response — as **service data** under that UUID on Android, as the
+  **local name** on iOS (CoreBluetooth can advertise only UUIDs + a local
+  name). A scanner accepts either. Budget: the 31-byte scan response
+  minus the 18-byte 128-bit service-data header = 13 bytes, so the page
+  clips the callsign to 8 UTF-8 bytes on a character boundary — for BOTH
+  platforms, so a room reads the same whichever phone hosts it. The
+  advertisement is non-connectable on Android (nothing to connect to;
+  a stray central connecting would pause advertising); iOS peripherals
+  are always connectable, harmlessly.
+- **Page flow**: `room_created` → `pegNearby.advertise(code, callsign)`;
+  `peer_joined` or any teardown → `stop`. The Join screen scans while
+  it is up and the module is idle (a screen-change watcher on
+  `showScreen`/`closeMenu`), one row per code updated in place (the
+  picker's DOM-stability rule), rooms unheard for 6 s drop off (both
+  shells report repeated advertisements: `AllowDuplicates` on iOS,
+  `SCAN_MODE_LOW_LATENCY` on Android), and a failed join (expired room)
+  resumes the scan. Both platforms request the Bluetooth permission
+  LAZILY on the first advertise/scan — the game never prompts at launch.
+- **Android**: `NearbyBridge.kt`; only the Android 12+ runtime
+  permissions (`BLUETOOTH_ADVERTISE`, `BLUETOOTH_SCAN` flagged
+  `neverForLocation`); **no location permission is declared**, so
+  scanning is `unsupported` on Android 11 and older (hosting still
+  advertises there — install-time `BLUETOOTH_ADMIN`). A Play listing
+  therefore needs no location declaration.
+- **iOS**: `NearbyBridge.swift` + `NSBluetoothAlwaysUsageDescription`.
+  Foreground only in practice: a backgrounded iOS peripheral drops its
+  local name and moves the UUID to the overflow area, which Android
+  scanners cannot read — a host who switches apps while waiting is
+  invisible to Android guests until they come back.
+- **Not verified on hardware yet**: the two bridges were written without
+  an SDK/Xcode in the session; `android-build.yml` / `ios-build.yml`
+  compile them on the PR, and the first phone-to-phone test is the real
+  proof. The page half is covered headless against a fake bridge.
 
 ## Out of scope (do not build)
 
