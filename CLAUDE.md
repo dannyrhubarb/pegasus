@@ -271,7 +271,9 @@ attribution reaches the game page, whose analytics reads `utm_*` from
 ITS URL; the #148 `?join=` invites will too). No returning-player
 detection (a "Continue playing" variant was tried and dropped, owner
 call 2026-09: the link is the quiet secondary route, so the wording
-change bought nothing). Static and backend-free by design;
+change bought nothing). Otherwise static: the one backend touch is the
+fire-and-forget visit/tap counting described under "Landing page
+analytics" (nothing is awaited, no link waits on it, no config = silence).
 `landing.html` and `badges/` are WEB_ONLY in `check-bundle-sync.py` (a
 shell IS the game). Old bookmarks and PWA
 installs of the root land on the landing page — one extra tap, once.
@@ -359,8 +361,8 @@ push-retry loop for concurrent deploys):
 - `fonts/` — the **vendored menu webfont**: `jetbrains-mono.woff2` (latin variable, wght 400–800) + its `OFL.txt`, loaded via `@font-face` by `index.html`/`editor.html` so every platform renders the same face (see the menu-font note under "Game menu"); in all three bundle copy lists
 - `editor.html` — the **standalone level editor** (issue #89 v1, 2026-07): draws hand-drawn `.level` worlds — the same `poly`/`pad`/`start` representation The Hollows uses — on a pan/zoom canvas. Self-contained like `index.html` (no CDNs), copied by `build-site`. **Deliberately UNLINKED from the game UI** (owner decision pre-merge): it lives at its own path with no menu button and no picker row; the game only meets it through the `?custom=1` test-fly handoff. **While it stays unlinked, editor commits carry NO `Whats-new:` trailers** (the changelog must not advertise an unannounced feature — the PR #110 branch had its trailers stripped before merge; give the editor one proper entry when it's linked up for real). See "Level editor & custom drafts" under "Levels"
 - `tools/gen-third-party-licenses.py` + `third-party-licenses.html` — the generated third-party attribution page served with the site and linked from the About screen; regenerate when `Cargo.lock` changes (see "License")
-- `privacy.html` — standalone privacy policy served with the site at the ROOT (`https://pegasusmoonlander.com/privacy.html` — the store listings' privacy-policy URL, so it never moves; also copied next to the game in `play/` and bundled into both apps); same substance as the About screen's `#privacy-note` — keep the two in agreement when the analytics story changes
-- `landing.html` + `badges/` — the **landing page** served at the site root as `index.html` (the official App Store / Google Play badges + a quiet "play in your browser" link → `play/`, where the game lives since 2026-09 — see "Site layout" under "Deploy pipeline & PR previews"). Self-contained, static, web-only
+- `privacy.html` — standalone privacy policy served with the site at the ROOT (`https://pegasusmoonlander.com/privacy.html` — the store listings' privacy-policy URL, so it never moves; also copied next to the game in `play/` and bundled into both apps); same substance as the About screen's `#privacy-note` — keep the two in agreement when the analytics story changes — plus the "The website's front page" section, which covers the landing page's visit/tap counting (that one has no in-game twin)
+- `landing.html` + `badges/` — the **landing page** served at the site root as `index.html` (the official App Store / Google Play badges + a quiet "play in your browser" link → `play/`, where the game lives since 2026-09 — see "Site layout" under "Deploy pipeline & PR previews"). Self-contained and web-only; its own small analytics snippet counts visits and link taps (see "Landing page analytics" under "Analytics")
 - `app-policy.json` — the **checked-in update/config policy** every client fetches at launch (`{}` = no verdicts): **the remote lever over ALREADY-INSTALLED apps and stale web tabs** — commit a `config` override to repoint old installs at a moved backend with no store release, a `minBuild`/`minVersion` wall for a genuinely breaking change, or a `recommendBuild`/`recommendVersion` nudge (same screen with a Not-now button) for an update that is strongly advised but not required. **Reach for this whenever a backend move or compatibility break is being planned** (it exists because the #171 migration had no such lever and drained for weeks — pegasus-backend#38); see "App update policy" under "Game menu"
 - `tools/build-wasm.sh` + `tools/build-site.sh` + `rust-toolchain.toml` — the **reproducible build recipe** (see "Reproducible builds" under "Build & deploy"): pinned rustc, pinned Binaryen `wasm-opt` (sha256-verified download), path remapping; `build-site.sh` is what the deploy, the previews and the CI twice-build check all run; `icon-512/192/180.png` are its committed icon renders
 - `tools/version.sh` — **the one version source** (tag-derived, see "Versioning" under "Build & deploy"): `1.3.0+14` full form / `--marketing` (the tag), used by `build-site`, both `sync-web.sh` and the store release workflows
@@ -1212,6 +1214,105 @@ degrades to silence.
   "fix" this to a Blob typed `application/json`**: that forces a preflight
   sendBeacon handles inconsistently; the lambda parses the raw body and
   ignores content-type by design.
+
+### Landing page analytics (2026-09)
+The marketing page at the site root counts **visits and which link is
+tapped** through the same `POST /v1/events` pipeline, from its own small
+snippet in `landing.html` — a separate `<script>` tag (script tags parse
+independently, so an error in either it or the query-forwarding snippet
+can never kill the other), every entry point try/caught, nothing awaited
+and no link gated on it. The page stays self-contained by design, so the
+device/acquisition parsing is a trimmed COPY of `index.html`'s
+`deviceInfo()`/`acquisition()` rather than a shared file — **keep the two
+in agreement**.
+- **It counts visits and NOTHING else — no identifier, no storage**
+  (owner decision 2026-09). The page sets no cookie, writes nothing to
+  `localStorage`/`sessionStorage` and **reads nothing from them either**:
+  no visitor id, no device id, and deliberately NOT the game's consented
+  returning-player id, which an earlier cut piggybacked on. Even the
+  developer override is a **query param** (`?pegasus_analytics_debug=1`),
+  not the game's localStorage key, precisely so the "touches no device
+  storage at all" property stays literally true. **That property is the
+  no-cookie-banner position**: the EU rule that forces a banner
+  (ePrivacy Art. 5(3)) is about storing or reading information on the
+  user's device, and this page does neither, so there is nothing to ask
+  permission for — only something to disclose, which `privacy.html`'s
+  "The website's front page" section does. Keep it that way: **adding any
+  storage or any identifier to this page re-opens the consent question**.
+- **A visit is one page load a human looked at**, de-duplicated WITHOUT
+  storage: `performance.getEntriesByType("navigation")[0].type` says
+  whether the load is a fresh `navigate`, a `reload` or a `back_forward`
+  restore, so a reload and the back-swipe out of `play/` are skipped —
+  the same de-duplication a sessionStorage latch gave, with nothing
+  written or read (an unknown type counts as a visit: the check can only
+  ever drop one, never invent one). A skipped load's **taps are skipped
+  with it**, so every counted tap belongs to a counted visit and the
+  funnel percentages are real. The view is also deferred until
+  `visibilityState === "visible"`, which drops prerenders and background
+  tabs that are never opened. The same person tomorrow, or in a second
+  tab, still counts twice — the dashboard says "visits", not "people",
+  and that is the honest ceiling of a page that identifies no one.
+- **Bots are FLAGGED, not dropped** (so they can be measured instead of
+  silently inflating or silently vanishing): `botKind()` classifies
+  declared, JS-running bots from UA TOKENS only — the raw string still
+  never leaves the device — into `search` / `preview` (a share into
+  Slack or Discord fetches the page) / `ai` / `tool` / `headless` /
+  `other`. A flagged view carries **only** its kind: no device enums, no
+  acquisition, no clicks, and it is sent immediately rather than gated
+  on visibility or navigation type (a crawler's renderer satisfies
+  neither). The backend keeps them out of `visits` entirely and tallies
+  them in `landing.bots`. **Read the number as a FLOOR, not a census**:
+  most crawlers never execute a line of JS and so never reach this code
+  (GitHub Pages gives us no server logs to see them in), and a bot that
+  wants to look human simply omits the token. `navigator.webdriver` now
+  classifies as `headless` here instead of dropping the traffic — the
+  game's own analytics still DROPS webdriver sessions, which is the
+  right call there (a bot fleet looping the game would distort plays)
+  and the wrong one here (crawler volume on a marketing page is itself
+  the signal).
+- **Events**: `landing_view` (device enums + acquisition props, same
+  shape as `session_start`, or just `bot`) and `landing_click` per tap,
+  `target` read from the element's **`data-an`** attribute by ONE
+  delegated capture-phase listener — `ios` / `android` / `play` /
+  `privacy` / `licenses` / `github`, a closed enum backend-side. The
+  listener only reads an attribute (no `preventDefault`), so a tap
+  behaves identically with analytics off, blocked or broken. **`android`
+  is on the dead coming-soon Play badge**: its taps are the
+  Android-demand signal, and the markup comment says to KEEP the hook
+  when the badge flips back to a link.
+- **Plumbing**: `__GIT_REVISION__` is stamped into `site/index.html` by
+  `build-site.sh` (the same perl line as the game page) — it is the
+  envelope's `build`, and an un-stamped placeholder is how a local
+  checkout recognises itself and stays silent. `config.json` is fetched
+  RELATIVE at `./play/config.json` — the deploy writes ONE copy, next to
+  the game, and the same relative path resolves from the site root and
+  from a `pr-<n>/` preview alike; no file (fork, local checkout, backend
+  variable unset) = permanent silence. Env tagging (`prod`/`preview`/
+  `dev`) and the text/plain no-preflight body follow the game's rules. A
+  click flushes via `sendBeacon` because it is already navigating away;
+  a tap in the sub-second before `config.json` resolves is lost with the
+  navigation, the accepted cost of never blocking a link.
+- **Backend**: the two events are allowlisted in `events.rs` and
+  aggregated APART from the game funnel (`stats.rs` tallies them and
+  `continue`s before any session bookkeeping — see the backend
+  CLAUDE.md), with their own dashboard section carrying the page's own
+  **session-unique funnel** (visits → tapped a link → tapped a way IN,
+  i.e. a store badge or the browser build; the footer links are taps but
+  not someone going to play).
+- **The landing → game join is NOT built** (and needs a decision): the
+  browser link is a same-origin navigation, so the game page sees no
+  referrer and starts its own session — "visits that actually flew" is
+  therefore not answerable today. The storage-free way to get it is a
+  marker on the link (`play/?from=landing`) plus one optional prop on
+  `session_start`; it costs a visible URL param and a game-page change,
+  so it was left out rather than decided unilaterally.
+- Verified headless (scratch Playwright, 31 checks): one view per visit
+  with no identifier in the envelope, all three storage surfaces empty
+  after a visit, the reload/back-navigation/fresh-navigation cases, every
+  link reporting its target AND still navigating, the dead Play badge
+  reporting without becoming a link, four bot kinds flagged with only
+  their kind and no clicks, and a missing `config.json` producing
+  silence with no page errors.
 
 ### Client log & bug reports (2026-08)
 `window.pegLog` — a standalone `<script>` between the boot guard and the
