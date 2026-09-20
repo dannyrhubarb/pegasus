@@ -2882,8 +2882,14 @@ backend-verification flow.
   `pegMP.inRace()` the ui-state poll's wrap-up is `pegMP.respawn()` — the
   submit dialog first as usual, closed through the `"mp-respawn"`
   pseudo-target (`closeNameDialog`); the consent detour stays out of the
-  room flow. A reset-cause end restarts the outgoing stream directly from
-  the run watcher (no dialog on resets). Leaving: the pause screen's Exit
+  room flow. **The outgoing stream timer runs from the gun until the
+  room's teardown** — it is NOT stopped at a run end (2026-09, the
+  rebase onto main's auto-fly-again): the wasm queues the respawn
+  marker on every reset path, including the game's own DNF respawn on a
+  time level, which never reaches the game-over poll, so any JS-side
+  "resume the stream on respawn" misses it; a timer that simply keeps
+  draining finds the mirror empty between runs and costs nothing.
+  Leaving: the pause screen's Exit
   calls `pegMP.leaveRoom()` BEFORE the reset (teardown first ⇒ no respawn
   marker is sent; the peer gets a clean disconnect) and restores the
   level's original text so a pinned random seed re-rolls in solo play.

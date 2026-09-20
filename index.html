@@ -5714,21 +5714,15 @@
             ? (cause === "complete" ? ticks / 120 : null)
             : wasm_exports.run_end_dist();
           dcSend({ t: "run_end", cause, score });
-          clearInterval(sendTimer); // one last drain below, then quiet
-          try {
-            if (dc && dc.readyState === "open" && wasm_exports.mp_out_take) {
-              const len = wasm_exports.mp_out_take();
-              if (len > 0) {
-                dc.send(new Uint8Array(wasm_memory.buffer, wasm_exports.mp_out_ptr(), len).slice());
-              }
-            }
-          } catch (_) {}
-          // A manual mid-run restart (R / ⟳) is just a quick respawn in
-          // the persistent room: the wasm already reset and queued the
-          // in-band respawn marker — resume the stream right away. Ended
-          // runs (crash/fuel/complete) resume it from respawn() after the
-          // wrap-up instead.
-          if (cause === "reset") startStreaming();
+          // The outgoing stream keeps draining across the run end: the
+          // ended run's last batch and the in-band respawn marker the
+          // wasm queues on EVERY reset path — the R / ⟳ quick restart,
+          // Fly again after the wrap-up, and the game's own auto-fly-again
+          // respawn on a time level's DNF, which never reaches the
+          // game-over poll (so a JS-side "resume on respawn" would miss
+          // it) — all ride the same timer. Between runs the wreck ticks
+          // nothing, so an idle timer just finds the mirror empty; the
+          // room's teardown is what stops it.
         } catch (_) {}
       }, 200);
 
