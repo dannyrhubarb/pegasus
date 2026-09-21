@@ -3145,13 +3145,19 @@ re-acquired on the `visibilitychange` back while still wanted).
   upload — the build reaches TestFlight's INTERNAL testers by itself (an
   internal group with automatic distribution needs no Beta App Review),
   and external testing is the owner's manual promotion in App Store
-  Connect. The hands-free external path is an OPT-IN: the `external`
+  Connect. The hands-free group path is an OPT-IN: the `external`
   dispatch input (forwarded as `ios_external` by the Release apps
   wrapper; a tag push never sets it) runs `ios/testflight-distribute.py`
   (ASC API, same key), which waits out Apple's
-  build processing, submits the build to Beta App Review and attaches it
-  to the beta group named by the `TESTFLIGHT_GROUP_NAME` repo variable
-  (default "Public beta") — external testers get that build hands-free;
+  build processing and attaches the build to a beta group — the `group`
+  dispatch input (2026-09, a one-off build for a named circle, e.g. the
+  "Alpha" internal group from a PR branch: dispatch the workflow on
+  that branch with `external` + `group`), else the
+  `TESTFLIGHT_GROUP_NAME` repo variable (default "Public beta"). The
+  script reads the group's `isInternalGroup` and submits the build to
+  Beta App Review ONLY for an external group — an internal group needs
+  no review, and a PR build must never reach Apple's reviewers just to
+  reach the team. Testers get that build hands-free;
   a group that doesn't exist yet is a soft no-op, and the group ATTACH
   retries through ASC's propagation lag (a just-processed build can 404
   on the betaGroups relationship endpoint while /v1/builds already calls

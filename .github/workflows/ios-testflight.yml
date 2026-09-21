@@ -40,9 +40,13 @@ on:
   workflow_dispatch:
     inputs:
       external:
-        description: "Also submit to Beta App Review + attach to the external beta group (default: internal TestFlight only)"
+        description: "Also attach the build to a beta group (Beta App Review first when the group is external; default: internal TestFlight only)"
         type: boolean
         default: false
+      group:
+        description: "Beta group to attach to (needs `external`); empty = the TESTFLIGHT_GROUP_NAME repo variable, else \"Public beta\""
+        type: string
+        default: ""
   # Push trigger PAUSED — restore by uncommenting this block verbatim.
   # push:
   #   branches: [main]
@@ -207,20 +211,23 @@ jobs:
             -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
             -authenticationKeyPath "$HOME/private_keys/AuthKey_$ASC_KEY_ID.p8"
 
-      # OPT-IN external distribution (the `external` input; off by default —
-      # see the header): wait for Apple to process the build, submit it to
-      # Beta App Review, and attach it to the beta group so external testers
-      # (incl. the public link) get it with zero console clicks. The group
-      # name comes from the TESTFLIGHT_GROUP_NAME repo variable (default
-      # "Public beta"); a group that doesn't exist yet is a soft no-op. A
-      # run dispatched by release-apps.yml or a tag push leaves the input
-      # at its default, so those releases stop at internal testing.
-      - name: Submit to Beta App Review and assign the external group
+      # OPT-IN group distribution (the `external` input; off by default —
+      # see the header): wait for Apple to process the build and attach it
+      # to the beta group so its testers get it with zero console clicks —
+      # Beta App Review first when the group is EXTERNAL (the script reads
+      # the group's isInternalGroup; an internal group such as a named alpha
+      # circle needs no review and gets none). The group is the `group`
+      # input (a one-off dispatch to a specific circle), else the
+      # TESTFLIGHT_GROUP_NAME repo variable (default "Public beta"); a group
+      # that doesn't exist yet is a soft no-op. A run dispatched by
+      # release-apps.yml or a tag push leaves the input at its default, so
+      # those releases stop at internal testing.
+      - name: Assign the beta group (Beta App Review first for an external one)
         if: ${{ inputs.external == true }}
         env:
           BUNDLE_ID: se.danielfalk.pegasus
           BUILD_VERSION: ${{ github.run_number }}
-          GROUP_NAME: ${{ vars.TESTFLIGHT_GROUP_NAME || 'Public beta' }}
+          GROUP_NAME: ${{ inputs.group || vars.TESTFLIGHT_GROUP_NAME || 'Public beta' }}
         run: |
           python3 -m pip install --quiet --user PyJWT cryptography \
             || python3 -m pip install --quiet --break-system-packages PyJWT cryptography
