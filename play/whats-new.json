@@ -1,5 +1,10 @@
 [
  {
+  "rev": "682c3c8",
+  "date": "2026-09-21T09:40:44+02:00",
+  "note": "Fixed: Hand-drawn caves no longer sprout stray lit slivers of rock at sharp corners"
+ },
+ {
   "rev": "9f34297",
   "date": "2026-09-20T22:08:48+02:00",
   "note": "Dropped: The app's About screen no longer offers a \"Reload latest build\" button — the store keeps the app current"
