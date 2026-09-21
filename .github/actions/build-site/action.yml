@@ -10,10 +10,12 @@ inputs:
     required: true
   backend-config:
     description: >
-      JSON for site/config.json ({"apiBaseUrl": …, "replayBaseUrl": …} — the
+      JSON for site/config.json ({"apiBaseUrl": …, "replayBaseUrl": …, and
+      optionally "wsUrl" for the multiplayer signaling WebSocket} — the
       pegasus-backend stack's FrontendConfigJson output, stored in the
       BACKEND_CONFIG_JSON repo variable). Empty = no config.json is written
-      and the game runs with online scores disabled.
+      and the game runs with online scores disabled; no wsUrl = multiplayer
+      hidden.
     required: false
     default: ""
   apple-team-id:

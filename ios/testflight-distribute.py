@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Attach the just-uploaded TestFlight build to a beta group, hands-free.
 
-Runs as the OPT-IN external-distribution step of ios-testflight.yml (the
+Runs as the OPT-IN group-distribution step of ios-testflight.yml (the
 `external` dispatch input — off by default since 2026-09, releases stop
 at internal TestFlight testing): waits for App Store Connect to finish
 processing the build (matched by CFBundleVersion == the workflow run
-number), submits it to Beta App Review (no-op if a submission already
-exists), and adds it to the named beta group so external testers receive
-it without any console clicking.
+number), and adds it to the named beta group so its testers receive it
+without any console clicking. An EXTERNAL group needs a Beta App Review
+submission per build first (no-op if one already exists); an INTERNAL
+group (`isInternalGroup`, e.g. a named alpha circle of team members)
+needs none and gets none — a PR build must never land in front of
+Apple's reviewers just to reach the team.
 
 A missing group is a SOFT no-op (notice + exit 0): the group is created
 once, by hand, when public testing is first set up — until then the
@@ -105,18 +108,31 @@ def main():
     build_id = build["id"]
     print(f"Build {version} processed (id {build_id}).")
 
+    # Match the group by name client-side (filter[name] support varies).
+    # Looked up BEFORE the review submission: its type decides whether a
+    # submission is wanted at all.
+    groups = [g for g in get(f"/v1/betaGroups?filter[app]={app_id}&limit=200")["data"]
+              if g["attributes"]["name"] == group_name]
+    internal = bool(groups) and bool(groups[0]["attributes"].get("isInternalGroup"))
+    if internal:
+        print(f"Beta group '{group_name}' is internal — no Beta App Review needed.")
+
     # External distribution needs a Beta App Review submission per build.
     # 409 = one already exists — fine. 422 ANOTHER_BUILD_IN_REVIEW = an
     # earlier build's review is still pending (Apple allows one per train)
     # — a normal transient state, not a pipeline failure: skip the
     # submission, still attach to the group, and the next build (or a
     # manual re-run once the pending review completes) catches up.
-    status, detail = req(
+    # (A missing group is submitted like an external one — the old
+    # behaviour: uploaded and review-submitted, attach is the soft no-op.)
+    status, detail = (204, None) if internal else req(
         "POST", "/v1/betaAppReviewSubmissions",
         {"data": {"type": "betaAppReviewSubmissions", "relationships": {
             "build": {"data": {"type": "builds", "id": build_id}}}}},
         quiet_statuses=(409, 422))
-    if status in (200, 201):
+    if internal:
+        pass
+    elif status in (200, 201):
         print("Submitted for Beta App Review.")
     elif status == 409:
         print("Beta App Review submission already exists — fine.")
@@ -128,14 +144,11 @@ def main():
         print(f"::error::beta review submission rejected: {(detail or '')[:600]}")
         sys.exit(1)
 
-    # Match the group by name client-side (filter[name] support varies).
-    groups = [g for g in get(f"/v1/betaGroups?filter[app]={app_id}&limit=200")["data"]
-              if g["attributes"]["name"] == group_name]
     if not groups:
         print(f"::notice::no beta group named '{group_name}' — build uploaded "
               "and review-submitted, but not auto-assigned. Create the group "
-              "in App Store Connect (TestFlight → External Testing) and "
-              "future builds will attach automatically.")
+              "in App Store Connect (TestFlight → Internal/External Testing) "
+              "and future builds will attach automatically.")
         return
     group_id = groups[0]["id"]
 

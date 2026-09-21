@@ -10,6 +10,8 @@ import WebKit
 final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDelegate {
     private var webView: WKWebView!
     private var appBuildScript: WKUserScript!
+    private var nearbyFlagScript: WKUserScript!
+    private var nearby: NearbyBridge!
     private var didStartLoad = false
 
     // The status bar stays visible, drawn over the game's starfield (the
@@ -54,8 +56,19 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
             forMainFrameOnly: true
         )
         config.userContentController.addUserScript(appBuildScript)
+        // Nearby multiplayer rooms over Bluetooth LE (NearbyBridge): the
+        // page's pegNearby module feature-detects the __pegNearbyIos flag
+        // (postMessage has no synchronous return) and posts its commands to
+        // the handler. The bridge creates no CoreBluetooth manager — and so
+        // triggers no permission prompt — until the multiplayer screens'
+        // first command.
+        nearbyFlagScript = WKUserScript(
+            source: NearbyBridge.flagScript, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        config.userContentController.addUserScript(nearbyFlagScript)
 
         webView = WKWebView(frame: view.bounds, configuration: config)
+        nearby = NearbyBridge(webView: webView)
+        config.userContentController.add(nearby, name: NearbyBridge.handlerName)
         // Fill the WHOLE screen, not the safe area: the page uses
         // viewport-fit=cover and reads env(safe-area-inset-*) itself (the
         // in-game HUD and menu padding depend on the real notch insets).
@@ -107,6 +120,7 @@ final class GameViewController: UIViewController, WKNavigationDelegate, WKUIDele
         let ucc = webView.configuration.userContentController
         ucc.removeAllUserScripts()
         ucc.addUserScript(appBuildScript)
+        ucc.addUserScript(nearbyFlagScript)
         ucc.addUserScript(WKUserScript(
             source: js, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         // …and update the live page directly (rotation happens mid-session).

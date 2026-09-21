@@ -1019,6 +1019,103 @@
     #go-dist, #name-score { font: 800 clamp(32px, 8vw, 50px)/1.1 var(--mono); color: var(--amber); text-shadow: 0 0 16px rgba(255, 194, 75, 0.6); }
     #go-best { font-size: clamp(13px, 3.2vw, 16px); color: var(--dim); letter-spacing: 0.1em; }
 
+    /* --- Multiplayer ------------------------------------------------------
+       Shadow-race screens (host / join / lobby / results), the 3-2-1
+       countdown over the frozen game, and the mid-race notice banner. All
+       built from the existing menu idiom — .screen / .mbtn / .name-input /
+       .hint — with the room code and countdown as the only new displays. */
+    /* The room code: big, letter-spaced amber — made to be read across a
+       room (the alphabet already drops 0/O and 1/I). */
+    #mp-code {
+      font: 800 clamp(38px, 11vw, 64px)/1.1 var(--mono);
+      letter-spacing: 0.35em;
+      margin-right: -0.35em;
+      color: var(--amber);
+      text-shadow: 0 0 10px rgba(255, 194, 75, 0.8), 0 0 30px rgba(255, 194, 75, 0.4);
+    }
+    #mp-code-input { letter-spacing: 0.3em; }
+    /* Nearby rooms (app shells only — the shells' Bluetooth bridge): the
+       join screen's list of rooms heard over BLE, above the code box. Hidden
+       until the bridge exists; the list itself collapses while empty so the
+       "looking…" line sits right above the input. Rows reuse the picker's
+       .rowlist idiom. */
+    #mp-nearby { display: none; flex-direction: column; align-items: center; gap: 12px; width: 100%; }
+    #mp-nearby.on { display: flex; }
+    #mp-nearby-list:empty { display: none; }
+    #mp-nearby-list .row { border-color: rgba(255, 84, 214, 0.45); }
+    #mp-nearby-list .row .chev { color: var(--magenta); }
+    /* The host's "nearby players can see this room" line: magenta like the
+       multiplayer accents, dimmed to the .hint size. */
+    .mp-nearby-note { font-size: 13px; letter-spacing: 0.08em; color: var(--magenta); opacity: 0.85; }
+    .mp-nearby-note.warn { color: var(--amber); }
+    /* 3-2-1 countdown: floats over the live (frozen) game — purely visual,
+       pointer-events off; the game is held by set_ui_pause through it. */
+    #mp-countdown {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      z-index: 15;
+    }
+    #mp-countdown.on { display: flex; }
+    #mp-countdown span {
+      font: 800 clamp(90px, 30vw, 220px)/1 var(--mono);
+      color: var(--cyan);
+      text-shadow: 0 0 20px var(--cyan), 0 0 60px rgba(52, 231, 255, 0.6);
+    }
+    /* Connection-failure diagnosis (scr-mp-fail): the facts we gathered
+       about the failed WebRTC attempt, left-aligned monospace so the lines
+       read as a report, plus amber hint lines for the likely causes. */
+    .mp-diag {
+      width: min(440px, 88vw);
+      background: var(--panel);
+      border: 1.5px solid rgba(255, 90, 60, 0.45);
+      border-radius: 8px;
+      padding: 12px 16px;
+      font: 13px/1.7 var(--mono);
+      color: var(--text);
+      text-align: left;
+      letter-spacing: 0.03em;
+      white-space: pre-wrap; /* the report is newline-separated key/value lines */
+    }
+    #mp-fail-hints {
+      width: min(440px, 88vw);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      text-align: left;
+      font-size: 13px;
+      color: var(--amber);
+      letter-spacing: 0.04em;
+      line-height: 1.5;
+    }
+    #mp-fail-hints div::before { content: "▸ "; }
+
+    /* Mid-race notice (opponent disconnected — race void): same fixed-toast
+       idiom as #update-toast, magenta, non-interactive, auto-hides. */
+    #mp-banner {
+      position: fixed;
+      top: calc(var(--inset-top) + 64px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(8, 16, 34, 0.95);
+      border: 1.5px solid var(--magenta);
+      border-radius: 8px;
+      color: var(--magenta);
+      font: 700 14px/1.2 var(--mono);
+      letter-spacing: 0.06em;
+      padding: 12px 20px;
+      pointer-events: none;
+      z-index: 60;
+      opacity: 0;
+      transition: opacity 0.3s;
+      text-shadow: 0 0 8px var(--magenta);
+      box-shadow: 0 0 14px rgba(255, 84, 214, 0.5);
+    }
+    #mp-banner.show { opacity: 1; }
+
     /* "New build available" toast — GitHub Pages caches index.html for
        ~10 min, so a fresh deploy can serve a stale page; version.json is
        fetched with the cache bypassed and a mismatch shows this. */
@@ -1292,6 +1389,9 @@
       </svg>
       <div class="mbtn primary" id="btn-fly">Fly</div>
       <div class="mbtn" id="btn-scores">High scores</div>
+      <!-- Shown only when config.json carries a wsUrl (the multiplayer
+           signaling endpoint) — offline builds and forks never see it. -->
+      <div class="mbtn" id="btn-mp" style="display:none">Multiplayer</div>
       <div class="mbtn" data-goto="scr-settings">Settings</div>
       <div class="mbtn" data-goto="scr-about">About</div>
     </div>
@@ -1597,12 +1697,86 @@
       <div class="mbtn back" id="btn-update-skip" style="display:none">Not now</div>
     </div>
 
+    <!-- Multiplayer (P2P shadow race — see docs/multiplayer-p2p.md): host /
+         join / lobby / results screens. The match itself runs over a WebRTC
+         DataChannel; these screens only drive room setup and the wrap-up. -->
+    <div class="screen" id="scr-mp">
+      <div class="h2">MULTIPLAYER</div>
+      <div class="hint">Race a friend through the same cave &mdash; no collisions,
+        first to the better score wins</div>
+      <div class="mbtn primary" id="btn-mp-host">Host game</div>
+      <div class="mbtn" id="btn-mp-joinscr">Join game</div>
+      <div class="mbtn back" data-goto="scr-home">&#8249; Back</div>
+    </div>
+
+    <div class="screen" id="scr-mp-host">
+      <div class="h2">ROOM CODE</div>
+      <div id="mp-code">&middot;&middot;&middot;&middot;&middot;</div>
+      <div class="hint">Your friend picks Multiplayer &rarr; Join game and types this code
+        &mdash; or send them the invite link</div>
+      <!-- Share sheet where the browser has one (navigator.share), else
+           copies the ?join= link to the clipboard. Hidden until the room
+           code exists. -->
+      <div class="mbtn" id="btn-mp-share" style="display:none">Share invite link</div>
+      <!-- Nearby discovery (app shells only): while the room is open the
+           shell advertises its code over Bluetooth LE, so a friend's phone
+           lists it on their Join screen — no code to read out. Filled by
+           pegMP from pegNearby's state; hidden on the website (no bridge). -->
+      <div class="mp-nearby-note" id="mp-host-nearby" style="display:none"></div>
+      <div class="hint" id="mp-host-status">Contacting mission control&hellip;</div>
+      <div class="mbtn primary" id="btn-mp-pick" style="display:none">Choose level</div>
+      <div class="mbtn back" id="btn-mp-host-back">&#8249; Cancel</div>
+    </div>
+
+    <div class="screen" id="scr-mp-join">
+      <div class="h2">JOIN GAME</div>
+      <!-- Nearby rooms (app shells only): rooms heard over Bluetooth LE
+           while this screen is up; a tap joins that room straight away —
+           the same join as typing its code. Hidden on the website. -->
+      <div id="mp-nearby">
+        <div class="hint" id="mp-nearby-status">Looking for games nearby&hellip;</div>
+        <ul class="rowlist" id="mp-nearby-list"></ul>
+      </div>
+      <div class="hint" id="mp-join-hint">Type the host's room code</div>
+      <input class="name-input" id="mp-code-input" maxlength="5" autocomplete="off"
+             autocapitalize="characters" spellcheck="false" enterkeyhint="go"
+             placeholder="CODE">
+      <div class="hint" id="mp-join-status"></div>
+      <div class="mbtn primary" id="btn-mp-join">Join</div>
+      <div class="mbtn back" id="btn-mp-join-back">&#8249; Back</div>
+    </div>
+
+    <div class="screen" id="scr-mp-lobby">
+      <div class="h2">LOBBY</div>
+      <div class="hint" id="mp-lobby-status">Connecting&hellip;</div>
+      <div class="mbtn back" id="btn-mp-lobby-back">&#8249; Leave</div>
+    </div>
+
+    <!-- WebRTC connection failure: the diagnosis screen. Filled by
+         pegMP.showConnectFail with the facts gathered during the attempt
+         (relay availability, candidate types, what arrived from the peer)
+         and hints for the usual culprits — no TURN, UDP-blocking networks,
+         VPNs / iCloud Private Relay (the 2026-08 field case). -->
+    <div class="screen" id="scr-mp-fail">
+      <div class="title crash">LINK FAILED</div>
+      <div class="hint">The room worked, but a direct game link between the two
+        devices couldn't be established</div>
+      <div class="mp-diag" id="mp-fail-info"></div>
+      <div id="mp-fail-hints"></div>
+      <div class="mbtn back" id="btn-mp-fail-back">&#8249; Back</div>
+    </div>
+
     <!-- CRT scanlines + vignette + sweep, over everything but tap-transparent -->
     <div class="crt" aria-hidden="true"></div>
   </div>
 
   <!-- Stale-cache reload toast (hidden until a newer version.json is seen) -->
   <div id="update-toast" role="button">⟳ New build available — tap to reload</div>
+
+  <!-- Multiplayer race-start countdown (over the frozen game) + the
+       mid-race notice banner (opponent lost) — both purely visual. -->
+  <div id="mp-countdown" aria-hidden="true"><span id="mp-count-num">3</span></div>
+  <div id="mp-banner" aria-live="polite"></div>
 
   <script>
     // Boot guard — deliberately in its OWN <script> tag: script tags parse
@@ -2020,6 +2194,14 @@
     let walled = false;
     let wallPolicy = null;
     let nagPolicy = null;
+    // Screen-change watchers (modules that start/stop something per screen
+    // — the multiplayer module's nearby scan, see pegMP). Called with the
+    // screen id, or null when the menu closes; each call is try/caught so a
+    // watcher can never break navigation.
+    const screenWatchers = [];
+    function notifyScreen(id) {
+      for (const f of screenWatchers) { try { f(id); } catch (_) {} }
+    }
     function showScreen(id) {
       if (!walled && wallPolicy && id !== "scr-update") armWall(wallPolicy);
       if (walled && id !== "scr-update") id = "scr-update";
@@ -2040,6 +2222,7 @@
       if (id === "scr-scores") renderScores();
       syncWakeLock();
       pegAnalytics.screen(id); // funnel signal (consecutive-deduped inside)
+      notifyScreen(id);
       syncHistory();
     }
     function closeMenu() {
@@ -2051,6 +2234,7 @@
       hudBtns.classList.add("on");
       setPause(0);
       syncWakeLock();
+      notifyScreen(null);
       syncHistory();
     }
 
@@ -2164,7 +2348,10 @@
     function openLevelPicker(mode) {
       levelPickerMode = mode;
       if (!levelFiles.length) {
+        // No level list: fly/scores fall through to the built-in level; a
+        // multiplayer host can only race the level already loaded.
         if (mode === "scores") showScreen("scr-scores");
+        else if (mode === "mp") pegMP.hostPickedLevel(currentLevelFile);
         else closeMenu();
         return;
       }
@@ -2183,8 +2370,12 @@
     document.getElementById("btn-fly").addEventListener("click", () => openLevelPicker("fly"));
     document.getElementById("btn-resume").addEventListener("click", closeMenu);
     document.getElementById("btn-exit").addEventListener("click", () => {
-      // Abandoning the run ends it (reset-ended runs are never submitted
-      // online); the fresh ship waits, paused, behind the menu.
+      // In a multiplayer room this IS the active "leave the room" choice
+      // (torn down BEFORE the reset below, so no respawn marker is sent
+      // and the peer gets a clean disconnect). Abandoning the run ends it
+      // (reset-ended runs are never submitted online); the fresh ship
+      // waits, paused, behind the menu.
+      pegMP.leaveRoom();
       call("ui_command", 1);
       showScreen("scr-home");
     });
@@ -2308,6 +2499,13 @@
         case "scr-name":     return nameReturnTo === "scr-settings"
           ? ["scr-home", "scr-settings", "scr-name"] // the Settings name editor
           : ["scr-home", "game", "scr-name"];        // the crash-flow submit ask
+        // Multiplayer: host/join/lobby hang under the multiplayer menu;
+        // the results screen belongs to the race flight it wraps up.
+        case "scr-mp":         return ["scr-home", "scr-mp"];
+        case "scr-mp-host":    return ["scr-home", "scr-mp", "scr-mp-host"];
+        case "scr-mp-join":    return ["scr-home", "scr-mp", "scr-mp-join"];
+        case "scr-mp-lobby":   return ["scr-home", "scr-mp", "scr-mp-lobby"];
+        case "scr-mp-fail":    return ["scr-home", "scr-mp", "scr-mp-fail"];
         default:             return ["scr-home", s]; // future screens: child of home
       }
     }
@@ -2457,6 +2655,16 @@
         // scr-gameover.
         collectEndedRun();
         pegAnalytics.pollRuns();
+        // In a multiplayer room the wrap-up is a RESPAWN, not a screen:
+        // the room is persistent — after the optional submit dialog the
+        // player flies again in the shared world until they actively
+        // leave. The consent detour stays out of the room flow.
+        if (pegMP.inRace()) {
+          if (pendingSubmit) openNameDialog("mp-respawn");
+          else pegMP.respawn();
+          prevState = st;
+          return;
+        }
         // Auto fly again (Settings, off by default) — FALLBACK path: the
         // game normally respawns a time level's DNF itself at the impact /
         // fuel-out tick and never reaches state 2 (see applyAutoFlySetting);
@@ -3326,6 +3534,13 @@
             showScreen("scr-scores");
             return;
           }
+          if (levelPickerMode === "mp") {
+            // Multiplayer host choosing the race level: hand it to the
+            // module (it transmits the level and starts the countdown) —
+            // no persisted selection, the race push is its own thing.
+            pegMP.hostPickedLevel(file);
+            return;
+          }
           localStorage.setItem("pegasus_level", file);
           pushLevel(file); // no-op if it's already the loaded level
           closeMenu();     // ...and fly it
@@ -3334,8 +3549,12 @@
       }
     }
 
-    function pushLevel(file) {
-      const text = levelTexts[file];
+    // `textOverride` is the multiplayer race push: the host transmits the
+    // level text wholesale (with `seed = random` pinned to a concrete roll,
+    // so both peers fly the same rock) and both sides load THAT text under
+    // the level's normal file key — levelTexts keeps the original.
+    function pushLevel(file, textOverride) {
+      const text = textOverride !== undefined ? textOverride : levelTexts[file];
       if (text === undefined) return;
       const push = () => {
         if (typeof wasm_exports === "undefined" || !wasm_exports.load_level) return false;
@@ -3943,6 +4162,7 @@
         // misroute the live site during a shell-targeted policy window.
         const c = (appShell && policyConfig(policy)) || baked;
         pegAnalytics.configure(c); // analytics needs only apiBaseUrl
+        pegMP.configure(c);        // multiplayer needs only wsUrl
         if (!c || !c.apiBaseUrl || !c.replayBaseUrl) return;
         backendCfg = c;
         scoresPeriodRow.style.display = "";
@@ -4040,6 +4260,12 @@
     // The submit-score dialog doubles as the Settings name editor: with a
     // pending run it submits on save, without one it just persists the name.
     let nameReturnTo = "scr-gameover";
+    // In a multiplayer room the dialog's exit is a respawn, not a screen
+    // (the room is persistent) — "mp-respawn" is that pseudo-target.
+    function closeNameDialog() {
+      if (nameReturnTo === "mp-respawn") pegMP.respawn();
+      else showScreen(nameReturnTo);
+    }
     function openNameDialog(returnTo) {
       nameReturnTo = returnTo;
       // Big amber score readout like the game-over screen; empty (zero
@@ -4065,7 +4291,7 @@
         submitScore(pendingSubmit.file, pendingSubmit.entry);
         pendingSubmit = null;
       }
-      showScreen(nameReturnTo);
+      closeNameDialog();
     });
     document.getElementById("btn-name-skip").addEventListener("click", () => {
       // Only the crash-flow ask counts as a skip — closing the Settings
@@ -4075,7 +4301,7 @@
           { action: "skipped", level: levelStem(pendingSubmit.file) });
       }
       pendingSubmit = null; // this run stays unsubmitted; asks again next crash
-      showScreen(nameReturnTo);
+      closeNameDialog();
     });
     nameInput.addEventListener("keydown", e => {
       e.stopPropagation(); // typing must never reach the game's key handlers
@@ -4979,6 +5205,872 @@
     retidToggle.addEventListener("change", () => {
       pegAnalytics.setConsent(retidToggle.checked ? "accepted" : "revoked");
     });
+
+    // --- Nearby room discovery over Bluetooth LE (app shells only) --------
+    // Bluetooth carries DISCOVERY ONLY: a host's shell advertises the room
+    // code (+ a short callsign) in a BLE advertisement, a guest's shell
+    // scans and lists what it hears, and a tap on a row is the ordinary
+    // room-code join — signaling + the WebRTC DataChannel carry the game
+    // exactly as for a typed code. No GATT, no connection, no bytes over
+    // Bluetooth, so nothing here touches the wasm, the sim or the backend.
+    // The plain website has no bridge (Web Bluetooth can't scan for
+    // advertisements or advertise at all, and neither WebView exposes it),
+    // so `available()` is false there and none of this runs. Bridges:
+    // Android `window.PegasusNearby.cmd(json)` (NearbyBridge.kt), iOS the
+    // `pegasusNearby` WKScriptMessageHandler + the `__pegNearbyIos`
+    // document-start flag (NearbyBridge.swift). Events come back through
+    // `pegNearby._on({ev, …})`. Same never-break-the-game rules as
+    // analytics: every entry point try/caught, everything degrades to off.
+    const pegNearby = (() => {
+      const CODE_RE = /^[A-Z0-9]{5}$/; // the join screen's own validation
+      // The advertisement payload is `<code><callsign>`. An Android host has
+      // 13 bytes of service data (31-byte scan response − the 18-byte
+      // 128-bit service-data header): the 5-char code + 8 bytes of name.
+      // The cap is applied HERE, for both platforms, so a room reads the
+      // same from an iPhone host (which could fit more in its local name).
+      const NAME_MAX_BYTES = 8;
+      const STALE_MS = 6000;   // a room unheard for this long leaves the list
+      const listeners = { state: [], rooms: [] };
+      let bridge = null;
+      let st = { state: "idle", reason: "" };
+      const rooms = new Map(); // code → { code, name, rssi, seen }
+      let sweepTimer = null;
+      function emit(k, v) { (listeners[k] || []).forEach(f => { try { f(v); } catch (_) {} }); }
+      function log(m) { try { if (window.pegLog) pegLog.add("nearby", m); } catch (_) {} }
+      try {
+        if (window.PegasusNearby && typeof PegasusNearby.cmd === "function") {
+          bridge = j => PegasusNearby.cmd(j);
+        } else if (window.__pegNearbyIos && window.webkit && webkit.messageHandlers &&
+                   webkit.messageHandlers.pegasusNearby) {
+          bridge = j => webkit.messageHandlers.pegasusNearby.postMessage(j);
+        }
+      } catch (_) { bridge = null; }
+      function call(cmd, args) {
+        if (!bridge) return false;
+        try { bridge(JSON.stringify(Object.assign({ cmd: cmd }, args || {}))); return true; }
+        catch (e) { log("bridge " + cmd + " failed: " + e); return false; }
+      }
+      // Cut a callsign to NAME_MAX_BYTES of UTF-8 on a character boundary
+      // (a byte-level cut could leave half a multibyte glyph).
+      function clipName(name) {
+        let out = "", bytes = 0;
+        for (const ch of String(name || "").trim()) {
+          const n = new TextEncoder().encode(ch).length;
+          if (bytes + n > NAME_MAX_BYTES) break;
+          out += ch; bytes += n;
+        }
+        return out;
+      }
+      function setState(next) { st = Object.assign({}, st, next); emit("state", st); }
+      function sweep() {
+        const cutoff = Date.now() - STALE_MS;
+        let dropped = false;
+        for (const [code, r] of rooms) if (r.seen < cutoff) { rooms.delete(code); dropped = true; }
+        if (dropped) emit("rooms", list());
+      }
+      function list() { return Array.from(rooms.values()); }
+      function _on(evt) {
+        try {
+          if (typeof evt === "string") evt = JSON.parse(evt);
+          switch (evt.ev) {
+            case "state":
+              if (evt.state !== "scanning") { clearInterval(sweepTimer); sweepTimer = null; rooms.clear(); emit("rooms", []); }
+              else if (!sweepTimer) sweepTimer = setInterval(sweep, 1000);
+              setState({ state: evt.state, reason: evt.reason || "" });
+              log("state " + evt.state + (evt.reason ? " (" + evt.reason + ")" : ""));
+              break;
+            case "adv": {
+              // `<code><callsign>`: the code is the identity — one row per
+              // room however many advertisements (or hosts' radios) carry it.
+              const text = String(evt.text || "");
+              const code = text.slice(0, 5).toUpperCase();
+              if (!CODE_RE.test(code)) break;
+              const cur = rooms.get(code);
+              const name = text.slice(5).trim();
+              const changed = !cur || cur.name !== name;
+              rooms.set(code, { code, name, rssi: evt.rssi | 0, seen: Date.now() });
+              if (changed) emit("rooms", list());
+              break;
+            }
+            case "error": log("error: " + evt.msg); break;
+          }
+        } catch (e) { log("event failed: " + e); }
+      }
+      return {
+        available: () => !!bridge,
+        state: () => st,
+        rooms: list,
+        // Host: advertise the room code + callsign until stop().
+        advertise: (code, name) => call("advertise", { text: String(code).toUpperCase() + clipName(name) }),
+        // Guest: listen for rooms until stop(); rows arrive via on("rooms").
+        scan: () => call("scan"),
+        stop: () => call("stop"),
+        on: (k, f) => { (listeners[k] || (listeners[k] = [])).push(f); },
+        _on: _on,
+      };
+    })();
+    window.pegNearby = pegNearby;
+
+    // --- Multiplayer (P2P shadow race; must NEVER break the game) --------
+    // Two players fly the SAME level (same world, same concrete seed) side
+    // by side, each in their own physics world — no ship–ship collision.
+    // The opponent renders in-game like the racing ghost, driven live by
+    // their input stream over a WebRTC RTCDataChannel (true P2P; ICE
+    // fallback direct/STUN → Cloudflare TURN). The backend WebSocket only
+    // does room pairing + opaque SDP/ICE relay and stays connected for the
+    // whole match (ICE restarts) — no game traffic ever crosses it.
+    // Feature-gated on config.json carrying wsUrl; absent = the Multiplayer
+    // button never appears. Styled after the analytics module: every entry
+    // point try/caught, everything degrades to feature-off — and latency
+    // or a dead network must never touch the local flight.
+    const pegMP = (() => {
+      const SEND_MS = 66; // input-batch cadence (~15 Hz; each batch is tiny)
+      const codeEl = document.getElementById("mp-code");
+      const hostStatus = document.getElementById("mp-host-status");
+      const joinStatus = document.getElementById("mp-join-status");
+      const lobbyStatus = document.getElementById("mp-lobby-status");
+      const codeInput = document.getElementById("mp-code-input");
+      const pickBtn = document.getElementById("btn-mp-pick");
+      const shareBtn = document.getElementById("btn-mp-share");
+      const hostNearby = document.getElementById("mp-host-nearby");
+      const nearbyEl = document.getElementById("mp-nearby");
+      const nearbyStatus = document.getElementById("mp-nearby-status");
+      const nearbyList = document.getElementById("mp-nearby-list");
+      const joinHint = document.getElementById("mp-join-hint");
+      const countEl = document.getElementById("mp-countdown");
+      const countNum = document.getElementById("mp-count-num");
+      const bannerEl = document.getElementById("mp-banner");
+
+      let wsUrl = null;          // stays null = feature off
+      let ws = null, pc = null, dc = null;
+      let iceServers = null;
+      let role = null;           // "host" | "guest"
+      let state = "idle";        // idle|hosting|joining|lobby|starting|racing
+      let peerName = "";
+      let peerBuild = "";
+      let raceFile = null;       // the level file the race runs on
+      let sendTimer = null, countTimer = null;
+      let lastEndSeq = null;     // run_end_seq at the gun (own-run watcher)
+      let bannerTimer = null;
+      // Link-attempt diagnostics for the failure dialog: was a TURN relay
+      // in the mix, which local candidate types were gathered (host = LAN,
+      // srflx = STUN-discovered public address, relay = TURN), and how many
+      // candidates the peer's side sent us. Cheap to collect, and exactly
+      // the facts that separate "no relay configured" from "network blocks
+      // UDP" from "the other side never reached us".
+      let connectTimer = null;   // setup watchdog: dialog if the link never opens
+      let dcOpened = false;
+      let hadTurn = false;
+      let cand = { host: 0, srflx: 0, relay: 0, remote: 0 };
+      const CONNECT_FAIL_MS = 25000; // past ICE's own give-up horizon
+
+      function banner(msg) {
+        try {
+          bannerEl.textContent = msg;
+          bannerEl.classList.add("show");
+          clearTimeout(bannerTimer);
+          bannerTimer = setTimeout(() => bannerEl.classList.remove("show"), 4000);
+        } catch (_) {}
+      }
+
+      // Invite links: the host shares ./?join=<CODE>; a guest landing with
+      // that param goes straight into the join flow once the config lands.
+      // The param is consumed and stripped from the URL immediately, so a
+      // later reload doesn't retry a long-dead room (codes die with the
+      // 2 h room TTL anyway).
+      let pendingJoin = null;
+      try {
+        const q = new URLSearchParams(location.search);
+        const j = (q.get("join") || "").trim().toUpperCase();
+        if (/^[A-Z0-9]{5}$/.test(j)) {
+          pendingJoin = j;
+          q.delete("join");
+          const qs = q.toString();
+          const clean = location.pathname + (qs ? "?" + qs : "") + location.hash;
+          history.replaceState(history.state, "", clean);
+        }
+      } catch (_) {}
+
+      // Fed by the ONE config.json fetch (like pegAnalytics.configure).
+      function configure(cfg) {
+        try {
+          if (wsUrl || !cfg || !cfg.wsUrl) return;
+          if (!window.RTCPeerConnection || !window.WebSocket) return;
+          wsUrl = String(cfg.wsUrl);
+          document.getElementById("btn-mp").style.display = "";
+          if (pendingJoin) {
+            const code = pendingJoin;
+            pendingJoin = null;
+            codeInput.value = code;
+            showScreen("scr-mp-join"); // errors (expired link…) land here
+            document.getElementById("btn-mp-join").click();
+          }
+        } catch (_) {}
+      }
+
+      function wsSend(obj) {
+        try {
+          if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+        } catch (_) {}
+      }
+      function dcSend(obj) {
+        try {
+          if (dc && dc.readyState === "open") dc.send(JSON.stringify(obj));
+        } catch (_) {}
+      }
+
+      // Close every network handle + the in-game race layer. Never touches
+      // the flight itself — callers decide what screen (if any) to show.
+      function teardownNet() {
+        try { clearInterval(sendTimer); } catch (_) {}
+        try { clearInterval(countTimer); } catch (_) {}
+        try { clearTimeout(connectTimer); } catch (_) {}
+        sendTimer = countTimer = connectTimer = null;
+        dcOpened = false;
+        try { countEl.classList.remove("on"); } catch (_) {}
+        try { if (dc) { dc.onmessage = dc.onclose = null; dc.close(); } } catch (_) {}
+        try { if (pc) { pc.onicecandidate = null; pc.close(); } } catch (_) {}
+        try {
+          if (ws) {
+            ws.onmessage = ws.onclose = ws.onerror = null;
+            wsSend({ action: "leave" });
+            ws.close();
+          }
+        } catch (_) {}
+        ws = pc = dc = null;
+        iceServers = null;
+        pendingCands = [];
+        call("set_mp_active", 0);
+        state = "idle";
+        try { pegNearby.stop(); } catch (_) {} // no room to advertise / no join to find
+        role = null;
+        lastEndSeq = null;
+        peerName = "";
+        peerBuild = "";
+      }
+
+      // Full exit (menus): tear down and restore the level's ORIGINAL text
+      // — the race may have loaded a seed-pinned copy of a `seed = random`
+      // level, which must not survive into solo play.
+      // Leaving the room is the ONE explicit exit from a persistent
+      // session: tear the network down (set_mp_active 0 — the wasm sweeps
+      // the opponent feed) and restore the level's original text, so a
+      // pinned random seed goes back to re-rolling in solo play. Safe to
+      // call when idle (no-op beyond the teardown bookkeeping).
+      function leaveRoom() {
+        try {
+          const file = raceFile;
+          raceFile = null;
+          teardownNet();
+          if (file && levelTexts[file] !== undefined) pushLevel(file);
+        } catch (_) {}
+      }
+
+      // Persistent room: after the local run wraps up (crash / fuel-out /
+      // completion → the optional submit dialog), respawn straight back
+      // into the shared world — no results screen, the room lives until
+      // someone actively leaves. The wasm reset queues the in-band respawn
+      // marker for the peer; here we just fire the respawn and resume the
+      // outgoing stream. If the room died while a dialog was up (peer
+      // gone → teardown), fall through to the normal solo game-over.
+      function respawn() {
+        try {
+          if (state !== "racing") { showScreen("scr-gameover"); return; }
+          uiCmdPending = true;   // see the ui-state poll's state-2 guard
+          call("ui_command", 1);
+          closeMenu();
+          startStreaming();
+        } catch (_) {}
+      }
+
+      function connectWs(onOpen) {
+        ws = new WebSocket(wsUrl);
+        ws.onopen = () => { try { onOpen(); } catch (_) {} };
+        ws.onmessage = e => {
+          try { onWsMessage(JSON.parse(e.data)); } catch (_) {}
+        };
+        ws.onclose = ws.onerror = () => {
+          // The socket only matters for setup + ICE restarts: during a
+          // race the DataChannel is P2P and survives on its own.
+          if (state === "hosting") hostStatus.textContent = "Lost mission control — try again";
+          if (state === "joining") joinStatus.textContent = "Lost mission control — try again";
+        };
+      }
+
+      // The connection failed before the game link ever opened: collect
+      // what we know into the diagnosis screen (scr-mp-fail), then tear
+      // down. The facts + hints are what made the 2026-08 field case
+      // (iCloud Private Relay silently eating a STUN-only attempt, "it just
+      // sat there") diagnosable from the phone itself.
+      function showConnectFail(reason) {
+        try {
+          let states = "";
+          try {
+            states = (pc ? pc.connectionState : "-") + " / ice " +
+              (pc ? pc.iceConnectionState : "-");
+          } catch (_) { states = "-"; }
+          const line = (k, v) =>
+            k.padEnd(16, " ") + " " + v;
+          document.getElementById("mp-fail-info").textContent = [
+            line("why", reason),
+            line("state", states),
+            line("relay (TURN)", hadTurn ? "available" : "NOT configured — STUN only"),
+            line("my candidates", "lan " + cand.host + " · public " + cand.srflx + " · relay " + cand.relay),
+            line("from opponent", cand.remote + " candidate" + (cand.remote === 1 ? "" : "s")),
+          ].join("\n");
+          const hints = [];
+          if (!hadTurn) {
+            hints.push("No relay server is configured, so only a DIRECT connection can work — strict/mobile networks need the TURN relay (run the backend's TURN bootstrap).");
+          }
+          if (cand.srflx === 0 && cand.relay === 0) {
+            hints.push("Your device never found its public address — this network may block UDP, or a proxy is in the way.");
+          }
+          if (cand.remote === 0) {
+            hints.push("Nothing arrived from the other player — they may have the same problem on their side, or they left.");
+          }
+          hints.push("VPNs and Apple iCloud Private Relay often block peer-to-peer games — try switching them off, or put both devices on the same Wi-Fi.");
+          const hEl = document.getElementById("mp-fail-hints");
+          hEl.textContent = "";
+          for (const h of hints) {
+            const d = document.createElement("div");
+            d.textContent = h;
+            hEl.appendChild(d);
+          }
+        } catch (_) {}
+        teardownNet();
+        showScreen("scr-mp-fail");
+      }
+
+      function makePeer() {
+        pc = new RTCPeerConnection({ iceServers: iceServers || [] });
+        dcOpened = false;
+        cand = { host: 0, srflx: 0, relay: 0, remote: 0 };
+        try { hadTurn = /"turns?:/.test(JSON.stringify(iceServers || [])); } catch (_) { hadTurn = false; }
+        // Setup watchdog: if the DataChannel hasn't opened by now, the
+        // attempt has genuinely failed (ICE gives up sooner) — diagnose
+        // instead of leaving both players staring at "connecting…".
+        clearTimeout(connectTimer);
+        connectTimer = setTimeout(() => {
+          if (!dcOpened) showConnectFail("timed out after " + (CONNECT_FAIL_MS / 1000) + " s");
+        }, CONNECT_FAIL_MS);
+        pc.onicecandidate = e => {
+          if (!e.candidate) return;
+          try {
+            const c = String(e.candidate.candidate || "");
+            if (/ typ host/.test(c)) cand.host++;
+            else if (/ typ srflx/.test(c)) cand.srflx++;
+            else if (/ typ relay/.test(c)) cand.relay++;
+          } catch (_) {}
+          wsSend({ action: "signal", payload: { candidate: e.candidate } });
+        };
+        pc.oniceconnectionstatechange = () => {
+          try {
+            // ICE restart while the signaling socket is up (a network
+            // change mid-match): the host re-offers, the relay carries it.
+            if (pc.iceConnectionState === "failed" && role === "host"
+                && ws && ws.readyState === 1 && pc.restartIce) {
+              pc.restartIce();
+            }
+          } catch (_) {}
+        };
+        pc.onconnectionstatechange = () => {
+          try {
+            if (pc.connectionState !== "failed") return;
+            // Failed before the game link ever opened = a connectivity
+            // problem worth diagnosing (scr-mp-fail); failed after = the
+            // peer is gone for real (the relay's peer_left usually lands
+            // first — the lambda fires it on $disconnect — this covers a
+            // dead relay).
+            if (!dcOpened) showConnectFail("connection failed");
+            else onPeerGone();
+          } catch (_) {}
+        };
+        if (role === "host") {
+          pc.onnegotiationneeded = async () => {
+            try {
+              await pc.setLocalDescription(await pc.createOffer());
+              wsSend({ action: "signal", payload: { sdp: pc.localDescription } });
+            } catch (_) {}
+          };
+        } else {
+          pc.ondatachannel = e => setupDc(e.channel);
+        }
+      }
+
+      // Candidates can outrun the SDP through the relay — queue them until
+      // the remote description lands, or addIceCandidate throws them away.
+      let pendingCands = [];
+      async function onSignal(payload) {
+        try {
+          if (!pc || !payload) return;
+          if (payload.sdp) {
+            await pc.setRemoteDescription(payload.sdp);
+            for (const c of pendingCands.splice(0)) {
+              await pc.addIceCandidate(c).catch(() => {});
+            }
+            if (payload.sdp.type === "offer") {
+              await pc.setLocalDescription(await pc.createAnswer());
+              wsSend({ action: "signal", payload: { sdp: pc.localDescription } });
+            }
+          } else if (payload.candidate) {
+            cand.remote++;
+            if (!pc.remoteDescription) pendingCands.push(payload.candidate);
+            else await pc.addIceCandidate(payload.candidate).catch(() => {});
+          }
+        } catch (_) {}
+      }
+
+      function onWsMessage(msg) {
+        switch (msg.type) {
+          case "room_created":
+            iceServers = msg.iceServers;
+            codeEl.textContent = msg.code;
+            hostStatus.textContent = "Waiting for a challenger…";
+            shareBtn.textContent = "Share invite link";
+            shareBtn.style.display = "";
+            // Nearby discovery (shells): put the code on the air, so a
+            // friend's Join screen lists this room with no code to type.
+            if (pegNearby.available()) pegNearby.advertise(msg.code, playerName() || "PILOT");
+            break;
+          case "room_joined":
+            iceServers = msg.iceServers;
+            joinStatus.textContent = "Connected — establishing link…";
+            makePeer(); // answerer: waits for the host's offer + channel
+            break;
+          case "peer_joined": // host side: the guest arrived — offer now
+            hostStatus.textContent = "Challenger found — connecting…";
+            pegNearby.stop(); // the room is full — off the air
+            makePeer();
+            dcInit(pc.createDataChannel("pegasus", { ordered: true }));
+            break;
+          case "signal":
+            onSignal(msg.payload);
+            break;
+          case "peer_left":
+            onPeerGone();
+            break;
+          case "error":
+            if (state === "joining") {
+              joinStatus.textContent = msg.error === "room_full"
+                ? "That room is already full"
+                : msg.error === "room_not_found" ? "No such room — check the code"
+                : "Mission control error — try again";
+              teardownNet();  // the attempt is over: back to idle on the join screen —
+                              // the radio's own stop event then resumes the nearby scan
+            } else if (state === "hosting") {
+              hostStatus.textContent = "Mission control error — try again";
+            }
+            break;
+        }
+      }
+
+      function dcInit(channel) { setupDc(channel); }
+      function setupDc(channel) {
+        dc = channel;
+        dc.binaryType = "arraybuffer";
+        dc.onopen = () => {
+          dcOpened = true;
+          clearTimeout(connectTimer);
+          connectTimer = null;
+          dcSend({ t: "hello", name: playerName() || "PILOT", build: wasmRev.startsWith("__") ? "dev" : wasmRev.slice(0, 8) });
+        };
+        dc.onclose = () => onPeerGone();
+        dc.onmessage = e => {
+          try {
+            if (typeof e.data === "string") { onDcJson(JSON.parse(e.data)); return; }
+            // Binary = an input/keyframe batch for the in-game remote feed.
+            pushBytesToWasm(new Uint8Array(e.data), "mp_push_remote");
+          } catch (_) {}
+        };
+      }
+
+      function onDcJson(m) {
+        switch (m.t) {
+          case "hello":
+            peerName = String(m.name || "PILOT").slice(0, 24);
+            peerBuild = String(m.build || "");
+            pushTextToWasm(peerName, "set_mp_name");
+            // Cross-build races lean on the keyframe snap — warn, don't block.
+            if (peerBuild && !wasmRev.startsWith("__")
+                && peerBuild !== wasmRev.slice(0, 8)) {
+              banner("DIFFERENT GAME BUILDS — POSITIONS MAY DRIFT");
+            }
+            if (role === "host") {
+              hostStatus.textContent = "PILOT " + peerName.toUpperCase() + " CONNECTED";
+              pickBtn.style.display = "";
+            } else {
+              state = "lobby";
+              lobbyStatus.textContent = "Connected to " + peerName.toUpperCase()
+                + " — waiting for the host to pick a level…";
+              showScreen("scr-mp-lobby");
+            }
+            break;
+          case "level": // guest: load the host's exact level text, report ready
+            if (role !== "guest") break;
+            prepareLevel(String(m.file || "race.level"), String(m.text || ""));
+            dcSend({ t: "ready" });
+            lobbyStatus.textContent = "Level loaded — get ready…";
+            if (overlay !== "scr-mp-lobby") showScreen("scr-mp-lobby");
+            break;
+          case "ready": // host: guest has the level — fire the gun
+            if (role !== "host") break;
+            dcSend({ t: "start" });
+            beginCountdown();
+            break;
+          case "start": // guest: the host's gun
+            if (role !== "guest") break;
+            beginCountdown();
+            break;
+          case "run_end": {
+            // Persistent room: the peer's ended run is a moment, not a
+            // screen — a transient banner with their result; their respawn
+            // marker (in-band on the binary stream) then resets the ghost
+            // for the next run. null score = a DNF, never a 0.0 s finish.
+            const sc = m.score === null || m.score === undefined ? null : Number(m.score);
+            const cause = String(m.cause || "crash");
+            const who = (peerName || "RIVAL").toUpperCase();
+            if (cause === "complete") {
+              banner(who + " FINISHED — " + fmtScore(raceFile, sc));
+            } else if (cause !== "reset") {
+              // A quick in-room restart (cause reset) passes silently.
+              banner(who + " CRASHED" + (sc !== null && !levelIsTime(raceFile)
+                ? " — " + fmtScore(raceFile, sc) : ""));
+            }
+            call("set_mp_remote_over");
+            break;
+          }
+        }
+      }
+
+      function onPeerGone() {
+        try {
+          if (state === "racing" || state === "starting") {
+            // Mid-race: the room degrades to a normal solo run — never
+            // block the player's own flight on network state.
+            teardownNet();
+            banner("OPPONENT LEFT — FLYING SOLO");
+          } else if (state !== "idle") {
+            const msg = "Opponent disconnected";
+            hostStatus.textContent = msg;
+            lobbyStatus.textContent = msg;
+            teardownNet();
+          }
+        } catch (_) {}
+      }
+
+      // Register + load a race level from raw text (both sides run this so
+      // the flow is identical): the wasm gets the transmitted text verbatim;
+      // levelTexts/levelNames only gain entries the guest was missing (a
+      // stale manifest must not block a race — the text travels wholesale).
+      function prepareLevel(file, text) {
+        raceFile = file;
+        if (!(file in levelTexts)) {
+          levelTexts[file] = text;
+          levelNames[file] =
+            ((text.match(/^\s*name\s*=\s*(.+)$/m) || [])[1] || file).trim();
+        }
+        pushLevel(file, text);
+      }
+
+      // Host picked the race level (from the picker in "mp" mode, or a
+      // rematch): pin a concrete seed on `seed = random` levels so both
+      // peers fly the SAME rock, transmit, and load the identical text
+      // locally. The countdown starts when the guest reports ready.
+      function hostPickedLevel(file) {
+        try {
+          let text = levelTexts[file];
+          if (text === undefined || !dc || dc.readyState !== "open") return;
+          if (/^\s*seed\s*=\s*random\s*$/mi.test(text)) {
+            const seed = (Math.floor(Math.random() * 0xffffffff) >>> 0) || 1;
+            text = text.replace(/^(\s*)seed\s*=\s*random\s*$/mi, "$1seed = " + seed);
+          }
+          prepareLevel(file, text);
+          dcSend({ t: "level", file, text });
+          hostStatus.textContent = "Waiting for " + (peerName || "the challenger").toUpperCase() + "…";
+          showScreen("scr-mp-host");
+        } catch (_) {}
+      }
+
+      // Both sides: fresh spawn behind a frozen sim, 3-2-1 over the live
+      // world, then the shared gun (mp_arm — it replaces the armed-idle
+      // first-input gate so both tick clocks start together; start skew is
+      // one network hop, invisible in a race).
+      function beginCountdown() {
+        try {
+          state = "starting";
+          call("set_mp_active", 1);
+          pushTextToWasm(peerName, "set_mp_name");
+          uiCmdPending = true;   // see the ui-state poll's state-2 guard
+          call("ui_command", 1); // fresh spawn on the (just-pushed) level
+          closeMenu();           // unpauses…
+          setPause(1);           // …but the countdown holds the sim frozen
+          let n = 3;
+          countNum.textContent = String(n);
+          countEl.classList.add("on");
+          clearInterval(countTimer);
+          countTimer = setInterval(() => {
+            try {
+              n--;
+              if (n > 0) { countNum.textContent = String(n); return; }
+              if (n === 0) {
+                countNum.textContent = "GO";
+                // The gun: unfreeze and arm both runs on this moment.
+                state = "racing";
+                lastEndSeq = (typeof wasm_exports !== "undefined" && wasm_exports.run_end_seq)
+                  ? wasm_exports.run_end_seq() : 0;
+                setPause(0);
+                call("mp_arm");
+                startStreaming();
+                return;
+              }
+              clearInterval(countTimer);
+              countTimer = null;
+              countEl.classList.remove("on");
+            } catch (_) {}
+          }, 800);
+        } catch (_) {}
+      }
+
+      // Outgoing input stream: drain the wasm's mirrored batches onto the
+      // DataChannel on a fixed cadence (each batch is tick-stamped, so the
+      // receiver doesn't care how they clump).
+      function startStreaming() {
+        clearInterval(sendTimer);
+        sendTimer = setInterval(() => {
+          try {
+            if (!dc || dc.readyState !== "open") return;
+            if (typeof wasm_exports === "undefined" || !wasm_exports.mp_out_take) return;
+            if (dc.bufferedAmount > 1 << 20) return; // back-pressure: skip a beat
+            const len = wasm_exports.mp_out_take();
+            if (len <= 0) return;
+            const bytes = new Uint8Array(wasm_memory.buffer, wasm_exports.mp_out_ptr(), len).slice();
+            dc.send(bytes);
+          } catch (_) {}
+        }, SEND_MS);
+      }
+
+      // Own-run watcher: the analytics run channel already mirrors every
+      // ended run (cause + ticks + distance) — reuse it to catch the local
+      // end whatever form it takes (crash, fuel, completion, reset).
+      setInterval(() => {
+        try {
+          if (state !== "racing" || lastEndSeq === null) return;
+          if (typeof wasm_exports === "undefined" || !wasm_exports.run_end_seq) return;
+          const e = wasm_exports.run_end_seq();
+          if (e === lastEndSeq) return;
+          lastEndSeq = e;
+          const cause = ["crash", "reset", "fuel", "complete"][wasm_exports.run_end_cause()] || "crash";
+          const ticks = wasm_exports.run_end_ticks();
+          // Time-scored levels: the score is the completion clock — anything
+          // else is a DNF (null). Distance levels score metres either way.
+          const score = levelIsTime(raceFile)
+            ? (cause === "complete" ? ticks / 120 : null)
+            : wasm_exports.run_end_dist();
+          dcSend({ t: "run_end", cause, score });
+          // The outgoing stream keeps draining across the run end: the
+          // ended run's last batch and the in-band respawn marker the
+          // wasm queues on EVERY reset path — the R / ⟳ quick restart,
+          // Fly again after the wrap-up, and the game's own auto-fly-again
+          // respawn on a time level's DNF, which never reaches the
+          // game-over poll (so a JS-side "resume on respawn" would miss
+          // it) — all ride the same timer. Between runs the wreck ticks
+          // nothing, so an idle timer just finds the mirror empty; the
+          // room's teardown is what stops it.
+        } catch (_) {}
+      }, 200);
+
+      // --- Nearby rooms (Bluetooth discovery, app shells only) -----------
+      // The join screen scans while it is up and the module is idle; a tap
+      // on a heard room joins it exactly like a typed code. The host screen
+      // advertises from room_created until the guest arrives (peer_joined)
+      // or the room is torn down. Both are pure conveniences over the
+      // WebRTC flow — with no bridge (the website) nothing here shows.
+      function syncNearby() {
+        try {
+          if (!pegNearby.available()) return;
+          const want = overlay === "scr-mp-join" && state === "idle";
+          const cur = pegNearby.state().state;
+          if (want && cur !== "scanning") pegNearby.scan();
+          else if (!want && cur === "scanning") pegNearby.stop();
+        } catch (_) {}
+      }
+      // One row per room, keyed on the code and updated IN PLACE (the
+      // picker's DOM-stability rule: rebuilding rows under an in-flight
+      // tap retargets the tap). Order = first heard first.
+      const nearbyRows = new Map();
+      function renderNearby(list) {
+        try {
+          const seen = new Set();
+          for (const r of list) {
+            seen.add(r.code);
+            let li = nearbyRows.get(r.code);
+            if (!li) {
+              li = document.createElement("li");
+              li.className = "row";
+              li.dataset.code = r.code;
+              const col = document.createElement("div"); col.className = "lcol";
+              const n = document.createElement("div"); n.className = "lname";
+              const d = document.createElement("div"); d.className = "ldesc";
+              col.appendChild(n); col.appendChild(d);
+              const chev = document.createElement("span"); chev.className = "chev"; chev.textContent = "›";
+              li.appendChild(col); li.appendChild(chev);
+              li.addEventListener("click", () => joinRoom(r.code));
+              nearbyRows.set(r.code, li);
+              nearbyList.appendChild(li);
+            }
+            li.querySelector(".lname").textContent = r.name ? r.name + "'s game" : "A pilot's game";
+            li.querySelector(".ldesc").textContent = "Room " + r.code + " · nearby";
+          }
+          for (const [code, li] of nearbyRows) {
+            if (!seen.has(code)) { li.remove(); nearbyRows.delete(code); }
+          }
+          const s = pegNearby.state();
+          if (s.state === "scanning") {
+            nearbyStatus.textContent = list.length ? "Games nearby — tap one to join" : "Looking for games nearby…";
+          }
+        } catch (_) {}
+      }
+      // Why the radio isn't available, in player words (the bridge's reason
+      // codes are shared by both shells).
+      function nearbyProblem(reason) {
+        return reason === "off" ? "Bluetooth is off — turn it on to find games nearby"
+          : reason === "denied" ? "Bluetooth permission denied — nearby games can't be found"
+          : reason === "unsupported" ? "This device can't find nearby games over Bluetooth"
+          : reason === "failed" ? "Bluetooth isn't cooperating — type the code instead"
+          : "";
+      }
+      if (pegNearby.available()) {
+        nearbyEl.classList.add("on");
+        joinHint.textContent = "…or type the host's room code";
+        pegNearby.on("rooms", renderNearby);
+        pegNearby.on("state", s => {
+          try {
+            // Host screen: on the air, or why not.
+            if (state === "hosting") {
+              const problem = nearbyProblem(s.reason);
+              hostNearby.classList.toggle("warn", !!problem);
+              hostNearby.textContent = s.state === "advertising"
+                ? "Visible to nearby players over Bluetooth — they can join with one tap"
+                : problem ? problem + " — share the code instead" : "";
+              hostNearby.style.display = hostNearby.textContent ? "" : "none";
+            }
+            // Join screen: scanning, or why not.
+            if (s.state === "scanning") renderNearby(pegNearby.rooms());
+            else if (overlay === "scr-mp-join") {
+              // Idle on the join screen: a problem to show, the resting
+              // line while a join attempt runs, else the scan is about to
+              // resume (syncNearby) and its own state event relabels this.
+              const problem = nearbyProblem(s.reason);
+              nearbyStatus.textContent = problem || (state === "idle" ? "Looking for games nearby…" : "Joining…");
+            }
+            // The bridge reports its stops asynchronously: a join attempt
+            // that failed (expired room) went idle here first and its
+            // radio only now — re-check whether the scan should be back.
+            if (s.state === "idle" && !s.reason.match(/^(denied|off|unsupported|failed)$/)) syncNearby();
+          } catch (_) {}
+        });
+        screenWatchers.push(syncNearby);
+      }
+
+      // Join a room by code — the typed-code button, an invite link and a
+      // nearby row all land here.
+      function joinRoom(code) {
+        try {
+          code = String(code || "").trim().toUpperCase();
+          if (code.length !== 5) { codeInput.focus(); return; }
+          codeInput.value = code;
+          teardownNet();
+          role = "guest";
+          state = "joining";
+          joinStatus.textContent = "Contacting mission control…";
+          connectWs(() => wsSend({ action: "join_room", code }));
+        } catch (_) { joinStatus.textContent = "Couldn't reach mission control"; }
+      }
+
+      // --- UI wiring -----------------------------------------------------
+      document.getElementById("btn-mp").addEventListener("click", () => {
+        // Re-entering the multiplayer menu while a session is live returns
+        // to wherever that session stands; otherwise the fresh menu.
+        if (state === "hosting") showScreen("scr-mp-host");
+        else if (state === "lobby") showScreen("scr-mp-lobby");
+        else showScreen("scr-mp");
+      });
+      document.getElementById("btn-mp-host").addEventListener("click", () => {
+        try {
+          teardownNet();
+          role = "host";
+          state = "hosting";
+          codeEl.textContent = "·····";
+          hostStatus.textContent = "Contacting mission control…";
+          pickBtn.style.display = "none";
+          shareBtn.style.display = "none";
+          hostNearby.style.display = "none";
+          showScreen("scr-mp-host");
+          connectWs(() => wsSend({ action: "create_room" }));
+        } catch (_) { hostStatus.textContent = "Couldn't reach mission control"; }
+      });
+      // Invite link: the game URL with ?join=<code> — native share sheet
+      // where the browser has one, clipboard-copy fallback elsewhere.
+      shareBtn.addEventListener("click", () => {
+        try {
+          const code = codeEl.textContent;
+          if (!/^[A-Z0-9]{5}$/.test(code)) return;
+          const u = new URL(location.href);
+          u.search = "?join=" + code;
+          u.hash = "";
+          const url = u.toString();
+          if (navigator.share) {
+            navigator.share({ title: "Pegasus", text: "Race me through the cave!", url })
+              .catch(() => {}); // share sheet dismissed — not an error
+          } else if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(url).then(() => {
+              shareBtn.textContent = "Link copied!";
+              setTimeout(() => { shareBtn.textContent = "Share invite link"; }, 2000);
+            }).catch(() => {});
+          }
+        } catch (_) {}
+      });
+      document.getElementById("btn-mp-joinscr").addEventListener("click", () => {
+        joinStatus.textContent = "";
+        showScreen("scr-mp-join");
+        codeInput.focus();
+      });
+      document.getElementById("btn-mp-join").addEventListener("click", () => joinRoom(codeInput.value));
+      codeInput.addEventListener("keydown", e => {
+        e.stopPropagation(); // typing must never reach the game's key handlers
+        if (e.key === "Enter") document.getElementById("btn-mp-join").click();
+      });
+      codeInput.addEventListener("input", () => {
+        codeInput.value = codeInput.value.toUpperCase();
+      });
+      pickBtn.addEventListener("click", () => openLevelPicker("mp"));
+      // Back/leave buttons tear the session down (hardware back rides the
+      // .mbtn.back class on each).
+      document.getElementById("btn-mp-host-back").addEventListener("click", () => {
+        teardownNet();
+        showScreen("scr-mp");
+      });
+      document.getElementById("btn-mp-join-back").addEventListener("click", () => {
+        teardownNet();
+        showScreen("scr-mp");
+      });
+      document.getElementById("btn-mp-lobby-back").addEventListener("click", () => {
+        teardownNet();
+        showScreen("scr-mp");
+      });
+      document.getElementById("btn-mp-fail-back").addEventListener("click", () => {
+        showScreen("scr-mp"); // the failed attempt was already torn down
+      });
+
+      return {
+        configure,
+        hostPickedLevel,
+        respawn,
+        leaveRoom,
+        // The room owns the post-run flow while a session is live.
+        inRace: () => state === "racing" || state === "starting",
+      };
+    })();
 
     // Manual reload button in the About screen — same ?fresh= mechanism as
     // the toast, for when you want the newest build without waiting.

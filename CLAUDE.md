@@ -94,6 +94,17 @@ Every build's identity comes from **annotated `vMAJOR.MINOR.PATCH` tags on
   5. The NEXT tag's number is decided by what accumulated since the
      last one when ITS beta starts (any `feat` → v1.2.0, only fixes →
      v1.1.1, a `!` → v2.0.0 — the computed-bump step in #214).
+  **A TestFlight build from a PR BRANCH** (2026-09, the nearby-discovery
+  PR's Alpha build): the branch's nearest tag is the SHIPPED version,
+  and Apple closes a train once that version is approved on the App
+  Store — the upload fails with "Invalid Pre-Release Train … closed for
+  new build submissions" (code 90186) — so such a build cannot ride the
+  tag. `ios-testflight.yml`'s `marketing_version` dispatch input names
+  the next cycle's number instead (the bump rule: `1.1.0` for a
+  feature), with the run number as the build; no tag is pushed (a tag
+  push IS a full two-store release, and tags belong on main). When the
+  cycle's first beta is later cut from main, its tag simply continues
+  that train with higher build numbers.
   **Hotfix while a beta is in flight** (the one case for a tag off
   main): branch `release/1.0` from the `v1.0.0` tag, cherry-pick the
   fix, tag `v1.0.1` on that branch and push the tag — the tag push
@@ -359,6 +370,7 @@ push-retry loop for concurrent deploys):
 - `src/audio.rs` — in-memory WAV synthesis (`wav_from_samples`, `thruster_wav`, `boom_wav`)
 - `levels/` — **runtime level data**: `*.level` files (`key = value`) + `manifest.json` (menu order), fetched by `index.html` and pushed into the wasm — new levels deploy with no recompile (see "Levels")
 - `fonts/` — the **vendored menu webfont**: `jetbrains-mono.woff2` (latin variable, wght 400–800) + its `OFL.txt`, loaded via `@font-face` by `index.html`/`editor.html` so every platform renders the same face (see the menu-font note under "Game menu"); in all three bundle copy lists
+- `android/…/NearbyBridge.kt` + `ios/Pegasus/NearbyBridge.swift` — the **Bluetooth LE nearby-room bridges** (2026-09, discovery ONLY — see "Nearby discovery" under "Multiplayer"): the host shell advertises its room code, the guest shell scans and lists the rooms it hears, and a tap is the ordinary WebRTC join; `index.html`'s `pegNearby` module is the one page-side implementation over both. No wasm/sim/backend involvement, and the website (no bridge) never shows the feature
 - `editor.html` — the **standalone level editor** (issue #89 v1, 2026-07): draws hand-drawn `.level` worlds — the same `poly`/`pad`/`start` representation The Hollows uses — on a pan/zoom canvas. Self-contained like `index.html` (no CDNs), copied by `build-site`. **Deliberately UNLINKED from the game UI** (owner decision pre-merge): it lives at its own path with no menu button and no picker row; the game only meets it through the `?custom=1` test-fly handoff. **While it stays unlinked, editor commits carry NO `Whats-new:` trailers** (the changelog must not advertise an unannounced feature — the PR #110 branch had its trailers stripped before merge; give the editor one proper entry when it's linked up for real). See "Level editor & custom drafts" under "Levels"
 - `tools/gen-third-party-licenses.py` + `third-party-licenses.html` — the generated third-party attribution page served with the site and linked from the About screen; regenerate when `Cargo.lock` changes (see "License")
 - `privacy.html` — standalone privacy policy served with the site at the ROOT (`https://pegasusmoonlander.com/privacy.html` — the store listings' privacy-policy URL, so it never moves; also copied next to the game in `play/` and bundled into both apps); same substance as the About screen's `#privacy-note` — keep the two in agreement when the analytics story changes — plus the "The website's front page" section, which covers the landing page's visit/tap counting (that one has no in-game twin)
@@ -2752,6 +2764,193 @@ and can never touch prod boards. All JS-side in `index.html`:
   `maybeSubmitOnline`; keep them in sync with the backend's validation
   (`score > 0`, name ≤ 24 chars — the input carries `maxlength=24`).
 
+## Multiplayer (P2P shadow race)
+
+2-player race (2026-08, per `docs/multiplayer-p2p.md` — the design brief
+with the owner's locked decisions; read it before touching this): both
+players fly the SAME level (same world, same **concrete** seed) side by
+side, each in their own physics world — **no ship–ship collision**. The
+opponent renders like the racing ghost (translucent silhouette, magenta
+vs the ghost's pale blue — both can be on screen at once — with callsign +
+minimap dot), driven live by their input stream over a **WebRTC
+RTCDataChannel** (true P2P; STUN → Cloudflare TURN fallback). Latency only
+moves where you SEE the opponent, never your own physics. Scoring is
+unchanged: each run still goes through the normal publish → submit-dialog →
+backend-verification flow.
+
+- **Feature gate**: `config.json`'s `wsUrl` (the pegasus-backend signaling
+  WebSocket — see that repo's CLAUDE.md; `build-site` validates it as
+  optional `wss://`). Absent ⇒ the home-screen Multiplayer button never
+  shows. NOTE: after the backend deploy the `BACKEND_CONFIG_JSON` repo
+  variable must be re-pasted from the new `FrontendConfigJson` output;
+  the app shells fetch config.json from the live deployment and follow
+  automatically.
+- **wasm bridge (`src/main.rs`)**: the opponent is "a ghost whose
+  recording is still being written": `RemoteFeed` accumulates received
+  input change-events + 1 Hz keyframes into a growing `Recording` (via
+  `record_tick`, so event dedup matches the sender exactly) and drives a
+  `ResimPlayer` through it — cross-device drift is absorbed by the same
+  keyframe check + `SNAP_DRIFT_M` snap as watched replays. **Built
+  entirely frontend-side from sim-core's existing public API — NO sim-core
+  changes, no `REPLAY_FORMAT_VERSION` bump, no backend repin needed.**
+  Exports: `set_mp_active`, `mp_arm`, `set_mp_name`, `set_mp_remote_over`,
+  `mp_push_remote` (BLOB_IN batches), `mp_out_take`/`mp_out_ptr` (drain
+  the outgoing mirror), `mp_remote_dist`. Wire batches are
+  `total_ticks(u32) + events(9 B) + keyframes(60 B)` — tick-stamped and
+  self-delimiting; keyframe 0 never ships (both sides derive the spawn
+  state from the shared level+seed). The remote resim is paced by the
+  render clock (smooth 120 Hz motion ~1 network batch behind); big
+  backlogs (tab-hide) close via a keyframe-restore seek. Unit tests:
+  `remote_feed_reproduces_an_incrementally_streamed_run_bit_exactly`,
+  `remote_feed_snaps_onto_a_diverged_stream`, the batch-codec round-trip.
+- **`mp_arm` replaces the armed-but-idle gate for races**: the countdown's
+  zero arms the run with the ship still idle, so both recorders' tick
+  clocks share the start line (recording semantics otherwise identical —
+  keyframe 0 = spawn, tick 1 = first tick after the gun; a race recording
+  may simply lead with neutral ticks, which the verifier is fine with).
+  JS resets the run (`ui_command 1`) and holds `set_ui_pause(1)` through
+  the 3-2-1, so the sim is guaranteed fresh and frozen when the gun fires.
+  The countdown gates only the FIRST launch after a level pick — respawns
+  inside a persistent room (below) use the ordinary armed-idle gate. A
+  level switch still drops the remote feed (new world).
+- **Persistent rooms (2026-08)**: a run's end does NOT end the session —
+  after a crash / fuel-out / completion (and the optional submit dialog)
+  the player respawns straight back into the shared world, and an R / ⟳
+  restart is just a quick respawn; the room lives until someone actively
+  leaves (the pause screen's Exit, or a disconnect). Mechanism: the local
+  reset block keeps the opponent feed, restarts the outgoing mirror at the
+  fresh recording's origin and queues an 8-byte **respawn marker**
+  (`mp_push_respawn_marker`, a pseudo-batch with `total = u32::MAX`)
+  IN-BAND on `MP_OUT` — ordering against the batches is correct by
+  construction, no JS involvement. The receiver's `mp_ingest_stream`
+  replaces its `RemoteFeed` exactly at the marker (spawn keyframe = the
+  local recorder's kf 0, a pure function of the shared level+seed) and
+  clears the remote-over flag; `ingest_batch` independently caps a
+  hostile batch's tick total so it can't spin the receiver's catch-up
+  loop. On `seed = random` levels the pinned concrete seed means respawns
+  keep the SAME world (`with_rolled_seed` no-ops on the pinned text) —
+  the room IS its world until the host picks anew. The opponent
+  silhouette stays visible through the local wreck/dialog/armed-idle wait
+  (`mp_pose` gates only on `Flying | CrashDialog`); their own crash still
+  hides them until their marker arrives. Unit test:
+  `persistent_room_respawn_marker_resets_the_feed_bit_exactly`.
+- **JS (`pegMP` in index.html, after the analytics module)**: same
+  never-break-the-game rules as analytics (every entry point try/caught) —
+  but deliberately NOT analytics' `navigator.webdriver` gate, so e2e
+  automation can drive it. Signaling client (`create_room`/`join_room`/
+  opaque `signal` relay/`leave`), RTCPeerConnection with host-as-offerer,
+  candidate queueing until the SDP lands, host-driven ICE restart on
+  `failed` while the socket is up. DataChannel: JSON control messages
+  (`hello` incl. build id — mismatch shows a "may drift" banner, the
+  keyframe snap covers it — `level`, `ready`, `start`, `run_end`) +
+  binary input batches relayed verbatim to/from the wasm. Menu:
+  `scr-mp` / `scr-mp-host` (room code) / `scr-mp-join` / `scr-mp-lobby`,
+  all with `.mbtn.back` (hardware back for free) + `histPath` entries;
+  the level picker gains an `"mp"` mode (host pick →
+  `pegMP.hostPickedLevel`). There is NO results screen (persistent rooms
+  replaced it — run ends are transient banners). The countdown overlay +
+  the magenta `#mp-banner` notice live outside `#menu` (over the frozen
+  game).
+- **Seed pinning**: the host rewrites `seed = random` to a concrete roll
+  before transmitting AND loads that same text itself (`pushLevel(file,
+  textOverride)`), so both fly identical rock and the backend's
+  any-seed-passes rule for random-seed stems verifies both runs. Exiting
+  the race re-pushes the level's original text so solo play gets its
+  re-rolling world back. Guests load the transmitted text even for files
+  missing from their manifest (the text travels wholesale); custom drafts
+  MAY be raced and keep all their local-only guards.
+- **Invite links**: the host screen's Share button sends the game URL with
+  `?join=<CODE>` (native share sheet via `navigator.share`, clipboard-copy
+  fallback with a "Link copied!" flash). A guest landing with the param
+  auto-runs the join flow once config.json's `wsUrl` arrives — prefilled
+  join screen, so an expired link surfaces the normal room_not_found error
+  there. The param is consumed + stripped from the URL immediately
+  (`history.replaceState`, preserving the back-stack state object) so a
+  reload never rejoins a dead room. Plain https on purpose: works in every
+  browser and both app shells' guests-in-browser; Universal/App Links into
+  the native shells were considered and deferred (needs a
+  `dannyrhubarb.github.io` user-site repo for `/.well-known/` at the
+  domain root, plus AASA content-type caveats on Pages).
+- **Link-failure diagnosis (`scr-mp-fail`, field lesson 2026-08)**: room
+  pairing can succeed while the P2P link silently never opens — seen live
+  with **Apple iCloud Private Relay** on (it hides the device's address,
+  so a STUN-only attempt just hangs at "connecting…"; turning it off
+  fixed it). A 25 s setup watchdog (`CONNECT_FAIL_MS`, armed in
+  `makePeer`, cleared on DataChannel open) plus a pre-open
+  `connectionState == "failed"` both land on the diagnosis screen: the
+  facts gathered during the attempt (reason, pc states, TURN available
+  or STUN-only, local candidate counts by type lan/public/relay, how
+  many candidates arrived from the peer) plus targeted hints — no-TURN →
+  run the bootstrap, no srflx/relay → UDP blocked, zero remote → the
+  other side is stuck too, and always the VPN/Private-Relay warning. A
+  post-open failure keeps the existing degrade-to-solo banner instead
+  (never a dialog over a live flight).
+- **Nearby discovery (Bluetooth LE, app shells only, 2026-09)**: the
+  room code's one cost is reading it out, so the shells put it on the
+  air — `docs/multiplayer-p2p.md` "Nearby discovery" is the brief. The
+  host's `room_created` → `pegNearby.advertise(code, callsign)`; the Join
+  screen (`scr-mp-join`) scans while it is up and the module is idle (a
+  `screenWatchers` entry — the hook `showScreen`/`closeMenu` call with the
+  screen id or null) and lists what it hears in `#mp-nearby-list` (one
+  `.row` per code, updated IN PLACE per the picker's DOM-stability rule,
+  dropped after 6 s unheard); a tap = `joinRoom(code)`, the same function
+  the Join button and the `?join=` invite link use. **Bluetooth carries
+  DISCOVERY ONLY** — no GATT, no connection, no game bytes; signaling and
+  the DataChannel are untouched, hence no wasm/sim/backend change. The
+  `pegNearby` module (ahead of `pegMP`) is the single page-side
+  implementation over both shells: Android `PegasusNearby.cmd(json)`
+  (`NearbyBridge.kt`), iOS the `pegasusNearby` message handler +
+  `__pegNearbyIos` document-start flag (`NearbyBridge.swift`); commands
+  `advertise{text}`/`scan`/`stop`, events `state{state, reason?}` /
+  `adv{id, text, rssi}` / `error{msg}`, reason codes `denied`/`off`/
+  `unsupported`/`failed`/`stopped` turned into player wording by
+  `nearbyProblem`. **Advertisement layout**: service UUID
+  `7E6A5148-0000-4B1E-8F3A-000000000001` in the primary packet, payload
+  `<5-char code><callsign>` in the scan response — service data on
+  Android, the LOCAL NAME on iOS (CoreBluetooth advertises nothing else);
+  scanners accept either. The 13-byte Android budget (31 − the 18-byte
+  128-bit service-data header) is why `pegNearby` clips the callsign to
+  8 UTF-8 bytes on a character boundary for BOTH platforms. **The
+  website has no bridge and never shows any of it** (Web Bluetooth can't
+  advertise or scan for advertisements and neither WebView exposes it);
+  `#mp-nearby` / `#mp-host-nearby` stay hidden and the join hint keeps
+  its plain wording. Permissions are asked LAZILY on the first
+  advertise/scan (never at launch): Android declares only the 12+
+  runtime permissions (`BLUETOOTH_ADVERTISE`, `BLUETOOTH_SCAN`
+  `neverForLocation`) and **NO location permission**, so scanning is
+  `unsupported` on Android 11-, hosting still works; iOS carries
+  `NSBluetoothAlwaysUsageDescription`, and a BACKGROUNDED iOS host is
+  invisible to Android scanners (iOS drops the local name and moves the
+  UUID to the overflow area). The iOS scanner reads only the LIVE
+  advertisement, never `peripheral.name` — CoreBluetooth caches that
+  per radio, and a stale one would list a room from an earlier session.
+  **Not yet verified on phones** (written without SDK/Xcode; the
+  android-build / ios-build PR jobs compile it, the page half is covered
+  headless with a fake bridge + a stubbed signaling socket).
+- **Run end**: the module watches the analytics run channel
+  (`run_end_seq` + cause/dist/ticks mirrors — no new channel) for its own
+  end, sends `run_end {cause, score}` (time levels: completion seconds,
+  DNF = null), and flags the peer's via `set_mp_remote_over`. A received
+  run_end is a transient banner ("X CRASHED — 1234 m" / "X FINISHED —
+  0:58.3"; quick restarts pass silently) — never a blocking screen. While
+  `pegMP.inRace()` the ui-state poll's wrap-up is `pegMP.respawn()` — the
+  submit dialog first as usual, closed through the `"mp-respawn"`
+  pseudo-target (`closeNameDialog`); the consent detour stays out of the
+  room flow. **The outgoing stream timer runs from the gun until the
+  room's teardown** — it is NOT stopped at a run end (2026-09, the
+  rebase onto main's auto-fly-again): the wasm queues the respawn
+  marker on every reset path, including the game's own DNF respawn on a
+  time level, which never reaches the game-over poll, so any JS-side
+  "resume the stream on respawn" misses it; a timer that simply keeps
+  draining finds the mirror empty between runs and costs nothing.
+  Leaving: the pause screen's Exit
+  calls `pegMP.leaveRoom()` BEFORE the reset (teardown first ⇒ no respawn
+  marker is sent; the peer gets a clean disconnect) and restores the
+  level's original text so a pinned random seed re-rolls in solo play.
+  **Disconnect mid-race degrades to a normal solo run** ("OPPONENT LEFT —
+  FLYING SOLO" banner, feed torn down) — the local flight is never
+  blocked by network state.
+
 ## Physics notes
 
 The body has `angular_damping(3.0)` and `linear_damping(0.2)` (see Thrust /
@@ -2902,9 +3101,13 @@ re-acquired on the `visibilitychange` back while still wanted).
   too). A document-start `WKUserScript` injects
   `window.__pegAppBuild` ("1.0 (42)" — CFBundleShortVersionString +
   CFBundleVersion, the latter stamped with the CI run number) for the
-  About screen's Version row. WebRoot ships as an Xcode **folder
-  reference**, so re-running the sync + rebuilding needs no project
-  edits.
+  About screen's Version row; a second one sets the `__pegNearbyIos`
+  flag for the Bluetooth nearby-room bridge (`NearbyBridge.swift`, the
+  `pegasusNearby` handler — see "Nearby discovery" under "Multiplayer";
+  new Swift files need a pbxproj entry with a UNIQUE object id, a
+  duplicated id silently drops the file from the build). WebRoot ships
+  as an Xcode **folder reference**, so re-running the sync + rebuilding
+  needs no project edits.
 - **Safe-area inset injection (launch-jank fix, 2026-07)**:
   `env(safe-area-inset-*)` reads **0 at a WKWebView's first paint** —
   WebKit propagates the insets asynchronously a couple of frames later —
@@ -2953,13 +3156,19 @@ re-acquired on the `visibilitychange` back while still wanted).
   upload — the build reaches TestFlight's INTERNAL testers by itself (an
   internal group with automatic distribution needs no Beta App Review),
   and external testing is the owner's manual promotion in App Store
-  Connect. The hands-free external path is an OPT-IN: the `external`
+  Connect. The hands-free group path is an OPT-IN: the `external`
   dispatch input (forwarded as `ios_external` by the Release apps
   wrapper; a tag push never sets it) runs `ios/testflight-distribute.py`
   (ASC API, same key), which waits out Apple's
-  build processing, submits the build to Beta App Review and attaches it
-  to the beta group named by the `TESTFLIGHT_GROUP_NAME` repo variable
-  (default "Public beta") — external testers get that build hands-free;
+  build processing and attaches the build to a beta group — the `group`
+  dispatch input (2026-09, a one-off build for a named circle, e.g. the
+  "Alpha" internal group from a PR branch: dispatch the workflow on
+  that branch with `external` + `group`), else the
+  `TESTFLIGHT_GROUP_NAME` repo variable (default "Public beta"). The
+  script reads the group's `isInternalGroup` and submits the build to
+  Beta App Review ONLY for an external group — an internal group needs
+  no review, and a PR build must never reach Apple's reviewers just to
+  reach the team. Testers get that build hands-free;
   a group that doesn't exist yet is a soft no-op, and the group ATTACH
   retries through ASC's propagation lag (a just-processed build can 404
   on the betaGroups relationship endpoint while /v1/builds already calls
@@ -3028,7 +3237,9 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   edge-to-edge call must come after. The `PegasusApp` JS interface is the
   Android half of the keep-awake bridge (see "iOS app") and also answers
   `appBuild()` (versionName + versionCode) for the About screen's Version
-  row. **targetSdk/compileSdk = 36** (2026-08, Play requires
+  row; `PegasusNearby` (`NearbyBridge.kt`) is the Bluetooth nearby-room
+  bridge (see "Nearby discovery" under "Multiplayer" — the manifest's
+  Bluetooth permissions are its, all 12+ runtime ones, no location). **targetSdk/compileSdk = 36** (2026-08, Play requires
   targeting within 1 year of the latest Android release or updates are
   blocked — expect this bump roughly yearly). **AGP 9.x** (2026-08, same
   push): Kotlin is BUILT INTO AGP 9 — `org.jetbrains.kotlin.android` must

@@ -24,6 +24,11 @@
 	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<!-- Nearby multiplayer rooms over Bluetooth LE (NearbyBridge.swift):
+	     required for any CoreBluetooth use; the system prompt shows on the
+	     multiplayer screens' first host/scan command, never at launch. -->
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Pegasus uses Bluetooth to find multiplayer games hosted by players nearby, and to let them find yours.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
