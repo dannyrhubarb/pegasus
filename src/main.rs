@@ -1580,7 +1580,21 @@ async fn main() {
         // per-step grain keeps partially-buried edges (a floor edge whose
         // ends tuck under the frame slabs) lit where they are actually open.
         exposed: Vec<Vec<Vec<bool>>>,
+        // Per polygon -> edge -> band-step vertex (k in 0..=steps): the
+        // world-space band points at each BAND_DEPTHS depth. Depth 0 is
+        // exactly on the collider line; deeper points carry the hashed
+        // jitter and are CLAMPED TO STAY INSIDE ROCK: at an acute rock
+        // corner (a well lip whose wall recedes as it drops, a mitred
+        // turn cusp) the 2.6 m row of one face otherwise pokes out through
+        // the neighbouring face and paints a lit facet floating in open
+        // air — the "little artifact at the well mouth" of the PR #213
+        // review. Built once per terrain (point_in_rock per vertex is far
+        // too slow per frame); the draw loop only projects.
+        bands: Vec<Vec<Vec<[Vec2; BAND_DEPTHS.len()]>>>,
     }
+    // Edge-band depths into the rock (metres): the outer row sits on the
+    // collider line, the two inner rows are the rock_edge / rock_mid facets.
+    const BAND_DEPTHS: [f32; 3] = [0.0, 0.9, 2.6];
     let mut terrain_cache: Option<TerrainMesh> = None;
 
     loop {
@@ -2633,7 +2647,70 @@ async fn main() {
                             .collect()
                     })
                     .collect();
-                terrain_cache = Some(TerrainMesh { terrain: terr.clone(), tris, bboxes, exposed });
+                // Band vertices, jittered into the rock and clamped there
+                // (see the struct doc). The step count mirrors the exposed
+                // flags and the draw loop exactly.
+                let bands: Vec<Vec<Vec<[Vec2; BAND_DEPTHS.len()]>>> = terr
+                    .polys
+                    .iter()
+                    .enumerate()
+                    .map(|(pi, poly)| {
+                        let n = poly.len();
+                        (0..n)
+                            .map(|i| {
+                                let (a, b) = (poly[i], poly[(i + 1) % n]);
+                                let e = b - a;
+                                let len = e.length();
+                                if len < 1e-3 {
+                                    return Vec::new();
+                                }
+                                let dir = e / len;
+                                let nrm = vec2(-dir.y, dir.x); // into the rock (CCW)
+                                let steps = (len / 2.0).ceil().max(1.0) as usize;
+                                (0..=steps)
+                                    .map(|k| {
+                                        let base = a + e * (k as f32 / steps as f32);
+                                        let mut pts = [base; BAND_DEPTHS.len()];
+                                        for (d, depth) in BAND_DEPTHS.iter().enumerate().skip(1) {
+                                            let h = hash_u32(
+                                                (pi as u32).wrapping_mul(0x9e37_79b9)
+                                                    ^ (i as u32).wrapping_mul(73856093)
+                                                    ^ (k as u32).wrapping_mul(19349663)
+                                                    ^ (d as u32).wrapping_mul(83492791),
+                                            );
+                                            let ja = ((h & 0xffff) as f32 / 65535.0 - 0.5) * 0.8;
+                                            let jd = (((h >> 16) & 0xffff) as f32 / 65535.0 - 0.5)
+                                                * (depth * 0.35);
+                                            let off = dir * ja + nrm * (depth + jd);
+                                            // Clamp: the point must be inside rock.
+                                            // Bisect back towards the collider line
+                                            // (depth 0, in rock by definition) until
+                                            // it is — a thin lip or cusp then gets a
+                                            // thinner band instead of one that
+                                            // pokes out through the far face.
+                                            let mut t = 1.0f32;
+                                            if !terr.point_in_rock(base + off) {
+                                                let (mut lo, mut hi) = (0.0f32, 1.0f32);
+                                                for _ in 0..10 {
+                                                    let mid = 0.5 * (lo + hi);
+                                                    if terr.point_in_rock(base + off * mid) {
+                                                        lo = mid;
+                                                    } else {
+                                                        hi = mid;
+                                                    }
+                                                }
+                                                t = lo;
+                                            }
+                                            pts[d] = base + off * t;
+                                        }
+                                        pts
+                                    })
+                                    .collect()
+                            })
+                            .collect()
+                    })
+                    .collect();
+                terrain_cache = Some(TerrainMesh { terrain: terr.clone(), tris, bboxes, exposed, bands });
             }
             let mesh = terrain_cache.as_ref().unwrap();
             let (tri_polys, bboxes) = (&mesh.tris, &mesh.bboxes);
@@ -2669,42 +2746,22 @@ async fn main() {
 
                 // Edge bands: each edge subdivided ~2 m; depth 0 is exactly on
                 // the collider line, deeper points jittered into the rock only
-                // (polygons are CCW, so the inward normal is the edge dir
-                // rotated +90°).
-                const BAND_DEPTHS: [f32; 3] = [0.0, 0.9, 2.6];
+                // and clamped to stay there — all precomputed in the cache
+                // (`bands`, see the struct doc); this loop just projects.
                 let mut verts: Vec<Vertex> = Vec::new();
                 let n = poly.len();
                 for i in 0..n {
                     let (a, b) = (poly[i], poly[(i + 1) % n]);
-                    let e = b - a;
-                    let len = e.length();
-                    if len < 1e-3 {
-                        continue;
+                    let band = &mesh.bands[pi][i];
+                    if band.len() < 2 {
+                        continue; // zero-length edge
                     }
                     if a.x.max(b.x) < cam_x - half_w || a.x.min(b.x) > cam_x + half_w
                         || a.y.max(b.y) < cam_y - half_h || a.y.min(b.y) > cam_y + half_h {
                         continue;
                     }
-                    let dir = e / len;
-                    let nrm = vec2(-dir.y, dir.x); // into the rock
-                    let steps = (len / 2.0).ceil().max(1.0) as usize;
-                    let bp = |k: usize, d: usize| -> Vec2 {
-                        let base = a + e * (k as f32 / steps as f32);
-                        if d == 0 {
-                            return base; // locked to the collider line
-                        }
-                        let depth = BAND_DEPTHS[d];
-                        let h = hash_u32(
-                            (pi as u32).wrapping_mul(0x9e37_79b9)
-                                ^ (i as u32).wrapping_mul(73856093)
-                                ^ (k as u32).wrapping_mul(19349663)
-                                ^ (d as u32).wrapping_mul(83492791),
-                        );
-                        let ja = ((h & 0xffff) as f32 / 65535.0 - 0.5) * 0.8;
-                        let jd = (((h >> 16) & 0xffff) as f32 / 65535.0 - 0.5)
-                            * (depth * 0.35);
-                        base + dir * ja + nrm * (depth + jd)
-                    };
+                    let steps = band.len() - 1;
+                    let bp = |k: usize, d: usize| -> Vec2 { band[k][d] };
                     for k in 0..steps {
                         // Buried stretch (coincident carve seams, overlapped
                         // frame edges): no lit band through solid rock.

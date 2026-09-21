@@ -1514,16 +1514,22 @@ PATH ORDER (the siphon's depth is not monotonic), PIN THE SHAPES (winding
 ≥ 3 sideways reversals; siphon exactly 2 VERTICAL reversals plus a real
 climb; deep well wanders < 4 m — a shaft flattened to a plain vertical
 hole passes every point-in-rock check otherwise) and land the ship on all
-three bases. **Lip rule (the PR #213 review nit)**: a well's wall must
-meet the cavern floor AT y = 0 — the generator's mitre left a 29 cm rock
-NEEDLE standing above the floor at well 1's east lip (and an 8 cm one at
-well 3's), and the renderer extrudes every exposed edge's lit band "into
-the rock" along its normal, so the needle's vertical edge painted a band
-floating across the well mouth in open air — the "little wall quirk" of
-the review. Clipped by intersecting the wall's last edge with y = 0; a
-scratch band-in-air checker (mirror `bp()` + `point_in_rock`) finds this
-class of defect, and its residue at ordinary convex corners is the same
-as The Hollows' — the renderer's norm, not a level bug).
+three bases. **The PR #213 review's "little wall quirk" (two defects,
+2026-09)**: (1) the generator's mitre left a 29 cm rock NEEDLE standing
+above the floor at well 1's east lip (an 8 cm one at well 3's) — a
+well's wall must meet the cavern floor AT y = 0, so the wall's last edge
+was intersected with the floor line; (2) the one the owner's screenshot
+actually showed: the east lip is an ACUTE rock wedge (the well's wall
+recedes east as it drops), and the floor edge's deepest band row poked
+out through the wall face as a lit curtain ~3 m below the lip. That is a
+renderer property — every convex corner in The Hollows does it a little
+— so it was fixed in the renderer: terrain band vertices are now
+CLAMPED TO ROCK (see "Hand-drawn rendering"). Both were found with a
+scratch band-in-air checker (mirror the band jitter + `point_in_rock`,
+port `hash_u32` for the exact vertices) and proven headless: the wells
+level shifted so a `start` platform spawns the ship at the lip, the
+before/after wasm screenshotted through the `?custom=1` hook, and a
+pixel diff confined to the curtain).
 **The Caves** (the original shafted world) was retired 2026-07 with The
 Rift — its world survives as the compiled-in `Level::demo()` (`pads`
 scoring), which remains the no-manifest fallback and the fixture for the
@@ -1535,7 +1541,18 @@ main's `TerrainMesh` keyed on the RENDERED terrain — it follows `world_sim`,
 so replays of other levels swap the cache) plus two faceted edge bands
 extruded along the inward normal (CCW ⇒ edge dir rotated +90° points into
 rock; depth 0 sits EXACTLY on the polygon edge = the collider — same
-alignment rule as lattice row 0), lit by the same radial shader. **Edge
+alignment rule as lattice row 0), lit by the same radial shader. **Band
+vertices are precomputed in `TerrainMesh.bands` and CLAMPED TO STAY
+INSIDE ROCK** (2026-09, PR #213's review artifact): the inner rows
+(0.9 / 2.6 m + hashed jitter) are bisected back towards the collider
+line until `point_in_rock` holds, so at an acute rock corner — a well
+lip whose wall recedes as it drops, a mitred turn cusp — one face's
+deep row can no longer poke out through the neighbouring face and paint
+a lit facet floating in open air. Built once per terrain (the
+per-vertex ray casts are far too slow per frame; the draw loop only
+projects the cached points, which also drops the per-frame hashing).
+Convex corners everywhere get a slightly thinner band for it, which is
+the correct look. **Edge
 bands skip BURIED stretches** (per ~2 m band step, sampled 6 cm outside the
 step midpoint via `point_in_rock`, precomputed in `TerrainMesh.exposed`):
 overlapping polys are a first-class idiom (the Hollows frame; the editor's
