@@ -47,6 +47,10 @@ on:
         description: "Beta group to attach to (needs `external`); empty = the TESTFLIGHT_GROUP_NAME repo variable, else \"Public beta\""
         type: string
         default: ""
+      marketing_version:
+        description: "Override the tag-derived marketing version (a branch build whose nearest tag is an already-approved train); empty = tools/version.sh --marketing"
+        type: string
+        default: ""
   # Push trigger PAUSED — restore by uncommenting this block verbatim.
   # push:
   #   branches: [main]
@@ -137,8 +141,19 @@ jobs:
         # CFBundleShortVersionString = the tag (tools/version.sh --marketing);
         # the run FAILS on an untagged history — a store release is cut from
         # a tagged main (CLAUDE.md "Versioning"). The build number stays the
-        # run number (CURRENT_PROJECT_VERSION below).
-        run: echo "MARKETING_VERSION=$(tools/version.sh --marketing)" >> "$GITHUB_ENV"
+        # run number (CURRENT_PROJECT_VERSION below). The `marketing_version`
+        # input overrides it for a one-off BRANCH build: Apple closes a
+        # train once that version is approved on the App Store ("Invalid
+        # Pre-Release Train", seen live 2026-09 on a PR build whose nearest
+        # tag was the shipped v1.0.1), so a pre-tag TestFlight build of the
+        # next cycle names that cycle's number here (the tag on main comes
+        # later, with the cycle's first beta from main — CLAUDE.md).
+        run: |
+          if [ -n "${{ inputs.marketing_version }}" ]; then
+            echo "MARKETING_VERSION=${{ inputs.marketing_version }}" >> "$GITHUB_ENV"
+          else
+            echo "MARKETING_VERSION=$(tools/version.sh --marketing)" >> "$GITHUB_ENV"
+          fi
 
       - name: Assemble WebRoot
         env:

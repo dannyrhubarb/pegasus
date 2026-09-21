@@ -94,6 +94,17 @@ Every build's identity comes from **annotated `vMAJOR.MINOR.PATCH` tags on
   5. The NEXT tag's number is decided by what accumulated since the
      last one when ITS beta starts (any `feat` → v1.2.0, only fixes →
      v1.1.1, a `!` → v2.0.0 — the computed-bump step in #214).
+  **A TestFlight build from a PR BRANCH** (2026-09, the nearby-discovery
+  PR's Alpha build): the branch's nearest tag is the SHIPPED version,
+  and Apple closes a train once that version is approved on the App
+  Store — the upload fails with "Invalid Pre-Release Train … closed for
+  new build submissions" (code 90186) — so such a build cannot ride the
+  tag. `ios-testflight.yml`'s `marketing_version` dispatch input names
+  the next cycle's number instead (the bump rule: `1.1.0` for a
+  feature), with the run number as the build; no tag is pushed (a tag
+  push IS a full two-store release, and tags belong on main). When the
+  cycle's first beta is later cut from main, its tag simply continues
+  that train with higher build numbers.
   **Hotfix while a beta is in flight** (the one case for a tag off
   main): branch `release/1.0` from the `v1.0.0` tag, cherry-pick the
   fix, tag `v1.0.1` on that branch and push the tag — the tag push
