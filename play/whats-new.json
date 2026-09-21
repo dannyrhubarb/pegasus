@@ -1,5 +1,10 @@
 [
  {
+  "rev": "ac55065",
+  "date": "2026-09-21T21:41:48+02:00",
+  "note": "New: Well, well, well — three deep wells to fly down and claw your way back out of, against the clock (a level by Marcus Einar)"
+ },
+ {
   "rev": "682c3c8",
   "date": "2026-09-21T09:40:44+02:00",
   "note": "Fixed: Hand-drawn caves no longer sprout stray lit slivers of rock at sharp corners"
