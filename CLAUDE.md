@@ -1464,10 +1464,10 @@ tunnel's sill) plus a neutral `start` platform in the spawn chamber,
 **time-scored**: visit all five as fast as you can, the run ends on the
 last pad; its geometry-lint unit test asserts every chamber / tunnel /
 pad / start waypoint is open space via `Terrain::point_in_rock`) and
-**Well, well, well** (2026-09, PR #213 by @marcuseinar — **UNLISTED until
-the backend repin that pins its `fuel`/`refuel_rate` is promoted; the
-manifest row + its `Whats-new:` entry are the follow-up PR**, per the
-two-step rollout below: the second hand-drawn level — one big
+**Well, well, well** (2026-09, PR #213 by @marcuseinar, merged as #231
+UNLISTED and listed by the follow-up PR once pegasus-backend#56 — the
+repin pinning its `fuel`/`refuel_rate` — was promoted to prod: the first
+level through the two-step rollout below; the second hand-drawn level — one big
 cavern with an uneven roof, and three vertical WELLS sunk into its floor:
 **winding** (three smooth turns, 60 m), **siphon** (down, a 180° U-turn
 UP, then a reversed U-turn back DOWN, 56 m) and **almost-straight** (90 m,
