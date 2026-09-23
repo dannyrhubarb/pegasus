@@ -13,8 +13,6 @@ modern browser and ships as thin native shells for iOS and Android.
   an installable PWA)
 - **App Store**: [apps.apple.com/app/id6792584910](https://apps.apple.com/app/id6792584910)
 - **Google Play**: [se.danielfalk.pegasus](https://play.google.com/store/apps/details?id=se.danielfalk.pegasus)
-- **Backend** (global high scores, replay verification, analytics):
-  [dannyrhubarb/pegasus-backend](https://github.com/dannyrhubarb/pegasus-backend)
 
 ## Controls
 
@@ -90,8 +88,8 @@ See "Levels" in [`CLAUDE.md`](CLAUDE.md) for the full key reference.
 
 ## High scores, replays and the ghost
 
-Boards are **global** (today / this week / all time, per level) and served
-by the backend. Every submission carries its replay, which the backend
+Boards are **global** (today / this week / all time, per level). Every
+submission carries its replay, which the score server
 **re-simulates with the same physics crate** before the score can reach a
 board — the boards stay physics-true. The level's record run is fetched on
 load and raced as a **ghost**; board rows tagged `v1` / `v2` / … name the
@@ -106,7 +104,7 @@ boards, no ghost, a session-only best.
 | Path | What |
 |------|------|
 | `src/` | The game: frame loop, input, rendering, HUD, replay playback, wasm ↔ JS bridge |
-| `sim-core/` | `pegasus-sim` — the deterministic simulation (physics, world generation, replay format), consumed by the backend verifier as a git dependency |
+| `sim-core/` | `pegasus-sim` — the deterministic simulation (physics, world generation, replay format), also compiled by the server-side score verifier |
 | `index.html` | Web wrapper: HTML menus, settings, boards, gamepad polling, analytics |
 | `levels/` | Runtime level data |
 | `editor.html` | Standalone hand-drawn level editor |
