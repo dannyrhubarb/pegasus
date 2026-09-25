@@ -55,6 +55,39 @@ fn lerp_angle(a: f32, b: f32, t: f32) -> f32 {
     a + d * t
 }
 
+// Camera look-ahead: how far the camera leads the ship, in seconds of
+// travel, and the cap on that lead as a fraction of the HALF-viewport per
+// axis (0.35 ⇒ at full lead the ship sits ~⅓ in from the trailing edge,
+// two thirds of the screen ahead of it). Presentation only — the sim,
+// recorder and replays never see the camera.
+const LOOK_AHEAD_SECS: f32 = 0.9;
+const LOOK_AHEAD_FRAC: f32 = 0.35;
+// Smoothing time constant for the lead following the velocity target.
+const LOOK_AHEAD_TAU: f32 = 0.5;
+
+/// Where the camera centre WANTS to sit relative to the ship, in world
+/// metres, for a ship moving at (vx, vy) on a viewport `half_w` × `half_h`
+/// metres from its centre. The raw lead is `LOOK_AHEAD_SECS` of travel,
+/// soft-saturated per axis (tanh) at `LOOK_AHEAD_FRAC` of the half-extent,
+/// so the ship never leaves the middle third of the screen however fast it
+/// falls down a shaft, and the lead eases in smoothly from a hover.
+fn look_ahead_target(vx: f32, vy: f32, half_w: f32, half_h: f32) -> Vec2 {
+    let cap_x = (half_w * LOOK_AHEAD_FRAC).max(1e-3);
+    let cap_y = (half_h * LOOK_AHEAD_FRAC).max(1e-3);
+    vec2(
+        cap_x * (vx * LOOK_AHEAD_SECS / cap_x).tanh(),
+        cap_y * (vy * LOOK_AHEAD_SECS / cap_y).tanh(),
+    )
+}
+
+/// One frame of the lead easing toward its target: an exponential approach
+/// with time constant `LOOK_AHEAD_TAU`, so the camera glides rather than
+/// snapping when the velocity changes at a bounce or a burn.
+fn ease_look_ahead(cur: Vec2, target: Vec2, dt: f32) -> Vec2 {
+    let k = 1.0 - (-dt.clamp(0.0, 0.25) / LOOK_AHEAD_TAU).exp();
+    cur + (target - cur) * k
+}
+
 // Replay playback driver: RE-SIMULATES the hybrid recording's input events
 // through a scratch Sim, paced by the render clock — the exact machinery a
 // replay shared from another device would use. Every keyframe the cursor
@@ -1536,6 +1569,10 @@ async fn main() {
         }
     };
     let mut shake = 0.0f32; // impact screen-shake intensity, 0..1, decays fast
+    // Camera look-ahead: the smoothed offset (world m) of the camera centre
+    // from the rendered ship — leads in the direction of travel so the view
+    // shows what's ahead rather than what's behind (see look_ahead_target).
+    let mut cam_look = Vec2::ZERO;
     // Replay-ending grace: after playback pauses on the final frame, particle
     // time keeps running this long so the crash debris bursts and the plume
     // fades out — THEN the freeze is total. Emission stays off throughout
@@ -1611,6 +1648,7 @@ async fn main() {
             crash_timer = 0.0;
             complete_timer = 0.0;
             shake = 0.0;
+            cam_look = Vec2::ZERO;
             phys_accum = 0.0;
             mode = Mode::Flying;
             run_started = false;
@@ -2143,6 +2181,10 @@ async fn main() {
             crash_timer = 0.0;
             complete_timer = 0.0;
             shake = 0.0;
+            // The camera lead too: the fresh ship stands still on the spawn,
+            // and easing back from the ended run's lead would pan the view
+            // onto it instead of cutting to it.
+            cam_look = Vec2::ZERO;
             mode = Mode::Flying;
             run_started = false;
             run_over = false;
@@ -2256,13 +2298,8 @@ async fn main() {
         } else {
             SCALE * dpi
         };
-        // Shadow the module-level w2s so all render calls below use view_scale automatically.
-        let w2s = |x: f32, y: f32, sh: f32, cam_x: f32, cam_y: f32| -> Vec2 {
-            vec2(
-                (x - cam_x) * view_scale + sw / 2.0,
-                sh / 2.0 - (y - cam_y) * view_scale,
-            )
-        };
+        // (w2s — world → screen — is defined below, once the frame's ship
+        // pose and camera look-ahead are known.)
 
         // UI scale: HUD/minimap were tuned for a ~980px logical width. With the
         // device-width viewport, narrow screens report their true width, so scale
@@ -2462,6 +2499,41 @@ async fn main() {
             ship_vy = f.vy;
         }
 
+        // Camera look-ahead: the view leads the ship in its direction of
+        // travel — what's behind you is of little use, what's ahead is
+        // where the rock is. cam_x/cam_y stay the SHIP's rendered pose (every
+        // ship-anchored consumer below reads them as such); the camera
+        // centre is that plus `cam_look`, applied inside w2s so every world
+        // draw follows it. The lead is a function of the rendered velocity
+        // — the replayed ship's in playback, so a watched run shows the same
+        // view its pilot saw. FROZEN once the rendered ship is a wreck: the
+        // parked wreck's velocity is zero, and easing the lead back to it
+        // would pan the camera during the explosion, which the wreck-park
+        // exists to prevent ("the camera holds still"). Reset/level-load
+        // zero it with the rest of the per-run cosmetics.
+        {
+            let rendered_wreck = replay_player
+                .as_ref()
+                .map_or(sim.crashed, |p| p.sim.crashed);
+            if !rendered_wreck {
+                let target = look_ahead_target(
+                    ship_vx, ship_vy,
+                    sw / (2.0 * view_scale), sh / (2.0 * view_scale),
+                );
+                cam_look = ease_look_ahead(cam_look, target, get_frame_time());
+            }
+        }
+        let (look_x, look_y) = (cam_look.x, cam_look.y);
+        // World → screen. The (ax, ay) anchor every call passes is the SHIP's
+        // rendered pose (cam_x/cam_y); the camera centre leads it by the
+        // look-ahead, so the ship draws off-centre, towards its trailing edge.
+        let w2s = |x: f32, y: f32, sh: f32, ax: f32, ay: f32| -> Vec2 {
+            vec2(
+                (x - ax - look_x) * view_scale + sw / 2.0,
+                sh / 2.0 - (y - ay - look_y) * view_scale,
+            )
+        };
+
         // Ghost of the last run: the lockstep re-sim's pose, lerped with the
         // SAME alpha as the live ship so both move in sync. None once the
         // ghost reaches its crash (it "dies" there), before a trimmed
@@ -2561,15 +2633,18 @@ async fn main() {
 
         // Stars
         for &(sx, sy) in &stars {
-            let px = (sx * sw - cam_x * view_scale * 0.05).rem_euclid(sw);
-            let py = (sy * sh + cam_y * view_scale * 0.05).rem_euclid(sh);
+            // Parallax follows the camera centre (ship + look-ahead).
+            let px = (sx * sw - (cam_x + look_x) * view_scale * 0.05).rem_euclid(sw);
+            let py = (sy * sh + (cam_y + look_y) * view_scale * 0.05).rem_euclid(sh);
             draw_circle(px, py, (0.5 * dpi).max(1.0), Color::from_rgba(200, 200, 255, 150));
         }
 
         // Cave walls. Cull pad: 4 m of world keeps jittered deep-row facets from
         // popping at the screen edge without tessellating a whole extra screen.
         let margin = view_scale * 4.0;
-        let ship_screen = vec2(sw / 2.0, sh / 2.0);
+        // The ship's screen position (off-centre by the camera look-ahead) —
+        // the radial light sits on the ship, not on the screen centre.
+        let ship_screen = w2s(cam_x, cam_y, sh, cam_x, cam_y);
         let base_dim = sw.min(sh);
         let light_radius = base_dim * 0.55 + glow * base_dim * 0.30;
 
@@ -2714,13 +2789,15 @@ async fn main() {
             }
             let mesh = terrain_cache.as_ref().unwrap();
             let (tri_polys, bboxes) = (&mesh.tris, &mesh.bboxes);
-            // Visible world rect (+4 m so band jitter never pops at the edge).
+            // Visible world rect (+4 m so band jitter never pops at the edge),
+            // centred on the CAMERA (ship + look-ahead), not the ship.
             let half_w = sw / (2.0 * view_scale) + 4.0;
             let half_h = sh / (2.0 * view_scale) + 4.0;
+            let (view_x, view_y) = (cam_x + look_x, cam_y + look_y);
             for (pi, poly) in terr.polys.iter().enumerate() {
                 let (lo, hi) = bboxes[pi];
-                if hi.x < cam_x - half_w || lo.x > cam_x + half_w
-                    || hi.y < cam_y - half_h || lo.y > cam_y + half_h {
+                if hi.x < view_x - half_w || lo.x > view_x + half_w
+                    || hi.y < view_y - half_h || lo.y > view_y + half_h {
                     continue;
                 }
 
@@ -2756,8 +2833,8 @@ async fn main() {
                     if band.len() < 2 {
                         continue; // zero-length edge
                     }
-                    if a.x.max(b.x) < cam_x - half_w || a.x.min(b.x) > cam_x + half_w
-                        || a.y.max(b.y) < cam_y - half_h || a.y.min(b.y) > cam_y + half_h {
+                    if a.x.max(b.x) < view_x - half_w || a.x.min(b.x) > view_x + half_w
+                        || a.y.max(b.y) < view_y - half_h || a.y.min(b.y) > view_y + half_h {
                         continue;
                     }
                     let steps = band.len() - 1;
@@ -3383,7 +3460,7 @@ async fn main() {
         // speed; near-hover shows nothing.
         if SHOW_VEL.load(Ordering::Relaxed) != 0 && ship_visible && speed > 0.25 {
             let dir = vec2(ship_vx, -ship_vy) / speed; // w2s inverts y
-            let ship_scr = vec2(sw / 2.0, sh / 2.0);   // camera is ship-centred
+            let ship_scr = w2s(cam_x, cam_y, sh, cam_x, cam_y); // off-centre by the look-ahead
             let p0 = ship_scr + dir * (0.85 * view_scale); // start clear of the hull
             let len = ((14.0 + speed * 13.0) * ui).min(120.0 * ui);
             let p1 = p0 + dir * len;
@@ -3956,13 +4033,17 @@ async fn main() {
                 }
             }
 
-            // Viewport rectangle — ship-centred in both axes, like the map itself
+            // Viewport rectangle — what the main view covers: the map stays
+            // ship-centred, the rectangle leads the ship dot by the camera
+            // look-ahead (mapped through the same world → map scale).
             let vp_hw   = sw / (2.0 * view_scale);
             let vp_hh   = sh / (2.0 * view_scale);
             let vp_mm_hw = vp_hw / MM_HALF_X * (mm_w / 2.0);
             let vp_mm_hh = vp_hh / MM_HALF_Y * (mm_h / 2.0);
             let (mm_cx, mm_cy) = (mm_ox + mm_w / 2.0, mm_oy + mm_h / 2.0);
-            draw_rectangle_lines(mm_cx - vp_mm_hw, mm_cy - vp_mm_hh,
+            let vp_cx = mm_cx + look_x / MM_HALF_X * (mm_w / 2.0);
+            let vp_cy = mm_cy - look_y / MM_HALF_Y * (mm_h / 2.0);
+            draw_rectangle_lines(vp_cx - vp_mm_hw, vp_cy - vp_mm_hh,
                 2.0 * vp_mm_hw, 2.0 * vp_mm_hh, 1.0,
                 Color::from_rgba(255, 255, 255, 180));
 
@@ -4404,6 +4485,51 @@ mod tests {
         assert!(any_touch_down(&[touch(0, TouchPhase::Stationary)]));
         assert!(any_touch_down(&[touch(0, TouchPhase::Ended), touch(1, TouchPhase::Moved)]));
         assert!(any_touch_down(&[touch(0, TouchPhase::Started)]));
+    }
+
+    // Camera look-ahead: the lead points along the velocity, grows with it,
+    // and saturates at LOOK_AHEAD_FRAC of the half-viewport per axis so the
+    // ship never leaves the middle third of the screen.
+    #[test]
+    fn look_ahead_leads_along_the_velocity_and_saturates() {
+        let (hw, hh) = (20.0, 9.5); // a landscape phone's half-viewport, m
+        assert_eq!(look_ahead_target(0.0, 0.0, hw, hh), Vec2::ZERO);
+        // Direction follows the velocity sign per axis.
+        let t = look_ahead_target(3.0, -2.0, hw, hh);
+        assert!(t.x > 0.0 && t.y < 0.0, "{t:?}");
+        // Slow flight: close to the raw LOOK_AHEAD_SECS of travel.
+        let slow = look_ahead_target(1.0, 0.0, hw, hh);
+        assert!((slow.x - LOOK_AHEAD_SECS).abs() < 0.1, "{slow:?}");
+        // Faster is further, monotonically.
+        let mid = look_ahead_target(6.0, 0.0, hw, hh);
+        let fast = look_ahead_target(15.0, 0.0, hw, hh);
+        assert!(slow.x < mid.x && mid.x < fast.x);
+        // …but never past the cap, even at shaft free-fall speeds.
+        let fall = look_ahead_target(0.0, -50.0, hw, hh);
+        assert!(fall.y < 0.0 && fall.y.abs() <= hh * LOOK_AHEAD_FRAC + 1e-4, "{fall:?}");
+        assert!((fall.y.abs() - hh * LOOK_AHEAD_FRAC).abs() < 0.05, "should saturate: {fall:?}");
+        let sprint = look_ahead_target(60.0, 0.0, hw, hh);
+        assert!(sprint.x <= hw * LOOK_AHEAD_FRAC + 1e-4);
+    }
+
+    #[test]
+    fn look_ahead_eases_towards_its_target() {
+        let target = vec2(5.0, -2.0);
+        let mut cur = Vec2::ZERO;
+        let mut prev_gap = (target - cur).length();
+        for _ in 0..60 {
+            cur = ease_look_ahead(cur, target, 1.0 / 60.0);
+            let gap = (target - cur).length();
+            assert!(gap < prev_gap, "must approach monotonically");
+            prev_gap = gap;
+        }
+        // One second in (two time constants) it is most of the way there …
+        assert!(prev_gap < 0.2 * target.length(), "gap {prev_gap}");
+        // … and never overshoots, whatever the frame time (a hitch is
+        // clamped, not integrated as one giant step).
+        let big = ease_look_ahead(Vec2::ZERO, target, 5.0);
+        assert!(big.x <= target.x && big.y >= target.y, "{big:?}");
+        assert_eq!(ease_look_ahead(target, target, 0.016), target);
     }
 
     // The regression test for the Android "only every few touches goes
