@@ -4,6 +4,28 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Pegasus — Moon Lander</title>
+  <!-- Search engines: keep this page OUT of results (2026-09). It is the
+       game itself, an app with nothing to read, and Google was listing it
+       next to the landing page with a snippet scraped from the dormant
+       announcement screen's hidden text. The landing page at the site
+       root is the one search result we want (the pitch, the store badges,
+       and the browser build one tap away). A meta tag, not a robots.txt
+       rule: a disallowed URL can still be indexed from links, and a
+       blocked crawl would never see this tag. Harmless in the app shells
+       and the PWA, and it covers the previews too. -->
+  <meta name="robots" content="noindex">
+  <!-- Link previews (shares, chats): read whether or not the page is
+       indexed — without a description, a shared /play/ link previewed the
+       announcement text. og:url is THIS page: someone sharing the browser
+       build means the browser build. Absolute image, like the landing
+       page (scrapers do not resolve relative paths). -->
+  <meta name="description" content="Play Pegasus in your browser: pilot a lander through procedurally generated caves, land on the pads, and race verified world records.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Pegasus — Moon Lander">
+  <meta property="og:description" content="Play Pegasus in your browser. Fly a lander through endless caves, land soft, refuel, race the record ghost.">
+  <meta property="og:url" content="https://pegasusmoonlander.com/play/">
+  <meta property="og:image" content="https://pegasusmoonlander.com/play/icon-512.png">
+  <meta name="twitter:card" content="summary">
   <link rel="manifest" href="./manifest.json">
   <meta name="theme-color" content="#14141e">
   <!-- iOS home screen support -->
@@ -1382,11 +1404,11 @@
       <div class="h2">ABOUT</div>
       <div class="info-row">
         <div class="info-label">Version</div>
-        <div class="info-value" id="build-version">1.0.1+10</div>
+        <div class="info-value" id="build-version">1.0.1+12</div>
       </div>
       <div class="info-row">
         <div class="info-label">Source revision</div>
-        <div class="info-value" id="git-rev">ac55065</div>
+        <div class="info-value" id="git-rev">aa5354f</div>
       </div>
       <div class="hint" id="privacy-note">
         Anonymous play stats (runs, distances, menu taps, errors, which site
@@ -2997,7 +3019,7 @@
     // Cache-bust the wasm with the deploy revision so a fresh deploy never
     // serves a stale binary from the browser/CDN cache. Locally the
     // placeholder is untouched (sed only runs at deploy) → plain URL.
-    const wasmRev = "ac55065";
+    const wasmRev = "aa5354f";
     load("./pegasus.wasm" + (wasmRev.startsWith("__") ? "" : "?v=" + wasmRev));
 
     // Stamp the deploy revision into the game (first 8 hex chars of the git
@@ -3564,7 +3586,7 @@
     // an app resumed from the switcher for weeks still sees a new verdict:
     // - `minBuild` {android, ios} walls shell builds below it (CI run
     //   number); `minVersion` ("1.3.0" or "1.3.0+14") walls EVERY platform
-    //   whose baked tag-derived 1.0.1+10 sorts below it (tuple
+    //   whose baked tag-derived 1.0.1+12 sorts below it (tuple
     //   order — see CLAUDE.md "Versioning"). A wall NEVER interrupts a live
     //   play: a mid-flight/replay verdict latches in `wallPolicy` and
     //   showScreen raises it at the next screen (pause, crash, game over,
