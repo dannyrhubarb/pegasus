@@ -33,6 +33,9 @@ WEB_ONLY = {
     # index.html at its own root and has no use for a page that links to
     # the store it was installed from.
     "landing.html",
+    # The crawl policy (2026-09): a robots.txt is read by search engines
+    # at the site ROOT and nowhere else — nothing inside a shell fetches it.
+    "robots.txt",
     # The landing page's official App Store / Google Play badge artwork.
     "badges",
     # Committed renders of icon.svg (re-rendered by hand when the SVG

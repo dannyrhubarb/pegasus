@@ -27,6 +27,10 @@ cd "$(dirname "$0")/.."
 rm -rf site
 mkdir -p site/play
 cp landing.html site/index.html
+# Crawl policy (2026-09): keeps the PR previews, the sideload APK and the
+# unlinked editor out of search results. Per host, so it must sit at the
+# ROOT; the main deploy's root replace refreshes it on every push.
+cp robots.txt site/
 # The official App Store / Google Play badge artwork the landing page
 # shows (trademark art used per Apple's and Google's badge guidelines —
 # scaled only, never recoloured or redrawn). Web-only: a shell IS the app.

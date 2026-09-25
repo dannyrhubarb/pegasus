@@ -362,6 +362,25 @@ push-retry loop for concurrent deploys):
 - `editor.html` — the **standalone level editor** (issue #89 v1, 2026-07): draws hand-drawn `.level` worlds — the same `poly`/`pad`/`start` representation The Hollows uses — on a pan/zoom canvas. Self-contained like `index.html` (no CDNs), copied by `build-site`. **Deliberately UNLINKED from the game UI** (owner decision pre-merge): it lives at its own path with no menu button and no picker row; the game only meets it through the `?custom=1` test-fly handoff. **While it stays unlinked, editor commits carry NO `Whats-new:` trailers** (the changelog must not advertise an unannounced feature — the PR #110 branch had its trailers stripped before merge; give the editor one proper entry when it's linked up for real). See "Level editor & custom drafts" under "Levels"
 - `tools/gen-third-party-licenses.py` + `third-party-licenses.html` — the generated third-party attribution page served with the site and linked from the About screen; regenerate when `Cargo.lock` changes (see "License")
 - `privacy.html` — standalone privacy policy served with the site at the ROOT (`https://pegasusmoonlander.com/privacy.html` — the store listings' privacy-policy URL, so it never moves; also copied next to the game in `play/` and bundled into both apps); same substance as the About screen's `#privacy-note` — keep the two in agreement when the analytics story changes — plus the "The website's front page" section, which covers the landing page's visit/tap counting (that one has no in-game twin)
+- `robots.txt` — the **crawl policy** (2026-09, after Search Console
+  reported a 404 crawl of `api.pegasusmoonlander.com/`): served at the
+  site ROOT by `build-site` (a robots.txt counts only at a host's root —
+  the `pr-<n>/robots.txt` copies a preview carries are inert), allowing
+  everything except `/pr-` (each preview is a full copy of the game on
+  the staging backend — duplicate content), `/app/` (the sideload APK)
+  and `/play/editor.html` (deliberately unlinked). WEB_ONLY in
+  `check-bundle-sync.py`. It says NOTHING about the other hosts the game
+  reaches — the API host and the replay CDN are discoverable from the
+  public `play/config.json`, so pegasus-backend serves its own
+  `Disallow: /` robots.txt on each (a `robots` lambda route on the API,
+  an object at the replay bucket root on the CDN) AND answers every
+  response on both with `X-Robots-Tag: noindex` — the file stops the
+  crawling, the header stops the indexing of whatever is fetched anyway
+  (the API root's 404 is harmless and stays: a 404 is never indexed). `Disallow` stops crawling,
+  not the indexing of a URL linked elsewhere (the preview sticky comments
+  link `pr-<n>/`); if a preview ever surfaces in search results, the
+  next step is a `noindex` meta stamped by `build-site` on `-pr-<n>`
+  revisions — not done, no preview has shown up
 - `landing.html` + `badges/` — the **landing page** served at the site root as `index.html` (the official App Store / Google Play badges + a quiet "play in your browser" link → `play/`, where the game lives since 2026-09 — see "Site layout" under "Deploy pipeline & PR previews"). Self-contained and web-only; its own small analytics snippet counts visits and link taps (see "Landing page analytics" under "Analytics")
 - `app-policy.json` — the **checked-in update/config policy** every client fetches at launch (`{}` = no verdicts): **the remote lever over ALREADY-INSTALLED apps and stale web tabs** — commit a `config` override to repoint old installs at a moved backend with no store release, a `minBuild`/`minVersion` wall for a genuinely breaking change, or a `recommendBuild`/`recommendVersion` nudge (same screen with a Not-now button) for an update that is strongly advised but not required. **Reach for this whenever a backend move or compatibility break is being planned** (it exists because the #171 migration had no such lever and drained for weeks — pegasus-backend#38); see "App update policy" under "Game menu"
 - `tools/build-wasm.sh` + `tools/build-site.sh` + `rust-toolchain.toml` — the **reproducible build recipe** (see "Reproducible builds" under "Build & deploy"): pinned rustc, pinned Binaryen `wasm-opt` (sha256-verified download), path remapping; `build-site.sh` is what the deploy, the previews and the CI twice-build check all run; `icon-512/192/180.png` are its committed icon renders
