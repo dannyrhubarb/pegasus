@@ -78,6 +78,33 @@ relight doesn't happen mid-swing.
 All four gates are bypassed under split controls (see § 1) — the dedicated
 throttle button needs no disambiguation, so it commands 1.0 immediately.
 
+**Under the "Pro stick" Settings toggle they apply only until the
+touch's engine is LIT** (2026-09, `pegasus_pro_stick` → `set_stick_instant`
+→ `STICK_INSTANT`, off by default; `ProStick` in main.rs, pure +
+unit-tested). The engine decides ONCE per touch:
+
+| Knob | Now | What it is | Turn it up | Turn it down |
+|------|-----|------------|------------|--------------|
+| `STICK_CENTRE_LIGHT_S` | 0.06 s (~4 frames) | A finger that has stayed inside the heading dead-zone (`STICK_DZ`, 9 px — it has commanded no steering) for this long since landing is a PRESS: lit at full throttle on the spot | Gentle trim nudges are safer from lighting the engine; a centre press lights later | Presses light sooner; a slow nudge that takes > window to leave 9 px lights the engine. Must stay below `STICK_THRUST_DELAY` (compile-time assert) |
+
+- **Centre press** → full throttle after the window, then held. Against
+  the split throttle button the whole cost is the window (~0.06 s), vs
+  ~0.2 s under the grace + half the ramp — the gap Marcus saw against a
+  split-flown ghost ("the single controller accelerates slower").
+- **Steer first** (the finger leaves the dead-zone before the window
+  closes) → exactly the default feel above: flick grace, ramp, flip gate.
+  A nudge or a flick never burns; hold on and the ramp reaches full and
+  the touch is lit.
+- **Lit** → full throttle until release, whatever the finger does —
+  steering, a flip; no gate cuts it (`flip_settling` is skipped while
+  lit). Release resets the latch.
+
+The press window is the one real trade: the first frame of a press and of
+a flick are the same event, so the engine needs a few frames of "the finger
+hasn't moved" before it can call it a press. Frame-side only: the recorder
+stores the resolved throttle, so the toggle needs no replay-format, ruleset
+or verifier change and old recordings replay unchanged.
+
 ## 4. Stick geometry (Rust, `src/main.rs` — the stick is in-canvas now)
 
 | Knob | Now | What it is | Notes |
@@ -131,9 +158,9 @@ the controller-picker below.
 
 ## 8. Toward a settings / controller pane
 
-The plumbing pattern already exists, with four working examples
-(velocity-vector, invert-stick, split-controls and swap-sides toggles) in
-`index.html`:
+The plumbing pattern already exists, with five working examples
+(velocity-vector, invert-stick, split-controls, swap-sides and pro-stick
+toggles) in `index.html`:
 
 1. Checkbox/slider in the info overlay (`stopPropagation`, **no**
    `preventDefault` — that kills checkbox clicks).
