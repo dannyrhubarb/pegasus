@@ -28,6 +28,7 @@ import java.io.IOException
  */
 class MainActivity : Activity() {
     private lateinit var webView: WebView
+    private var nearby: NearbyBridge? = null
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -59,6 +60,13 @@ class MainActivity : Activity() {
         webView.setOnLongClickListener { true }
         webView.isHapticFeedbackEnabled = false
         webView.addJavascriptInterface(PegasusBridge(), "PegasusApp")
+        // Nearby multiplayer rooms over Bluetooth LE (NearbyBridge): a
+        // second, single-method interface the page's pegNearby module
+        // feature-detects. Inert until the multiplayer screens send their
+        // first command — no radio, no permission prompt before that.
+        nearby = NearbyBridge(this, webView).also {
+            webView.addJavascriptInterface(it, "PegasusNearby")
+        }
         WebView.setWebContentsDebuggingEnabled(
             applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
         )
@@ -199,6 +207,20 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         if (webView.canGoBack()) webView.goBack() else super.onBackPressed()
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        nearby?.onPermissionResult(requestCode, grantResults)
+    }
+
+    override fun onDestroy() {
+        nearby?.destroy()
+        super.onDestroy()
     }
 
     override fun onPause() {

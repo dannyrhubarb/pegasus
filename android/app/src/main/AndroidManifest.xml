@@ -1,9 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Online high scores, the ghost and analytics; the game itself is
          fully bundled and runs offline. -->
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Nearby multiplayer rooms over Bluetooth LE (NearbyBridge.kt —
+         discovery ONLY: the room code rides a BLE advertisement, the game
+         itself stays on WebRTC). Requested lazily on the first host/scan
+         from the multiplayer screens — the game never prompts at launch.
+         Only the Android 12+ Bluetooth runtime permissions are declared
+         (SCAN flagged neverForLocation, so Play does not treat it as
+         location access); the app deliberately declares NO location
+         permission, so scanning is simply unavailable on Android 11 and
+         older (hosting there still works — advertising is covered by the
+         install-time BLUETOOTH_ADMIN). BLE is not required hardware: a
+         device without it just shows no nearby list. -->
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="s" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
 
     <!-- enableOnBackInvokedCallback=false: targeting API 36 turns predictive
          back ON by default, which stops delivering onBackPressed() — and
