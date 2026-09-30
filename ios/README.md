@@ -47,6 +47,13 @@ After changing the game, re-run `./ios/sync-web.sh` and build again — the
 `WebRoot` folder reference re-copies into the app on every build, no Xcode
 project changes needed.
 
+## App Store listing
+
+`ios/app-store/` holds the store assets: `listing.md` (copy, categories,
+age rating, privacy labels, review notes), the screenshot generator
+(`npm run shots` / `npm run compose`) and the generated sets under
+`screenshots/`. Its README has the submission checklist.
+
 ## Provenance
 
 `ios-testflight.yml` ends by signing a provenance attestation

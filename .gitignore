@@ -19,3 +19,6 @@ __pycache__/
 
 # Website assembled by tools/build-site.sh (the deploy runs it in CI)
 /site
+
+# App Store screenshot captures (regenerable; the captioned sets in final/ are committed)
+/ios/app-store/screenshots/raw/
