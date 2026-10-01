@@ -238,10 +238,10 @@ and Google Play (`se.danielfalk.pegasus`) badge artwork in `badges/`
 (trademark art used as-is per Apple's/Google's badge guidelines: scaled
 only, never recoloured; Google's PNG carries 41 px of built-in
 transparent padding, which the CSS pulls in so both badges show at the
-same visible height; **the Google Play badge is in a COMING SOON
-state** — dimmed, not a link, an amber tag on its corner — until the
-Play listing is live: the markup comment next to it says how to flip
-it back into a link, and it is the only edit needed) — under them the
+same visible height; both badges are live links — the Play badge
+spent its first two weeks in a dimmed "coming soon" state, not a link,
+with an amber tag on its corner, until the Play listing went live
+2026-10-01, and that state's CSS went with it) — under them the
 **price line** "Free. No in-app purchases. No ads. No account needed.
 Just fun." (`.free`, 2026-09: neither store offers a "free" badge variant and both
 forbid editing the artwork, so it is said in our own copy right under
@@ -3290,12 +3290,13 @@ mechanisms — no custom banner, no JS, nothing to dismiss or persist:
   entry Chrome ignores) and **`prefer_related_applications: true`**
   (owner decision 2026-09): Chrome offers the Play app INSTEAD of the PWA
   install. Chrome resolves the id against Play at prompt time, so
-  **until the app is live on Play (production or open testing) Android
-  Chrome shows NO ambient install prompt at all** — not the Play one (no
+  **while the app was not yet live on Play (before 2026-10-01) Android
+  Chrome showed NO ambient install prompt at all** — not the Play one (no
   listing) and not the PWA one (preferred away); the browser-menu "Add to
-  Home screen" still works. Accepted as the pre-launch state; flip
-  `prefer_related_applications` to `false` if the PWA prompt is wanted
-  back in the meantime. The prompt never appears inside the WebView shell.
+  Home screen" still worked. That pre-launch state was accepted rather
+  than flipping `prefer_related_applications` to `false`; with the
+  listing live the Play prompt is what Chrome offers. The prompt never
+  appears inside the WebView shell.
 - **`.well-known/` — App Links + Universal Links (2026-09)**: NOT part of
   the banners; it's what makes `https://pegasusmoonlander.com/play/` (the
   game) open in the
