@@ -217,24 +217,6 @@
     /* Phones: a hair smaller so the two badges share one row from 360 px
        up (they stack below that). */
     @media (max-width: 480px) { .stores { --bh: 46px; gap: 14px 16px; } }
-    /* A badge whose store listing is not live yet: dimmed, not a link,
-       with a small amber "coming soon" tag on its corner. The badge art
-       itself is untouched (only the wrapper's opacity changes). */
-    .soon { position: relative; display: block; line-height: 0; cursor: default; }
-    .soon .badge-play { opacity: 0.45; filter: saturate(0.6); }
-    .soon .tag {
-      position: absolute;
-      top: -9px; right: -8px;
-      padding: 5px 7px;
-      border-radius: 5px;
-      background: var(--amber);
-      color: #14141e;
-      font: 700 9px/1 var(--mono);
-      letter-spacing: 0.14em;
-      text-transform: uppercase;
-      white-space: nowrap;
-      box-shadow: 0 0 10px rgba(255, 194, 75, 0.55);
-    }
 
     /* The price line — the one thing the store badges can't say:
        neither Apple nor Google offers a "free" badge variant and both
@@ -471,16 +453,7 @@
 
     <div class="stores">
       <a id="ios" data-an="ios" href="https://apps.apple.com/app/id6792584910" rel="noopener"><img src="./badges/app-store.svg" alt="Download on the App Store"></a>
-      <!-- Google Play: COMING SOON until the listing is live. To go live,
-           turn this back into a link — <a id="android" data-an="android"
-           class="badge-play"
-           href="https://play.google.com/store/apps/details?id=se.danielfalk.pegasus"
-           rel="noopener"> around the img — and drop the .soon wrapper + tag.
-           KEEP the data-an hook across that edit: while the badge is dead
-           its taps are the Android-demand signal (the analytics counts
-           them exactly like the live link's), and after it they are the
-           real click-through. -->
-      <span id="android" data-an="android" class="soon" title="Coming soon to Google Play" aria-label="Google Play: coming soon"><span class="badge-play"><img src="./badges/google-play.png" alt="Get it on Google Play"></span><span class="tag">Coming soon</span></span>
+      <a id="android" data-an="android" class="badge-play" href="https://play.google.com/store/apps/details?id=se.danielfalk.pegasus" rel="noopener"><img src="./badges/google-play.png" alt="Get it on Google Play"></a>
     </div>
     <p class="free"><b>Free.</b> <span>No in-app purchases.</span>
       <span>No ads.</span> <span>No account needed.</span> <b>Just fun.</b></p>
@@ -757,8 +730,8 @@
         if (!counted) document.addEventListener("visibilitychange", countView);
 
         // One delegated listener, capture phase, for every [data-an]
-        // element — the store badges (including the dead "coming soon"
-        // one), the browser link and the footer. It only ever reads an
+        // element — the store badges, the browser link and the footer. It
+        // only ever reads an
         // attribute: no preventDefault, no navigation change, so a tap
         // behaves identically with analytics off, broken or blocked.
         document.addEventListener("click", function (ev) {
