@@ -13,19 +13,37 @@ tools/build-wasm.sh pegasus.wasm   # the deploy's exact wasm (pinned toolchain +
 Deploy is automatic: any push to `main` triggers `.github/workflows/deploy.yml` which builds the WASM target and publishes to GitHub Pages. Build takes ~5–10 minutes. The toolchain is **pinned in `rust-toolchain.toml`** (rustup installs it on first use, wasm target included) — bump it like any other pin, but see the file's comment: a rustc bump is a sim-adjacent input.
 
 ### Versioning (tag-derived, 2026-09, #214)
-> **⚠ OWNER REMINDER — starting a new App Store / Play cycle? TAG IT.**
+> **⚠ OWNER REMINDER — starting a new App Store / Play cycle? CUT IT.**
 > The first beta upload of a new version is the moment to tag (`v1.0.0`
-> went on 2026-09-13; the current cycle IS the newest tag on `main`).
-> Pick the number from what landed since the last tag — any `feat` →
-> MINOR (`v1.1.0`), only `fix`es → PATCH (`v1.0.1`), a `!` commit →
-> MAJOR — then `git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`.
-> **The tag push IS the release**: it builds and uploads both store apps
-> at that commit. Nothing computes or proposes the number for you (a
-> release-please-style bump workflow was considered and dropped, owner
-> decision 2026-09-15 — this note is the mechanism). Forgetting to tag
-> is harmless but visible: the store workflows keep uploading the OLD
-> marketing version with new build numbers, and a `minVersion` policy
-> wall aimed at the new cycle would have nothing to compare against.
+> went on 2026-09-13, `v1.1.0` on 2026-10-02; the current cycle IS the
+> newest tag on `main`). **Actions → Cut release → run workflow** on
+> main, picking `bump` from what landed since the last tag — any `feat`
+> → `minor` (`v1.1.0`), only `fix`es → `patch` (`v1.0.1`), a `!` commit
+> → `major` (`cut-release.yml`, owner request 2026-10-02, replacing the
+> 2026-09-15 decision to type the tag by hand): it computes the tag
+> (`tools/next-version.sh`), tags main as YOU (annotated, your noreply
+> address), publishes a GitHub Release whose body is the cycle's
+> `Whats-new:` lines, and dispatches Release apps at the tag — **the
+> dispatch is load-bearing**: a tag pushed with `GITHUB_TOKEN` never
+> fires `on: push: tags` (the recursion guard that also shaped
+> publish-pages.yml), so the workflow MUST dispatch `release-apps.yml`
+> itself, and because the push event never fires nothing releases
+> twice. `dry_run` shows the number without touching anything; a HEAD
+> already tagged, or a tag that exists, fails the run. The hand path
+> still works and is the hotfix path (`git tag -a vX.Y.Z -m vX.Y.Z &&
+> git push origin vX.Y.Z` — a HUMAN push does fire the tag trigger).
+> **The tag IS the release**: it builds and uploads both store apps at
+> that commit. Forgetting to tag is harmless but visible: the store
+> workflows keep uploading the OLD marketing version with new build
+> numbers, and a `minVersion` policy wall aimed at the new cycle would
+> have nothing to compare against. **Apple closes a train once that
+> version is approved** (seen 2026-09-21: a branch TestFlight build
+> whose nearest tag was the shipped `v1.0.1` was refused, "Invalid
+> Pre-Release Train" 90186) — so a pre-tag beta of the NEXT cycle from a
+> branch needs the `marketing_version` override on the TestFlight
+> dispatch (PR #232's branch carries it; it reaches main when that
+> merges), and the 1.1.0 train on TestFlight predates the `v1.1.0` tag
+> for exactly that reason.
 
 Every build's identity comes from **annotated `vMAJOR.MINOR.PATCH` tags on
 `main`** through `tools/version.sh` — never a file anyone has to bump:
@@ -68,9 +86,11 @@ Every build's identity comes from **annotated `vMAJOR.MINOR.PATCH` tags on
   1. Work on the next version starts with NO tag — main reads
      `1.0.0+N` and the website deploys it as usual (the web is always
      the newest thing; its version never needs to match the store's).
-  2. The first TestFlight / Play-testing upload: `git tag -a v1.1.0 -m
-     v1.1.0 && git push origin v1.1.0` — **the tag push IS the release**:
-     `release-apps.yml` triggers on `v[0-9]*` tag pushes and dispatches
+  2. The first TestFlight / Play-testing upload: **Cut release** (the
+     `bump` dispatch — see the reminder above), or by hand `git tag -a
+     v1.1.0 -m v1.1.0 && git push origin v1.1.0` — **the tag IS the
+     release**: `release-apps.yml` triggers on `v[0-9]*` tag pushes
+     (human pushes; Cut release dispatches it explicitly) and dispatches
      both store workflows AT THE TAG REF (2026-09, #214 step 3). Every
      release lands on the INTERNAL tier of both stores (Play internal
      track, TestFlight internal groups — owner decision 2026-09, after
@@ -398,6 +418,7 @@ push-retry loop for concurrent deploys):
 - `app-policy.json` — the **checked-in update/config policy** every client fetches at launch (`{}` = no verdicts): **the remote lever over ALREADY-INSTALLED apps and stale web tabs** — commit a `config` override to repoint old installs at a moved backend with no store release, a `minBuild`/`minVersion` wall for a genuinely breaking change, or a `recommendBuild`/`recommendVersion` nudge (same screen with a Not-now button) for an update that is strongly advised but not required. **Reach for this whenever a backend move or compatibility break is being planned** (it exists because the #171 migration had no such lever and drained for weeks — pegasus-backend#38); see "App update policy" under "Game menu"
 - `tools/build-wasm.sh` + `tools/build-site.sh` + `rust-toolchain.toml` — the **reproducible build recipe** (see "Reproducible builds" under "Build & deploy"): pinned rustc, pinned Binaryen `wasm-opt` (sha256-verified download), path remapping; `build-site.sh` is what the deploy, the previews and the CI twice-build check all run; `icon-512/192/180.png` are its committed icon renders
 - `tools/version.sh` — **the one version source** (tag-derived, see "Versioning" under "Build & deploy"): `1.3.0+14` full form / `--marketing` (the tag), used by `build-site`, both `sync-web.sh` and the store release workflows
+- `tools/next-version.sh major|minor|patch` + `.github/workflows/cut-release.yml` — **Cut release** (2026-10): the one-click new-cycle release — proposes the next `vX.Y.Z` from the nearest tag (the same resolution as `version.sh`, so they never disagree), tags main, publishes the GitHub Release from the cycle's `Whats-new:` trailers and dispatches Release apps at the tag (see "Versioning" — the explicit dispatch is what makes a `GITHUB_TOKEN`-pushed tag release at all)
 - `tools/gen-whats-new.py` + `tools/whats-new-backfill.json` + `tools/whats-new-overrides.json` — deploy-time generator for `whats-new.json`, the About screen's What's New changelog (see "What's new page" — **every user-facing commit needs a `Whats-new:` trailer**; the overrides file rewords already-merged entries)
 - `.github/labels.json` + `tools/sync-labels.py` + `.github/workflows/labels.yml` — the **checked-in issue-label convention** (`type:` / `area:` / `status:` groups); edit the JSON, never the GitHub UI — see "Git workflow"
 - `index.html` — web wrapper (`noindex` — search lands on the landing
@@ -3189,7 +3210,8 @@ Mac). `android/README.md` has the build/signing/Play walkthrough.
   owner promotes from the consoles), and **it also fires on a `v[0-9]*` tag
   push** (2026-09 — the tag IS the release; both platforms, at the tag
   ref, see "Versioning"; a tag push is a human action, so the pause
-  stands). It API-dispatches them (`gh workflow run`)
+  stands — and the **Cut release** workflow, whose `GITHUB_TOKEN` tag
+  push can't fire this trigger, dispatches it at the tag instead). It API-dispatches them (`gh workflow run`)
   rather than `workflow_call`ing them — DELIBERATE: a called workflow runs
   under the caller's `github.run_number`, and both apps use their own run
   number as the store build number (CFBundleVersion / versionCode must keep

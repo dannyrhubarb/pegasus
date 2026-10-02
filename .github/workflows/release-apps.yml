@@ -2,7 +2,9 @@
 # TestFlight and Android release — now that automatic publishing on main
 # pushes is paused and releasing is a deliberate action. Two ways in:
 #   - push an annotated release tag (`git tag -a v1.1.0 -m v1.1.0 && git
-#     push origin v1.1.0`): the tag IS the release — this fires with the tag
+#     push origin v1.1.0`, or the Cut release workflow, which computes the
+#     tag and — since its GITHUB_TOKEN push can't fire this `push` trigger —
+#     dispatches this workflow at the tag): the tag IS the release — this fires with the tag
 #     as the ref, so both store builds are cut from exactly the tagged
 #     commit and their marketing version is the tag (tools/version.sh
 #     --marketing; see CLAUDE.md "Versioning" for WHEN to tag — the first
