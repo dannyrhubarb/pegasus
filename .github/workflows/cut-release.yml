@@ -1,0 +1,153 @@
+# Cut a release: the ONE-CLICK way to start a new store cycle from main
+# (owner request 2026-10-02 — until then the tag was typed by hand, see
+# CLAUDE.md "Versioning" for WHEN a cycle starts: at its first beta).
+# Pick `bump` = major / minor / patch and the run:
+#   1. computes the next tag from the nearest `vX.Y.Z` tag
+#      (tools/next-version.sh — the same resolution as tools/version.sh,
+#      so the marketing version the store builds derive is the tag just
+#      cut), refusing a HEAD that is already tagged (nothing to release)
+#      or a tag that already exists;
+#   2. creates the ANNOTATED tag on main, tagged by the human who clicked
+#      (github.actor's noreply address — the repo's authorship rule);
+#   3. publishes a GitHub Release on it whose body is the player-facing
+#      `Whats-new:` trailers since the previous tag (the About screen's
+#      changelog for exactly this cycle), under the optional `notes`
+#      headline — edit it afterwards in the Releases UI if you like;
+#   4. DISPATCHES release-apps.yml at the tag. This step is load-bearing,
+#      not belt-and-braces: a tag pushed with GITHUB_TOKEN does NOT fire
+#      `on: push: tags` (the no-recursive-workflows guard — the same bite
+#      that made publish-pages.yml a workflow_run), so without it the tag
+#      would sit on main and no store build would run. An explicit
+#      workflow_dispatch IS exempt from the guard (release-apps.yml relies
+#      on the same exemption), and since the push event never fires there
+#      is no doubled release.
+# Every release still stops at INTERNAL testing on both stores
+# (release-apps.yml's defaults); promotion is the owner's console step.
+# `dry_run` prints the number it WOULD cut and changes nothing. Later
+# betas of the same cycle are NOT this workflow — dispatch Release apps
+# on main (no new tag). A hotfix tag off a release branch stays manual
+# (this runs on main only).
+name: Cut release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Which part of the version to bump (any feat since the last tag → minor; only fixes → patch; a sim/replay break → major)"
+        type: choice
+        options: [minor, patch, major]
+        default: minor
+      notes:
+        description: "Optional headline for the GitHub Release body, above the generated What's new list (Markdown)"
+        type: string
+        default: ""
+      dry_run:
+        description: "Only print the tag this would cut — tag nothing, release nothing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # push the tag, create the release
+  actions: write # dispatch release-apps.yml
+
+concurrency:
+  group: cut-release
+  cancel-in-progress: false
+
+jobs:
+  cut:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Only from main
+        if: github.ref_name != 'main'
+        run: |
+          echo "::error::Cut release runs on main only (dispatched on '$GITHUB_REF_NAME'). A hotfix tag off a release branch is cut by hand — CLAUDE.md \"Versioning\"."
+          exit 1
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the nearest tag + the trailers since it
+
+      - name: Compute the next tag
+        id: next
+        run: |
+          prev="$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)"
+          if [ -n "$prev" ] && [ "$(git rev-parse "$prev^{commit}")" = "$(git rev-parse HEAD)" ]; then
+            echo "::error::main is already tagged $prev — nothing has landed since, so there is nothing to release. For another beta of the $prev cycle dispatch Release apps instead."
+            exit 1
+          fi
+          tag="$(tools/next-version.sh "${{ inputs.bump }}")"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "::error::$tag already exists"; exit 1
+          fi
+          {
+            echo "prev=$prev"
+            echo "tag=$tag"
+          } >> "$GITHUB_OUTPUT"
+          echo "Previous tag: ${prev:-none}  →  next: $tag (${{ inputs.bump }}) at $(git rev-parse --short HEAD)"
+
+      - name: Write the release notes
+        env:
+          # Via env, not interpolated into the script: free text from the
+          # dispatch form must never be able to break out of a quote.
+          NOTES: ${{ inputs.notes }}
+          PREV: ${{ steps.next.outputs.prev }}
+          TAG: ${{ steps.next.outputs.tag }}
+        run: |
+          range="${PREV:+$PREV..}HEAD"
+          {
+            if [ -n "$NOTES" ]; then
+              printf '%s\n\n' "$NOTES"
+            fi
+            echo "## What's new"
+            echo
+            # One bullet per Whats-new: trailer since the previous tag,
+            # newest first — the same player-language lines the About
+            # screen's changelog shows (tools/gen-whats-new.py).
+            git log --format='%(trailers:key=Whats-new,valueonly,unfold)' "$range" \
+              | sed '/^$/d; s/^/- /'
+            echo
+            if [ -n "$PREV" ]; then
+              echo "Full changes: https://github.com/$GH_REPO/compare/$PREV...$TAG"
+            fi
+          } > "$RUNNER_TEMP/notes.md"
+          echo "--- release body ---"; cat "$RUNNER_TEMP/notes.md"
+
+      - name: Dry run — stop here
+        if: inputs.dry_run
+        run: |
+          echo "Dry run — would tag ${{ steps.next.outputs.tag }} at $(git rev-parse --short HEAD). Nothing was changed."
+
+      - name: Tag main
+        if: ${{ !inputs.dry_run }}
+        env:
+          TAG: ${{ steps.next.outputs.tag }}
+          GIT_COMMITTER_NAME: ${{ github.actor }}
+          GIT_COMMITTER_EMAIL: ${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com
+        run: |
+          git tag -a "$TAG" -m "$TAG"
+          git push origin "refs/tags/$TAG"
+          echo "Tagged $TAG at $(git rev-parse --short HEAD)"
+
+      - name: Publish the GitHub Release
+        if: ${{ !inputs.dry_run }}
+        env:
+          TAG: ${{ steps.next.outputs.tag }}
+        run: |
+          gh release create "$TAG" --verify-tag --title "$TAG" \
+            --notes-file "$RUNNER_TEMP/notes.md"
+
+      - name: Release the apps
+        if: ${{ !inputs.dry_run }}
+        env:
+          TAG: ${{ steps.next.outputs.tag }}
+        run: |
+          # The tag push above was made with GITHUB_TOKEN, so release-apps.yml's
+          # `on: push: tags` did NOT fire — dispatch it at the tag explicitly.
+          gh workflow run release-apps.yml --ref "$TAG"
+          echo "Dispatched Release apps at $TAG — follow the store builds at:"
+          echo "  https://github.com/$GH_REPO/actions/workflows/ios-testflight.yml"
+          echo "  https://github.com/$GH_REPO/actions/workflows/android-release.yml"

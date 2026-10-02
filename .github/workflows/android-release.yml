@@ -201,10 +201,17 @@ jobs:
       # explicit dispatch is exempt again, so trigger the publish directly;
       # on a human-dispatched run this doubles with the workflow_run path,
       # which publish-pages' `pages` concurrency group collapses.
+      # ALWAYS at main, never at this run's own ref: the `github-pages`
+      # environment only allows deployments from main, so a publish
+      # dispatched at a release TAG dies in 2 s ("Tag v1.1.0 is not allowed
+      # to deploy to github-pages", the first tag-triggered release,
+      # 2026-10-02 — the APK sat on gh-pages until an unrelated preview
+      # deploy published the branch). publish-pages snapshots the whole
+      # gh-pages branch whatever ref it runs from, so main is always right.
       - name: Trigger Pages publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run publish-pages.yml --ref "$GITHUB_REF_NAME"
+        run: gh workflow run publish-pages.yml --ref main
 
       - name: Upload to Play track
         if: ${{ env.HAS_PLAY_JSON == 'true' }}
