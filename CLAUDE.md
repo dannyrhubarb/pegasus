@@ -356,7 +356,13 @@ push-retry loop for concurrent deploys):
   has `workflow_dispatch` (job `if` passes it through) and android-release
   dispatches it explicitly after its sync (an explicit dispatch is exempt
   again; the doubled trigger on human-dispatched runs collapses in the
-  `pages` concurrency group).
+  `pages` concurrency group). **That dispatch is pinned to `--ref main`**
+  (2026-10-02, the first tag-triggered release): dispatched at the
+  release TAG it failed in 2 s — "Tag v1.1.0 is not allowed to deploy to
+  github-pages due to environment protection rules" — and the v1.1.0 APK
+  sat on `gh-pages` until an unrelated preview deploy published the
+  branch. publish-pages snapshots all of `gh-pages` whatever ref it runs
+  from, so `main` is always the right ref; never dispatch it at a tag.
   Keep **Settings → Pages → Source = "GitHub Actions"** (do *not* switch it to
   the `gh-pages` branch — that would bypass this pipeline and serve the branch
   with Jekyll defaults). The Pages API intermittently rejects deployments
