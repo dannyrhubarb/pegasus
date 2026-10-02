@@ -525,7 +525,7 @@
     // sendBeacon handles inconsistently, and a click's beacon is fired
     // while the page is already navigating away.
     (function () {
-      var REV = "2044f99-pr-237";        // stamped by tools/build-site.sh
+      var REV = "d3034cf-pr-237";        // stamped by tools/build-site.sh
       var dev = REV.slice(0, 2) === "__";  // un-stamped = local checkout
       var env = dev ? "dev"
         : (/\/pr-\d+\//.test(location.pathname) ? "preview" : "prod");
